@@ -1,6 +1,6 @@
 # RaptorCode Roadmap
 
-Date: 2026-05-15
+Date: 2026-05-16
 Author: Tim
 Company: RaptorLabs.dev
 
@@ -27,7 +27,7 @@ V1 is not a full terminal emulator replacement. It will focus on supervised codi
    - Commands to initialize project state.
    - Commands to create, list, inspect, and clean isolated worktrees.
    - Supervised merge preflight for task worktrees.
-   - Typed confirmation before merge execution.
+   - Typed `MERGE <task-id>` confirmation before merge execution.
    - Explicit safety checks before destructive operations.
 
 4. TUI workflow
@@ -53,6 +53,7 @@ V1 is not a full terminal emulator replacement. It will focus on supervised codi
 - Auto-merge without explicit developer confirmation.
 - Force merge and automatic conflict resolution.
 - Remote push from the first merge workflow.
+- `--no-confirm` merge execution in V1.
 - Cloud-hosted control plane.
 - Plugin marketplace.
 - Cross-repository fleet management.

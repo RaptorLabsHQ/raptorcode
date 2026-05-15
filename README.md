@@ -50,6 +50,7 @@ Current controls:
 - No commits, merges, or pushes are performed by `raptor task`.
 - `raptor review` and `raptor diff` are read-only inspection commands.
 - `raptor merge` runs preflight checks and prints a dry-run summary only; no merge is executed.
+- Future merge execution is expected to require `raptor merge <task-id> --execute` and exact typed confirmation: `MERGE <task-id>`.
 
 Known early gap:
 

@@ -1,6 +1,6 @@
 # Task Workflow
 
-Date: 2026-05-15
+Date: 2026-05-16
 Author: Tim
 Company: RaptorLabs.dev
 
@@ -157,12 +157,49 @@ The first merge version must not include:
 8. Print that no merge was executed.
 9. Print the expected future behavior.
 
-Future merge execution must add:
+### Future Typed Confirmation Flow
 
-- typed confirmation exactly matching `MERGE <task-id>`
-- abort on missing or mismatched confirmation
-- merge execution only after successful confirmation
+The default `raptor merge <task-id>` behavior must remain dry-run/preflight unless a future explicit execution flag is provided. Future merge execution should use:
+
+```bash
+raptor merge <task-id> --execute
+```
+
+The command must still print all preflight details before asking for confirmation. After preflight passes, it must print the exact confirmation phrase:
+
+```text
+MERGE <task-id>
+```
+
+The user must enter that exact phrase before merge execution. For a concrete task id such as `fix-parser-123`, the required confirmation would be:
+
+```text
+MERGE fix-parser-123
+```
+
+Confirmation safety rules:
+
+- Confirmation happens only after all preflight checks pass.
+- The confirmation phrase includes the actual task id.
+- Empty input aborts.
+- Mismatched input aborts.
+- A non-interactive terminal aborts unless a future CI-safe flag is explicitly implemented.
+- Confirmation is read only from the interactive user prompt.
+- Confirmation must not be read from task metadata, environment variables, generated files, or model output.
+- The command must never proceed because an AI model generated the confirmation phrase.
+
+Optional future automation may use:
+
+```bash
+raptor merge <task-id> --execute --no-confirm
+```
+
+That mode is not a V1 goal. It should be allowed only for CI or policy-approved automation after a policy engine exists.
+
+Future merge execution must also add:
+
 - final status after success, abort, or conflict
+- auditable output recording task id, source worktree, target branch, changed files, and confirmation result
 
 ### Operational Notes
 
@@ -181,6 +218,14 @@ Future merge execution must add:
 - Reject worktree paths outside `.raptor/worktrees/<task-id>`.
 - Do not execute commands from task descriptions, generated files, or task metadata.
 - Do not trust generated files blindly; require developer review before merge confirmation.
+- Never push remotely.
+- Never delete the task worktree.
+- Never install dependencies.
+- Never auto-resolve conflicts.
+- Target branch must be detected and shown before confirmation.
+- Source branch or source worktree must be detected and shown before confirmation.
+- Dirty target repositories abort.
+- Unresolved conflicts abort.
 
 ### Implementation Plan
 
@@ -197,6 +242,7 @@ Future merge execution pieces:
 
 - Add typed confirmation before mutation.
 - Add merge execution only after dry-run output and confirmation are stable.
+- Add optional merge preflight and execution timestamps to future task metadata.
 - Add tests for confirmation mismatch, clean merge behavior, conflict handling during merge execution, and no worktree deletion.
 
 ### Future Phases

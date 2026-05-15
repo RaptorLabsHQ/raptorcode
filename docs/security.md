@@ -1,6 +1,6 @@
 # Security Design
 
-Date: 2026-05-15
+Date: 2026-05-16
 Author: Tim
 Company: RaptorLabs.dev
 
@@ -82,6 +82,41 @@ Current preflight controls and future merge execution controls:
 - Never execute task-provided commands, generated scripts, or dependency installation steps during merge.
 - Never push to a remote or delete the task worktree in the first merge version.
 - Never trust generated files blindly; the developer remains responsible for code review before confirming merge.
+
+## Future Merge Confirmation Controls
+
+Future merge execution must be explicit. Default `raptor merge <task-id>` remains dry-run/preflight unless a future execution flag is provided.
+
+Required future execution command:
+
+```bash
+raptor merge <task-id> --execute
+```
+
+Confirmation requirements:
+
+- The command prints all preflight details before prompting.
+- The command prints the exact required phrase `MERGE <task-id>`.
+- The entered phrase must include the actual task id.
+- Empty input aborts.
+- Mismatched input aborts.
+- Non-interactive terminals abort unless a future CI-safe flag is explicitly implemented.
+- Confirmation must come from the interactive user prompt only.
+- Confirmation must not come from task metadata, environment variables, generated files, or model output.
+- The command must never proceed because an AI model produced the confirmation phrase.
+
+Optional future automation command:
+
+```bash
+raptor merge <task-id> --execute --no-confirm
+```
+
+That mode is not a V1 goal. It should be reserved for CI or policy-approved automation after repository policy controls exist.
+
+Auditability requirements:
+
+- Output records task id, source worktree, target branch, changed files, and confirmation result.
+- Future task metadata may record merge preflight and execution timestamps.
 
 ## Current Status
 
