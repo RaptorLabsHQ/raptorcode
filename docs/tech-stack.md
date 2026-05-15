@@ -14,10 +14,11 @@ Rust is the default implementation language for RaptorCode because the project n
 
 ## Planned Components
 
-- CLI: Rust command-line interface.
-- TUI: Rust terminal user interface.
-- Orchestrator: Rust application layer for multi-agent workflow control.
-- Git integration: local git repository and worktree operations.
+- CLI: Rust command-line interface built by `raptor-cli` as the `raptor` binary.
+- TUI: Rust terminal user interface boundary in `raptor-tui`.
+- Orchestrator: Rust application layer boundary for multi-agent workflow control in `raptor-agent`.
+- Git integration: local git repository and worktree operations in `raptor-git`.
+- Tool diagnostics: local tooling checks in `raptor-tools`.
 - Documentation: Markdown files in the repository root and `docs/`.
 
 ## Dependency Policy
@@ -29,4 +30,4 @@ Rust is the default implementation language for RaptorCode because the project n
 
 ## Current Status
 
-No `Cargo.toml`, Rust crates, or Rust source files exist yet. This document defines intended direction, not implemented code.
+The repository contains a Cargo workspace with minimal crate skeletons. The initial implemented CLI surface is `raptor --version` and `raptor doctor`.

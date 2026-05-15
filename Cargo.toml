@@ -1,0 +1,32 @@
+[workspace]
+members = [
+    "crates/raptor-agent",
+    "crates/raptor-cli",
+    "crates/raptor-core",
+    "crates/raptor-git",
+    "crates/raptor-providers",
+    "crates/raptor-sandbox",
+    "crates/raptor-store",
+    "crates/raptor-tools",
+    "crates/raptor-tui",
+]
+resolver = "2"
+
+[workspace.package]
+authors = ["RaptorLabs.dev"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bobvasic/raptor-code"
+rust-version = "1.75"
+version = "0.1.0"
+
+[workspace.dependencies]
+raptor-agent = { path = "crates/raptor-agent" }
+raptor-cli = { path = "crates/raptor-cli" }
+raptor-core = { path = "crates/raptor-core" }
+raptor-git = { path = "crates/raptor-git" }
+raptor-providers = { path = "crates/raptor-providers" }
+raptor-sandbox = { path = "crates/raptor-sandbox" }
+raptor-store = { path = "crates/raptor-store" }
+raptor-tools = { path = "crates/raptor-tools" }
+raptor-tui = { path = "crates/raptor-tui" }

@@ -12,22 +12,25 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 
 - `README.md`: short project summary.
 - `AGENTS.md`: operating instructions for coding agents working in this repository.
+- `Cargo.toml`: Rust workspace manifest.
 - `LICENSE`: dual license terms, `MIT OR Apache-2.0`.
 - `ROADMAP.md`: V1 milestones and non-goals.
 - `SECURITY.md`: vulnerability reporting and security priorities.
 - `CONTRIBUTING.md`: contribution expectations.
+- `crates/`: Rust crates for the CLI, core metadata, git integration, tools, and planned V1 boundaries.
 - `docs/`: architecture, security, tech stack, project management, and onboarding notes.
 
 ## Local Development
 
-Rust code has not been added yet. After the Rust workspace is created, onboarding should include:
+Use the stable Rust toolchain.
 
-- Required Rust toolchain version.
-- Build commands.
-- Test commands.
-- Lint and format commands.
-- Example CLI and TUI usage.
+- Format: `cargo fmt`
+- Check: `cargo check`
+- Test: `cargo test`
+- Lint: `cargo clippy --all-targets --all-features`
+- Version command: `cargo run -p raptor-cli -- --version`
+- Doctor command: `cargo run -p raptor-cli -- doctor`
 
-## First Contributor Task
+## Current Contributor Task
 
-The next implementation step is to create a minimal Rust workspace for the CLI foundation without implementing agent orchestration yet.
+The next implementation step is to expand the CLI command model and define safe worktree-management interfaces without implementing unsupervised agent actions.

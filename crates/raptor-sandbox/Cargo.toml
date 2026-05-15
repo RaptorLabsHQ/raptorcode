@@ -1,0 +1,12 @@
+[package]
+name = "raptor-sandbox"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "raptor_sandbox"
+path = "src/lib.rs"

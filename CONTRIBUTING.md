@@ -29,4 +29,4 @@ Contributions are accepted under `MIT OR Apache-2.0`, matching the repository li
 
 ## Current Project State
 
-The foundation documentation exists before Rust implementation. The Rust workspace, CLI, TUI, and orchestrator crates are planned but not implemented in this documentation-only increment.
+The repository includes a minimal Rust workspace skeleton and a first CLI binary named `raptor`. The V1 CLI, TUI, and orchestrator behavior are not complete.

@@ -28,6 +28,6 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 
 RaptorCode V1 should coordinate coding-agent workflows inside existing developer environments. It should not replace the user's shell, terminal emulator, package manager, editor, or git hosting provider.
 
-## Initial Implementation Constraint
+## Current Implementation
 
-No Rust code exists in this foundation increment. The next technical step is to create a minimal Cargo workspace and CLI crate skeleton.
+The repository contains a minimal Cargo workspace with crate boundaries for core metadata, CLI, git diagnostics, tooling diagnostics, agent orchestration, providers, TUI, sandboxing, and local storage. The implemented CLI surface is limited to `raptor --version` and `raptor doctor`.

@@ -38,4 +38,4 @@ An increment is complete when:
 
 ## Current Status
 
-This foundation increment establishes project documentation and repository governance. It does not implement Rust code.
+The repository has project documentation, governance files, and a minimal Rust workspace skeleton. V1 CLI, TUI, and multi-agent orchestration are not complete.
