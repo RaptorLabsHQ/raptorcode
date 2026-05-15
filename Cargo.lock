@@ -12,6 +12,7 @@ version = "0.1.0"
 dependencies = [
  "raptor-core",
  "raptor-git",
+ "raptor-store",
  "raptor-tools",
 ]
 

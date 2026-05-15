@@ -30,4 +30,6 @@ RaptorCode V1 should coordinate coding-agent workflows inside existing developer
 
 ## Current Implementation
 
-The repository contains a minimal Cargo workspace with crate boundaries for core metadata, CLI, git diagnostics, tooling diagnostics, agent orchestration, providers, TUI, sandboxing, and local storage. The implemented CLI surface is limited to `raptor --version` and `raptor doctor`.
+The repository contains a minimal Cargo workspace with crate boundaries for core metadata, CLI, git diagnostics, tooling diagnostics, agent orchestration, providers, TUI, sandboxing, and local storage. The implemented CLI router supports `raptor init`, `raptor chat`, `raptor task`, `raptor swarm`, `raptor review`, `raptor diff`, `raptor test`, `raptor merge`, and `raptor doctor`.
+
+Only `raptor init` and `raptor doctor` perform meaningful work today. Other routed commands are explicit stubs until the corresponding V1 workflows are implemented.

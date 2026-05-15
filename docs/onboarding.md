@@ -29,8 +29,9 @@ Use the stable Rust toolchain.
 - Test: `cargo test`
 - Lint: `cargo clippy --all-targets --all-features`
 - Version command: `cargo run -p raptor-cli -- --version`
+- Init command: `cargo run -p raptor-cli -- init`
 - Doctor command: `cargo run -p raptor-cli -- doctor`
 
 ## Current Contributor Task
 
-The next implementation step is to expand the CLI command model and define safe worktree-management interfaces without implementing unsupervised agent actions.
+The CLI router now recognizes the V1 command surface. The next implementation step is to define safe worktree-management interfaces behind the `task`, `diff`, and `review` workflows without implementing unsupervised agent actions.
