@@ -18,7 +18,8 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 - `SECURITY.md`: vulnerability reporting and security priorities.
 - `CONTRIBUTING.md`: contribution expectations.
 - `crates/`: Rust crates for the CLI, core metadata, git integration, tools, and planned V1 boundaries.
-- `docs/`: architecture, security, tech stack, project management, and onboarding notes.
+- `docs/`: architecture, security, tech stack, task workflow, project management, and onboarding notes.
+- `.raptor/`: ignored local runtime state for task metadata and worktrees when task workflows are used.
 
 ## Local Development
 
@@ -32,6 +33,10 @@ Use the stable Rust toolchain.
 - Init command: `cargo run -p raptor-cli -- init`
 - Task command: `cargo run -p raptor-cli -- task "describe the supervised task"`
 - Doctor command: `cargo run -p raptor-cli -- doctor`
+
+## Task Workflow Notes
+
+`raptor task "description"` must be run inside a git repository. It creates an isolated git worktree under `.raptor/worktrees/` and writes metadata under `.raptor/tasks/`. It does not start autonomous agents or modify the main worktree.
 
 ## Current Contributor Task
 

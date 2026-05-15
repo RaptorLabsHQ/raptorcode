@@ -20,6 +20,8 @@ RaptorCode assumes AI coding agents can make incorrect or unsafe changes. The sy
 - Path validation for filesystem operations.
 - Structured command execution instead of shell string concatenation.
 - Minimal dependencies with documented justification.
+- Deterministic task identifiers derived from validated task descriptions.
+- Local `.raptor/` state ignored by git to avoid accidentally committing runtime metadata or nested worktrees.
 
 ## Auditability
 
@@ -39,6 +41,23 @@ Security-relevant actions should be logged or surfaced clearly to the developer:
 - Unsafely merging unreviewed agent output.
 - Leaking secrets through logs or generated files.
 
+## Implemented Task Workflow Controls
+
+`raptor task "description"` currently applies these controls:
+
+- Requires a non-empty task description.
+- Generates a deterministic safe task id from the description.
+- Validates branch and worktree names before git operations.
+- Inspects the git repository root before creating task state.
+- Creates worktrees only under `.raptor/worktrees/`.
+- Refuses path traversal and unsafe names.
+- Refuses to overwrite existing worktree paths.
+- Refuses to overwrite existing task metadata.
+- Persists task metadata under `.raptor/tasks/`.
+- Does not launch autonomous agents, merge changes, commit changes, or push remotes.
+
+Known gap: if metadata persistence fails after git worktree creation, manual cleanup may be required until an explicit cleanup workflow is implemented.
+
 ## Current Status
 
-This repository currently contains documentation only. Security controls described here are design requirements for the planned Rust implementation.
+The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, and the first safe `raptor task "description"` workflow. Security controls described here are partly implemented for task setup and remain design requirements for future agent, review, merge, and TUI workflows.

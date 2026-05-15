@@ -20,7 +20,9 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 
 - Repository foundation.
 - Rust workspace and CLI skeleton.
-- Worktree management.
+- CLI command router.
+- Safe task workflow foundation.
+- Worktree management and inspection.
 - Agent orchestration.
 - TUI supervision workflow.
 - Security hardening.
@@ -38,4 +40,14 @@ An increment is complete when:
 
 ## Current Status
 
-The repository has project documentation, governance files, and a minimal Rust workspace skeleton. V1 CLI, TUI, and multi-agent orchestration are not complete.
+The repository has project documentation, governance files, a minimal Rust workspace, a CLI command router, `raptor init`, `raptor doctor`, and a first safe `raptor task "description"` workflow. The task workflow validates input, creates an isolated worktree, and persists local task metadata without launching autonomous agents.
+
+V1 CLI, TUI, review, merge, and multi-agent orchestration are not complete.
+
+## Near-Term Backlog
+
+- Add `raptor task list`.
+- Add `raptor task show <id>`.
+- Add review inspection for task worktrees.
+- Define supervised merge preconditions.
+- Add cleanup behavior for failed task creation after worktree creation.
