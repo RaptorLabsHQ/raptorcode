@@ -36,14 +36,16 @@ Use the stable Rust toolchain.
 - Task show command: `cargo run -p raptor-cli -- task show <id>`
 - Review command: `cargo run -p raptor-cli -- review <task-id>`
 - Diff command: `cargo run -p raptor-cli -- diff <task-id>`
+- Merge dry-run command: `cargo run -p raptor-cli -- merge <task-id>`
+- Merge confirmation scaffold: `cargo run -p raptor-cli -- merge <task-id> --execute`
 - Doctor command: `cargo run -p raptor-cli -- doctor`
 
 ## Task Workflow Notes
 
 `raptor task "description"` must be run inside a git repository. It creates an isolated git worktree under `.raptor/worktrees/` and writes metadata under `.raptor/tasks/`. It does not start autonomous agents or modify the main worktree.
 
-`raptor task list` and `raptor task show <id>` are read-only inspection commands for persisted task metadata. `raptor review <task-id>` and `raptor diff <task-id>` inspect the associated task worktree without staging, committing, merging, deleting, or modifying files.
+`raptor task list` and `raptor task show <id>` are read-only inspection commands for persisted task metadata. `raptor review <task-id>` and `raptor diff <task-id>` inspect the associated task worktree without staging, committing, merging, deleting, or modifying files. `raptor merge <task-id>` performs merge preflight dry-run checks only. `raptor merge <task-id> --execute` adds typed confirmation scaffolding and still performs no merge.
 
 ## Current Contributor Task
 
-The `task` workflow now creates isolated worktree infrastructure and local task metadata without launching autonomous agents. Task metadata and task worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`. `raptor merge <task-id>` now performs preflight checks and dry-run output without merge execution. The next implementation step is to add typed confirmation and supervised merge execution.
+The `task` workflow now creates isolated worktree infrastructure and local task metadata without launching autonomous agents. Task metadata and task worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`. Merge preflight and typed confirmation scaffolding are in place. The next implementation step is supervised merge execution.

@@ -32,7 +32,7 @@ RaptorCode V1 should coordinate coding-agent workflows inside existing developer
 
 The repository contains a minimal Cargo workspace with crate boundaries for core metadata, task metadata, CLI, git diagnostics, tooling diagnostics, agent orchestration, providers, TUI, sandboxing, and local storage. The implemented CLI router supports `raptor init`, `raptor chat`, `raptor task`, `raptor swarm`, `raptor review`, `raptor diff`, `raptor test`, `raptor merge`, and `raptor doctor`.
 
-`raptor task "description"` validates task input, creates a deterministic isolated git worktree under `.raptor/worktrees/`, and persists task metadata under `.raptor/tasks/`. `raptor task list` and `raptor task show <id>` read that persisted metadata without modifying files. `raptor review <task-id>` and `raptor diff <task-id>` validate stored worktree paths and inspect task worktree status or diffs without modifying files. The task workflow does not launch autonomous coding agents. `raptor init` and `raptor doctor` also perform meaningful work today. Other routed commands are explicit stubs until the corresponding V1 workflows are implemented.
+`raptor task "description"` validates task input, creates a deterministic isolated git worktree under `.raptor/worktrees/`, and persists task metadata under `.raptor/tasks/`. `raptor task list` and `raptor task show <id>` read that persisted metadata without modifying files. `raptor review <task-id>` and `raptor diff <task-id>` validate stored worktree paths and inspect task worktree status or diffs without modifying files. `raptor merge <task-id>` performs preflight dry-run checks only. `raptor merge <task-id> --execute` adds typed confirmation scaffolding but still performs no merge. The task workflow does not launch autonomous coding agents. `raptor init` and `raptor doctor` also perform meaningful work today. Other routed commands are explicit stubs until the corresponding V1 workflows are implemented.
 
 ## Task Workflow Boundaries
 
@@ -43,11 +43,11 @@ The repository contains a minimal Cargo workspace with crate boundaries for core
 
 The current task workflow is intentionally local and supervised. It prepares isolated work but does not call model providers, start background agents, merge branches, commit changes, or push to remotes.
 
-## Planned Merge Boundary
+## Merge Boundary
 
-`raptor merge <task-id>` currently implements preflight dry-run checks only. Future merge execution should remain split into preflight, confirmation, and merge execution boundaries.
+`raptor merge <task-id>` currently implements preflight dry-run checks only. `raptor merge <task-id> --execute` reuses those checks, prints `MERGE <task-id>`, reads typed confirmation from stdin, and then stops because merge execution is not implemented yet. Future merge execution should remain split into preflight, confirmation, and merge execution boundaries.
 
-- `raptor-cli`: parses `raptor merge <task-id>`, coordinates preflight output, and should require typed confirmation before any future merge execution.
+- `raptor-cli`: parses `raptor merge <task-id>` and `raptor merge <task-id> --execute`, coordinates preflight output, and requires typed confirmation before the execution scaffold can continue.
 - `raptor-store`: load existing task metadata from `.raptor/tasks/<task-id>.toml`; no new metadata format is required for the first merge version.
 - `raptor-git`: validates the stored worktree path, inspects main repository cleanliness, inspects task worktree changes, detects unresolved conflicts, and should perform the final merge only after confirmation in a future implementation.
 - `raptor-core`: continue owning task ids and task status concepts; merge-specific state should not be added until there is a concrete status transition to persist.

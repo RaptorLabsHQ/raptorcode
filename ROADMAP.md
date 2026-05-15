@@ -27,7 +27,7 @@ V1 is not a full terminal emulator replacement. It will focus on supervised codi
    - Commands to initialize project state.
    - Commands to create, list, inspect, and clean isolated worktrees.
    - Supervised merge preflight for task worktrees.
-   - Typed `MERGE <task-id>` confirmation before merge execution.
+   - Typed `MERGE <task-id>` confirmation scaffold before merge execution.
    - Explicit safety checks before destructive operations.
 
 4. TUI workflow

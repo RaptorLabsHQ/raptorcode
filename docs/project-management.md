@@ -40,11 +40,11 @@ An increment is complete when:
 
 ## Current Status
 
-The repository has project documentation, governance files, a minimal Rust workspace, a CLI command router, `raptor init`, `raptor doctor`, and a first safe task workflow. The task workflow validates input, creates an isolated worktree, persists local task metadata, and supports read-only metadata and worktree inspection through `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>` without launching autonomous agents.
+The repository has project documentation, governance files, a minimal Rust workspace, a CLI command router, `raptor init`, `raptor doctor`, and a first safe task workflow. The task workflow validates input, creates an isolated worktree, persists local task metadata, supports read-only metadata and worktree inspection through `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`, and includes merge dry-run plus typed confirmation scaffolding without launching autonomous agents.
 
 V1 CLI, TUI, merge, and multi-agent orchestration are not complete.
 
 ## Near-Term Backlog
 
-- Add typed confirmation and supervised merge execution.
+- Add supervised merge execution after the confirmation scaffold.
 - Add cleanup behavior for failed task creation after worktree creation.

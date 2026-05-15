@@ -28,6 +28,7 @@ cargo run -p raptor-cli -- task show <id>
 cargo run -p raptor-cli -- review <task-id>
 cargo run -p raptor-cli -- diff <task-id>
 cargo run -p raptor-cli -- merge <task-id>
+cargo run -p raptor-cli -- merge <task-id> --execute
 ```
 
 Installed binary forms:
@@ -39,6 +40,7 @@ raptor task show <id>
 raptor review <task-id>
 raptor diff <task-id>
 raptor merge <task-id>
+raptor merge <task-id> --execute
 ```
 
 ## Behavior
@@ -93,6 +95,16 @@ The command:
 - Rejects unresolved conflict states.
 - Prints a dry-run summary with task metadata, target repository, target branch when detectable, worktree path, worktree branch when detectable, and changed files.
 - Explicitly states that no merge was executed.
+- Does not stage, commit, merge, push, delete worktrees, run tests, install dependencies, execute task-provided commands, or call AI models.
+
+`raptor merge <task-id> --execute`:
+
+- Runs the same preflight checks as `raptor merge <task-id>`.
+- Prints the same dry-run summary before confirmation.
+- Prints the exact required phrase `MERGE <task-id>`.
+- Reads typed confirmation from stdin only.
+- Aborts on empty input, mismatched input, or unavailable interactive confirmation.
+- Prints `Merge execution is not implemented yet. No merge was performed.` after exact confirmation.
 - Does not stage, commit, merge, push, delete worktrees, run tests, install dependencies, execute task-provided commands, or call AI models.
 
 ## Supervised Merge Workflow
@@ -157,21 +169,21 @@ The first merge version must not include:
 8. Print that no merge was executed.
 9. Print the expected future behavior.
 
-### Future Typed Confirmation Flow
+### Current Typed Confirmation Scaffold
 
-The default `raptor merge <task-id>` behavior must remain dry-run/preflight unless a future explicit execution flag is provided. Future merge execution should use:
+The default `raptor merge <task-id>` behavior remains dry-run/preflight and does not prompt. The current execute scaffold uses:
 
 ```bash
 raptor merge <task-id> --execute
 ```
 
-The command must still print all preflight details before asking for confirmation. After preflight passes, it must print the exact confirmation phrase:
+The command prints all preflight details before asking for confirmation. After preflight passes, it prints the exact confirmation phrase:
 
 ```text
 MERGE <task-id>
 ```
 
-The user must enter that exact phrase before merge execution. For a concrete task id such as `fix-parser-123`, the required confirmation would be:
+The user must enter that exact phrase before any future merge execution. For a concrete task id such as `fix-parser-123`, the required confirmation would be:
 
 ```text
 MERGE fix-parser-123
@@ -187,6 +199,7 @@ Confirmation safety rules:
 - Confirmation is read only from the interactive user prompt.
 - Confirmation must not be read from task metadata, environment variables, generated files, or model output.
 - The command must never proceed because an AI model generated the confirmation phrase.
+- Exact confirmation currently stops with `Merge execution is not implemented yet. No merge was performed.`
 
 Optional future automation may use:
 
@@ -234,16 +247,17 @@ The implementation should keep CLI orchestration thin and put git-specific check
 Implemented preflight pieces:
 
 - CLI parser accepts `raptor merge <task-id>`.
+- CLI parser accepts `raptor merge <task-id> --execute`.
 - `raptor-store` loads the existing `.raptor/tasks/*.toml` metadata format.
 - `raptor-git` validates stored worktree paths using the same safety boundary as `raptor review` and `raptor diff`.
 - Read-only git preflight checks cover main repository cleanliness, task worktree status, changed files, and unresolved conflict detection.
+- CLI confirmation scaffolding prints the exact confirmation phrase and aborts on empty, mismatched, or unavailable confirmation input.
 
 Future merge execution pieces:
 
-- Add typed confirmation before mutation.
-- Add merge execution only after dry-run output and confirmation are stable.
+- Add merge execution only after dry-run output and confirmation scaffolding are stable.
 - Add optional merge preflight and execution timestamps to future task metadata.
-- Add tests for confirmation mismatch, clean merge behavior, conflict handling during merge execution, and no worktree deletion.
+- Add tests for clean merge behavior, conflict handling during merge execution, and no worktree deletion.
 
 ### Future Phases
 
@@ -287,10 +301,11 @@ Current layout:
 - No commits are created.
 - No branches are merged.
 - No remote pushes are performed.
-- `raptor merge <task-id>` is preflight dry-run only; merge execution is not implemented yet.
+- `raptor merge <task-id>` is preflight dry-run only.
+- `raptor merge <task-id> --execute` is confirmation scaffolding only; merge execution is not implemented yet.
 - No task deletion, cleanup, or archival command exists yet.
 - Failed metadata persistence after worktree creation may require manual cleanup.
 
 ## Recommended Next Step
 
-Add typed confirmation and merge execution after dry-run output and safety checks are stable.
+Add supervised merge execution after dry-run output and confirmation scaffolding are stable.

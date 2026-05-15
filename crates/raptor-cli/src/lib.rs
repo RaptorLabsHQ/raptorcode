@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::io::BufRead;
 use std::path::Path;
 
 use raptor_core::{project_description, project_name, version, TaskId, TaskMetadata, TaskStatus};
@@ -21,12 +22,18 @@ pub enum CliCommand {
     Doctor,
     Help,
     Init,
-    Merge { task_id: String },
+    Merge(MergeCommand),
     Review { task_id: String },
     Swarm,
     Task(TaskCommand),
     Test,
     Version,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeCommand {
+    DryRun { task_id: String },
+    Execute { task_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,13 +46,26 @@ pub enum TaskCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliError {
     message: String,
+    output: Option<String>,
 }
 
 impl CliError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            output: None,
         }
+    }
+
+    fn with_output(message: impl Into<String>, output: String) -> Self {
+        Self {
+            message: message.into(),
+            output: Some(output),
+        }
+    }
+
+    pub fn output(&self) -> Option<&str> {
+        self.output.as_deref()
     }
 }
 
@@ -102,10 +122,17 @@ where
         [arg, ..] if arg == "diff" => Err(CliError::new("diff accepts exactly one task id")),
         [arg] if arg == "test" => Ok(CliCommand::Test),
         [arg] if arg == "merge" => Err(CliError::new("merge task id is required")),
-        [arg, task_id] if arg == "merge" => Ok(CliCommand::Merge {
+        [arg, task_id] if arg == "merge" => Ok(CliCommand::Merge(MergeCommand::DryRun {
             task_id: task_id.to_owned(),
-        }),
-        [arg, ..] if arg == "merge" => Err(CliError::new("merge accepts exactly one task id")),
+        })),
+        [arg, task_id, flag] if arg == "merge" && flag == "--execute" => {
+            Ok(CliCommand::Merge(MergeCommand::Execute {
+                task_id: task_id.to_owned(),
+            }))
+        }
+        [arg, ..] if arg == "merge" => Err(CliError::new(
+            "merge accepts exactly one task id and optional --execute flag",
+        )),
         [arg] if arg == "doctor" => Ok(CliCommand::Doctor),
         [unknown, ..] => Err(CliError::new(format!(
             "unknown or invalid command: {unknown}"
@@ -118,13 +145,28 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    run_with_merge_confirmation(args, current_dir, None)
+}
+
+pub fn run_with_merge_confirmation<I, S>(
+    args: I,
+    current_dir: &Path,
+    confirmation_input: Option<&mut dyn BufRead>,
+) -> Result<String, CliError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
     match parse_args(args)? {
         CliCommand::Chat => Ok(render_stub("chat")),
         CliCommand::Diff { task_id } => diff_task(current_dir, &task_id),
         CliCommand::Doctor => Ok(render_doctor(current_dir)),
         CliCommand::Help => Ok(render_help()),
         CliCommand::Init => init_project(current_dir),
-        CliCommand::Merge { task_id } => merge_task(current_dir, &task_id),
+        CliCommand::Merge(MergeCommand::DryRun { task_id }) => merge_task(current_dir, &task_id),
+        CliCommand::Merge(MergeCommand::Execute { task_id }) => {
+            merge_task_execute(current_dir, &task_id, confirmation_input)
+        }
         CliCommand::Review { task_id } => review_task(current_dir, &task_id),
         CliCommand::Swarm => Ok(render_stub("swarm")),
         CliCommand::Task(TaskCommand::Create { description }) => {
@@ -143,7 +185,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor swarm\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor swarm\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -267,6 +309,59 @@ pub fn diff_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> 
 }
 
 pub fn merge_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> {
+    let (task, preflight) = merge_task_preflight(current_dir, task_id)?;
+
+    Ok(render_merge_preflight(&task, &preflight))
+}
+
+pub fn merge_task_execute(
+    current_dir: &Path,
+    task_id: &str,
+    confirmation_input: Option<&mut dyn BufRead>,
+) -> Result<String, CliError> {
+    let (task, preflight) = merge_task_preflight(current_dir, task_id)?;
+    let mut output = render_merge_preflight(&task, &preflight);
+    let confirmation_phrase = format!("MERGE {}", task.id);
+
+    output.push_str(&format!("Required confirmation: {confirmation_phrase}\n"));
+
+    let Some(input) = confirmation_input else {
+        return Err(CliError::with_output(
+            "merge execution requires interactive confirmation; aborting",
+            output,
+        ));
+    };
+
+    let mut confirmation = String::new();
+    input
+        .read_line(&mut confirmation)
+        .map_err(|_| CliError::with_output("failed to read merge confirmation", output.clone()))?;
+    let confirmation = strip_line_ending(&confirmation);
+
+    if confirmation.is_empty() {
+        return Err(CliError::with_output(
+            "merge confirmation was empty; aborting",
+            output,
+        ));
+    }
+
+    if confirmation != confirmation_phrase {
+        return Err(CliError::with_output(
+            "merge confirmation did not match; aborting",
+            output,
+        ));
+    }
+
+    output.push_str("Confirmation result: matched\n");
+    output.push_str("Merge execution is not implemented yet. No merge was performed.\n");
+
+    Ok(output)
+}
+
+fn merge_task_preflight(
+    current_dir: &Path,
+    task_id: &str,
+) -> Result<(StoredTaskMetadata, MergePreflight), CliError> {
     let repository_root =
         inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
     let task = read_task_metadata(repository_root.path(), task_id)
@@ -278,7 +373,7 @@ pub fn merge_task(current_dir: &Path, task_id: &str) -> Result<String, CliError>
     let preflight = preflight_task_merge(&repository_root, &task.id, worktree_path)
         .map_err(|error| CliError::new(error.to_string()))?;
 
-    Ok(render_merge_preflight(&task, &preflight))
+    Ok((task, preflight))
 }
 
 pub fn render_doctor(current_dir: &Path) -> String {
@@ -419,7 +514,7 @@ fn render_merge_preflight(task: &StoredTaskMetadata, preflight: &MergePreflight)
 
     output.push_str("Preflight result: passed\n");
     output.push_str("No merge was executed.\n");
-    output.push_str("Future behavior: raptor merge <task-id> will require typed confirmation before merge execution.\n");
+    output.push_str("Next behavior: raptor merge <task-id> --execute runs typed confirmation scaffolding; merge execution is not implemented yet.\n");
 
     output
 }
@@ -447,12 +542,20 @@ fn display_path_optional(value: Option<&std::path::PathBuf>) -> String {
         .unwrap_or_else(|| "-".to_owned())
 }
 
+fn strip_line_ending(value: &str) -> &str {
+    value
+        .strip_suffix("\r\n")
+        .or_else(|| value.strip_suffix('\n'))
+        .unwrap_or(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use raptor_core::TaskId;
     use raptor_store::CONFIG_FILE_NAME;
     use std::fs;
+    use std::io::Cursor;
     use std::path::PathBuf;
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -578,6 +681,36 @@ mod tests {
         fs::write(metadata_path, updated).unwrap();
     }
 
+    fn run_merge_execute_with_input(
+        task_id: &TaskId,
+        current_dir: &Path,
+        input: &str,
+    ) -> Result<String, CliError> {
+        let mut input = Cursor::new(input.as_bytes());
+
+        run_with_merge_confirmation(
+            ["merge", task_id.as_str(), "--execute"],
+            current_dir,
+            Some(&mut input),
+        )
+    }
+
+    fn changed_merge_task(name: &str, description: &str) -> (TestDir, TaskId) {
+        let test_dir = TestDir::create(name);
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "before\n");
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        fs::write(
+            task_worktree_path(&test_dir.path, &task_id).join("tracked.txt"),
+            "after\n",
+        )
+        .unwrap();
+
+        (test_dir, task_id)
+    }
+
     #[test]
     fn parses_version_flag() {
         assert_eq!(parse_args(["--version"]).unwrap(), CliCommand::Version);
@@ -618,9 +751,19 @@ mod tests {
     fn parses_merge_task_id() {
         assert_eq!(
             parse_args(["merge", "task-123"]).unwrap(),
-            CliCommand::Merge {
+            CliCommand::Merge(MergeCommand::DryRun {
                 task_id: "task-123".to_owned()
-            }
+            })
+        );
+    }
+
+    #[test]
+    fn parses_merge_execute_flag() {
+        assert_eq!(
+            parse_args(["merge", "task-123", "--execute"]).unwrap(),
+            CliCommand::Merge(MergeCommand::Execute {
+                task_id: "task-123".to_owned()
+            })
         );
     }
 
@@ -693,7 +836,7 @@ mod tests {
         let extra_error = parse_args(["merge", "task-123", "extra"]).unwrap_err();
 
         assert!(missing_error.to_string().contains("task id"));
-        assert!(extra_error.to_string().contains("exactly one"));
+        assert!(extra_error.to_string().contains("optional --execute"));
     }
 
     #[test]
@@ -1057,6 +1200,94 @@ mod tests {
     }
 
     #[test]
+    fn merge_without_execute_remains_dry_run_and_does_not_prompt() {
+        let (test_dir, task_id) = changed_merge_task("merge-dry-run-no-prompt", "Merge dry run");
+
+        let output = run(["merge", task_id.as_str()], &test_dir.path).unwrap();
+
+        assert!(output.contains("Merge preflight dry run"));
+        assert!(output.contains("No merge was executed."));
+        assert!(!output.contains(&format!(
+            "Required confirmation: MERGE {}",
+            task_id.as_str()
+        )));
+        assert!(!output.contains("Merge execution is not implemented yet."));
+    }
+
+    #[test]
+    fn merge_execute_prints_required_confirmation_phrase() {
+        let (test_dir, task_id) =
+            changed_merge_task("merge-execute-phrase", "Merge execute phrase");
+        let confirmation = format!("MERGE {}\n", task_id.as_str());
+
+        let output = run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap();
+
+        assert!(output.contains("Merge preflight dry run"));
+        assert!(output.contains(&format!(
+            "Required confirmation: MERGE {}",
+            task_id.as_str()
+        )));
+    }
+
+    #[test]
+    fn merge_execute_aborts_on_empty_input() {
+        let (test_dir, task_id) = changed_merge_task("merge-execute-empty", "Merge empty input");
+
+        let error = run_merge_execute_with_input(&task_id, &test_dir.path, "\n").unwrap_err();
+
+        assert!(error.to_string().contains("empty"));
+        assert!(error.output().unwrap().contains("Merge preflight dry run"));
+        assert!(error.output().unwrap().contains(&format!(
+            "Required confirmation: MERGE {}",
+            task_id.as_str()
+        )));
+    }
+
+    #[test]
+    fn merge_execute_aborts_on_wrong_phrase() {
+        let (test_dir, task_id) = changed_merge_task("merge-execute-wrong", "Merge wrong phrase");
+
+        let error = run_merge_execute_with_input(&task_id, &test_dir.path, "MERGE another-task\n")
+            .unwrap_err();
+
+        assert!(error.to_string().contains("did not match"));
+        assert!(error.output().unwrap().contains(&format!(
+            "Required confirmation: MERGE {}",
+            task_id.as_str()
+        )));
+    }
+
+    #[test]
+    fn merge_execute_exact_phrase_reaches_not_implemented_message() {
+        let (test_dir, task_id) = changed_merge_task("merge-execute-exact", "Merge exact phrase");
+        let confirmation = format!("MERGE {}\n", task_id.as_str());
+
+        let output = run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap();
+
+        assert!(output.contains("Confirmation result: matched"));
+        assert!(output.contains("Merge execution is not implemented yet. No merge was performed."));
+    }
+
+    #[test]
+    fn merge_execute_rejects_missing_interactive_input() {
+        let (test_dir, task_id) =
+            changed_merge_task("merge-execute-noninteractive", "Merge no input");
+
+        let error = run_with_merge_confirmation(
+            ["merge", task_id.as_str(), "--execute"],
+            &test_dir.path,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("interactive confirmation"));
+        assert!(error.output().unwrap().contains(&format!(
+            "Required confirmation: MERGE {}",
+            task_id.as_str()
+        )));
+    }
+
+    #[test]
     fn merge_preflight_rejects_missing_task() {
         let test_dir = TestDir::create("merge-missing-task");
         initialize_git_repo(&test_dir.path);
@@ -1233,6 +1464,54 @@ mod tests {
         let output = run(["merge", task_id.as_str()], &test_dir.path).unwrap();
 
         assert!(output.contains("No merge was executed."));
+        assert_eq!(fs::read_to_string(metadata_path).unwrap(), before_metadata);
+        assert_eq!(
+            git_text(&test_dir.path, &["rev-parse", "HEAD"]),
+            before_root_head
+        );
+        assert_eq!(
+            git_text(&worktree_path, &["rev-parse", "HEAD"]),
+            before_worktree_head
+        );
+        assert_eq!(
+            git_text(&test_dir.path, &["status", "--short"]),
+            before_root_status
+        );
+        assert_eq!(
+            git_text(&worktree_path, &["status", "--short"]),
+            before_worktree_status
+        );
+        assert_eq!(
+            git_text(&worktree_path, &["diff", "--cached"]),
+            before_worktree_staged_diff
+        );
+    }
+
+    #[test]
+    fn merge_execute_scaffold_has_no_merge_stage_commit_push_or_delete_side_effects() {
+        let test_dir = TestDir::create("merge-execute-readonly");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "before\n");
+        let description = "Merge execute readonly";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let worktree_path = task_worktree_path(&test_dir.path, &task_id);
+        fs::write(worktree_path.join("tracked.txt"), "after\n").unwrap();
+        run_git(&worktree_path, &["add", "tracked.txt"]);
+        let metadata_path = task_metadata_path(&test_dir.path, &task_id);
+        let before_metadata = fs::read_to_string(&metadata_path).unwrap();
+        let before_root_head = git_text(&test_dir.path, &["rev-parse", "HEAD"]);
+        let before_worktree_head = git_text(&worktree_path, &["rev-parse", "HEAD"]);
+        let before_root_status = git_text(&test_dir.path, &["status", "--short"]);
+        let before_worktree_status = git_text(&worktree_path, &["status", "--short"]);
+        let before_worktree_staged_diff = git_text(&worktree_path, &["diff", "--cached"]);
+        let confirmation = format!("MERGE {}\n", task_id.as_str());
+
+        let output = run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap();
+
+        assert!(output.contains("Merge execution is not implemented yet."));
+        assert!(worktree_path.exists());
         assert_eq!(fs::read_to_string(metadata_path).unwrap(), before_metadata);
         assert_eq!(
             git_text(&test_dir.path, &["rev-parse", "HEAD"]),

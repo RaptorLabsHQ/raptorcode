@@ -60,13 +60,14 @@ Security-relevant actions should be logged or surfaced clearly to the developer:
 - Uses read-only git status and diff commands for `raptor review <task-id>` and `raptor diff <task-id>`.
 - Runs `raptor merge <task-id>` as a preflight dry run only.
 - Refuses merge preflight when the target repository is dirty, the task worktree has no changes, or unresolved conflicts are present.
+- Runs `raptor merge <task-id> --execute` as a typed confirmation scaffold only.
 - Does not launch autonomous agents, merge changes, commit changes, or push remotes.
 
 Known gap: if metadata persistence fails after git worktree creation, manual cleanup may be required until an explicit cleanup workflow is implemented.
 
-## Planned Merge Controls
+## Merge Controls
 
-`raptor merge <task-id>` currently performs preflight checks and prints a dry-run summary only. Merge execution is not implemented yet.
+`raptor merge <task-id>` currently performs preflight checks and prints a dry-run summary only. `raptor merge <task-id> --execute` performs the same preflight checks, prints the exact confirmation phrase, reads typed confirmation from stdin, and then stops with a not-implemented message. Merge execution is not implemented yet.
 
 Current preflight controls and future merge execution controls:
 
@@ -83,11 +84,11 @@ Current preflight controls and future merge execution controls:
 - Never push to a remote or delete the task worktree in the first merge version.
 - Never trust generated files blindly; the developer remains responsible for code review before confirming merge.
 
-## Future Merge Confirmation Controls
+## Current Confirmation Scaffold
 
-Future merge execution must be explicit. Default `raptor merge <task-id>` remains dry-run/preflight unless a future execution flag is provided.
+Future merge execution must remain explicit. Default `raptor merge <task-id>` remains dry-run/preflight and never prompts.
 
-Required future execution command:
+Current scaffold command:
 
 ```bash
 raptor merge <task-id> --execute
@@ -104,6 +105,7 @@ Confirmation requirements:
 - Confirmation must come from the interactive user prompt only.
 - Confirmation must not come from task metadata, environment variables, generated files, or model output.
 - The command must never proceed because an AI model produced the confirmation phrase.
+- Exact confirmation currently reaches only: `Merge execution is not implemented yet. No merge was performed.`
 
 Optional future automation command:
 
@@ -120,4 +122,4 @@ Auditability requirements:
 
 ## Current Status
 
-The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, and `raptor merge <task-id>` preflight dry run. Security controls described here are partly implemented for task setup and inspection, and remain design requirements for future agent, merge execution, and TUI workflows.
+The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` confirmation scaffold. Security controls described here are partly implemented for task setup and inspection, and remain design requirements for future agent, merge execution, and TUI workflows.
