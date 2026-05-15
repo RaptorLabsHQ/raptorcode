@@ -5,7 +5,8 @@ use std::path::Path;
 use raptor_core::{project_description, project_name, version, TaskId, TaskMetadata, TaskStatus};
 use raptor_git::{
     create_task_worktree, diff_task_worktree, inspect_repository, inspect_repository_root,
-    inspect_task_worktree, plan_task_worktree, WorktreeDiff, WorktreeReview,
+    inspect_task_worktree, plan_task_worktree, preflight_task_merge, MergePreflight, WorktreeDiff,
+    WorktreeReview,
 };
 use raptor_store::{
     init_project_config, list_task_metadata, persist_task_metadata, read_task_metadata,
@@ -20,7 +21,7 @@ pub enum CliCommand {
     Doctor,
     Help,
     Init,
-    Merge,
+    Merge { task_id: String },
     Review { task_id: String },
     Swarm,
     Task(TaskCommand),
@@ -100,7 +101,11 @@ where
         }),
         [arg, ..] if arg == "diff" => Err(CliError::new("diff accepts exactly one task id")),
         [arg] if arg == "test" => Ok(CliCommand::Test),
-        [arg] if arg == "merge" => Ok(CliCommand::Merge),
+        [arg] if arg == "merge" => Err(CliError::new("merge task id is required")),
+        [arg, task_id] if arg == "merge" => Ok(CliCommand::Merge {
+            task_id: task_id.to_owned(),
+        }),
+        [arg, ..] if arg == "merge" => Err(CliError::new("merge accepts exactly one task id")),
         [arg] if arg == "doctor" => Ok(CliCommand::Doctor),
         [unknown, ..] => Err(CliError::new(format!(
             "unknown or invalid command: {unknown}"
@@ -119,7 +124,7 @@ where
         CliCommand::Doctor => Ok(render_doctor(current_dir)),
         CliCommand::Help => Ok(render_help()),
         CliCommand::Init => init_project(current_dir),
-        CliCommand::Merge => Ok(render_stub("merge")),
+        CliCommand::Merge { task_id } => merge_task(current_dir, &task_id),
         CliCommand::Review { task_id } => review_task(current_dir, &task_id),
         CliCommand::Swarm => Ok(render_stub("swarm")),
         CliCommand::Task(TaskCommand::Create { description }) => {
@@ -138,7 +143,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor swarm\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor swarm\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -261,6 +266,21 @@ pub fn diff_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> 
     Ok(render_task_diff(&task, &diff))
 }
 
+pub fn merge_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> {
+    let repository_root =
+        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let task = read_task_metadata(repository_root.path(), task_id)
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let worktree_path = task
+        .worktree_path
+        .as_ref()
+        .ok_or_else(|| CliError::new("task metadata is missing worktree_path"))?;
+    let preflight = preflight_task_merge(&repository_root, &task.id, worktree_path)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(render_merge_preflight(&task, &preflight))
+}
+
 pub fn render_doctor(current_dir: &Path) -> String {
     let repository = inspect_repository(current_dir);
     let tools = [
@@ -370,6 +390,36 @@ fn render_task_diff(task: &StoredTaskMetadata, diff: &WorktreeDiff) -> String {
     push_diff_section(&mut output, &diff.unstaged);
     output.push_str("Staged diff:\n");
     push_diff_section(&mut output, &diff.staged);
+
+    output
+}
+
+fn render_merge_preflight(task: &StoredTaskMetadata, preflight: &MergePreflight) -> String {
+    let mut output = format!(
+        "Merge preflight dry run\nTask: {}\nStatus: {}\nDescription: {}\nTarget repository: {}\nTarget branch: {}\nWorktree: {}\nWorktree branch: {}\n",
+        task.id,
+        display_optional(task.status.as_deref()),
+        display_optional(task.description.as_deref()),
+        preflight.target_repository_path.display(),
+        display_optional(preflight.target_branch.as_deref()),
+        preflight.worktree_path.display(),
+        display_optional(preflight.worktree_branch.as_deref())
+    );
+
+    output.push_str("Changed files:\n");
+    if preflight.changed_files.is_empty() {
+        output.push_str("  (none)\n");
+    } else {
+        for file in &preflight.changed_files {
+            output.push_str("  ");
+            output.push_str(file);
+            output.push('\n');
+        }
+    }
+
+    output.push_str("Preflight result: passed\n");
+    output.push_str("No merge was executed.\n");
+    output.push_str("Future behavior: raptor merge <task-id> will require typed confirmation before merge execution.\n");
 
     output
 }
@@ -512,6 +562,22 @@ mod tests {
             .join(format!("{}.toml", task_id.as_str()))
     }
 
+    fn replace_worktree_path_in_metadata(
+        repository_root: &Path,
+        task_id: &TaskId,
+        replacement_path: &Path,
+    ) {
+        let metadata_path = task_metadata_path(repository_root, task_id);
+        let worktree_path = task_worktree_path(repository_root, task_id);
+        let content = fs::read_to_string(&metadata_path).unwrap();
+        let updated = content.replace(
+            &worktree_path.display().to_string(),
+            &replacement_path.display().to_string(),
+        );
+
+        fs::write(metadata_path, updated).unwrap();
+    }
+
     #[test]
     fn parses_version_flag() {
         assert_eq!(parse_args(["--version"]).unwrap(), CliCommand::Version);
@@ -524,7 +590,6 @@ mod tests {
             ("chat", CliCommand::Chat),
             ("swarm", CliCommand::Swarm),
             ("test", CliCommand::Test),
-            ("merge", CliCommand::Merge),
             ("doctor", CliCommand::Doctor),
         ];
 
@@ -544,6 +609,16 @@ mod tests {
         assert_eq!(
             parse_args(["diff", "task-123"]).unwrap(),
             CliCommand::Diff {
+                task_id: "task-123".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn parses_merge_task_id() {
+        assert_eq!(
+            parse_args(["merge", "task-123"]).unwrap(),
+            CliCommand::Merge {
                 task_id: "task-123".to_owned()
             }
         );
@@ -610,6 +685,15 @@ mod tests {
 
         assert!(review_error.to_string().contains("exactly one"));
         assert!(diff_error.to_string().contains("exactly one"));
+    }
+
+    #[test]
+    fn rejects_missing_and_extra_merge_task_ids() {
+        let missing_error = parse_args(["merge"]).unwrap_err();
+        let extra_error = parse_args(["merge", "task-123", "extra"]).unwrap_err();
+
+        assert!(missing_error.to_string().contains("task id"));
+        assert!(extra_error.to_string().contains("exactly one"));
     }
 
     #[test]
@@ -940,6 +1024,235 @@ mod tests {
         assert_eq!(
             git_text(&worktree_path, &["diff", "--cached"]),
             before_staged_diff
+        );
+    }
+
+    #[test]
+    fn merge_preflight_succeeds_with_changed_worktree() {
+        let test_dir = TestDir::create("merge-preflight-success");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "before\n");
+        let description = "Merge changed worktree";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        fs::write(
+            task_worktree_path(&test_dir.path, &task_id).join("tracked.txt"),
+            "after\n",
+        )
+        .unwrap();
+        let output = run(["merge", task_id.as_str()], &test_dir.path).unwrap();
+
+        assert!(output.contains("Merge preflight dry run"));
+        assert!(output.contains(&format!("Task: {}", task_id.as_str())));
+        assert!(output.contains("Status: planned"));
+        assert!(output.contains(&format!("Description: {description}")));
+        assert!(output.contains("Target repository:"));
+        assert!(output.contains("Target branch:"));
+        assert!(output.contains("Worktree:"));
+        assert!(output.contains("Worktree branch:"));
+        assert!(output.contains("tracked.txt"));
+        assert!(output.contains("No merge was executed."));
+        assert!(output.contains("typed confirmation"));
+    }
+
+    #[test]
+    fn merge_preflight_rejects_missing_task() {
+        let test_dir = TestDir::create("merge-missing-task");
+        initialize_git_repo(&test_dir.path);
+
+        let error = run(["merge", "missing-task"], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn merge_preflight_rejects_unsafe_task_id() {
+        let test_dir = TestDir::create("merge-unsafe");
+        initialize_git_repo(&test_dir.path);
+
+        let error = run(["merge", "Unsafe"], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("not safe"));
+    }
+
+    #[test]
+    fn merge_preflight_rejects_path_traversal_task_id() {
+        let test_dir = TestDir::create("merge-traversal");
+        initialize_git_repo(&test_dir.path);
+
+        let error = run(["merge", "../secret"], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("not safe"));
+    }
+
+    #[test]
+    fn merge_preflight_rejects_missing_worktree() {
+        let test_dir = TestDir::create("merge-missing-worktree");
+        initialize_git_repo(&test_dir.path);
+        let description = "Merge missing worktree";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        fs::remove_dir_all(task_worktree_path(&test_dir.path, &task_id)).unwrap();
+        let error = run(["merge", task_id.as_str()], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("worktree not found"));
+    }
+
+    #[test]
+    fn merge_preflight_rejects_worktree_outside_raptor_directory() {
+        let test_dir = TestDir::create("merge-unsafe-worktree");
+        initialize_git_repo(&test_dir.path);
+        let description = "Merge unsafe worktree";
+        let task_id = TaskId::from_description(description).unwrap();
+        let unsafe_path = test_dir.path.join("outside").join(task_id.as_str());
+
+        run(["task", description], &test_dir.path).unwrap();
+        replace_worktree_path_in_metadata(&test_dir.path, &task_id, &unsafe_path);
+        let error = run(["merge", task_id.as_str()], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("not a safe repository path"));
+    }
+
+    #[test]
+    fn merge_preflight_rejects_dirty_root_repository() {
+        let test_dir = TestDir::create("merge-dirty-root");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "before\n");
+        let description = "Merge dirty root";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        fs::write(
+            task_worktree_path(&test_dir.path, &task_id).join("tracked.txt"),
+            "after\n",
+        )
+        .unwrap();
+        fs::write(test_dir.path.join("root-dirty.txt"), "dirty\n").unwrap();
+        let error = run(["merge", task_id.as_str()], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("uncommitted changes"));
+    }
+
+    #[test]
+    fn merge_preflight_rejects_clean_task_worktree() {
+        let test_dir = TestDir::create("merge-clean-worktree");
+        initialize_git_repo(&test_dir.path);
+        let description = "Merge clean worktree";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let error = run(["merge", task_id.as_str()], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("no changes to merge"));
+    }
+
+    #[test]
+    fn merge_preflight_rejects_unresolved_conflict_state() {
+        let test_dir = TestDir::create("merge-conflict");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "base\n");
+        let description = "Merge conflicted worktree";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let worktree_path = task_worktree_path(&test_dir.path, &task_id);
+
+        fs::write(test_dir.path.join("tracked.txt"), "target\n").unwrap();
+        run_git(&test_dir.path, &["add", "tracked.txt"]);
+        run_git(
+            &test_dir.path,
+            &[
+                "-c",
+                "user.name=Raptor Test",
+                "-c",
+                "user.email=raptor@example.invalid",
+                "commit",
+                "-m",
+                "target change",
+            ],
+        );
+        let target_head = git_text(&test_dir.path, &["rev-parse", "HEAD"])
+            .trim()
+            .to_owned();
+        commit_file(&worktree_path, "tracked.txt", "task\n");
+
+        let merge_output = Command::new("git")
+            .args([
+                "-c",
+                "user.name=Raptor Test",
+                "-c",
+                "user.email=raptor@example.invalid",
+                "merge",
+                target_head.as_str(),
+            ])
+            .current_dir(&worktree_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            !merge_output.status.success(),
+            "conflict setup unexpectedly merged cleanly"
+        );
+        assert!(
+            !git_text(&worktree_path, &["status", "--short"]).is_empty(),
+            "merge stdout: {}; merge stderr: {}",
+            String::from_utf8_lossy(&merge_output.stdout),
+            String::from_utf8_lossy(&merge_output.stderr)
+        );
+
+        let error = run(["merge", task_id.as_str()], &test_dir.path).unwrap_err();
+
+        assert!(
+            error.to_string().contains("unresolved conflicts"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn merge_preflight_has_no_merge_stage_commit_or_push_side_effects() {
+        let test_dir = TestDir::create("merge-readonly");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "before\n");
+        let description = "Merge readonly";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let worktree_path = task_worktree_path(&test_dir.path, &task_id);
+        fs::write(worktree_path.join("tracked.txt"), "after\n").unwrap();
+        run_git(&worktree_path, &["add", "tracked.txt"]);
+        let metadata_path = task_metadata_path(&test_dir.path, &task_id);
+        let before_metadata = fs::read_to_string(&metadata_path).unwrap();
+        let before_root_head = git_text(&test_dir.path, &["rev-parse", "HEAD"]);
+        let before_worktree_head = git_text(&worktree_path, &["rev-parse", "HEAD"]);
+        let before_root_status = git_text(&test_dir.path, &["status", "--short"]);
+        let before_worktree_status = git_text(&worktree_path, &["status", "--short"]);
+        let before_worktree_staged_diff = git_text(&worktree_path, &["diff", "--cached"]);
+
+        let output = run(["merge", task_id.as_str()], &test_dir.path).unwrap();
+
+        assert!(output.contains("No merge was executed."));
+        assert_eq!(fs::read_to_string(metadata_path).unwrap(), before_metadata);
+        assert_eq!(
+            git_text(&test_dir.path, &["rev-parse", "HEAD"]),
+            before_root_head
+        );
+        assert_eq!(
+            git_text(&worktree_path, &["rev-parse", "HEAD"]),
+            before_worktree_head
+        );
+        assert_eq!(
+            git_text(&test_dir.path, &["status", "--short"]),
+            before_root_status
+        );
+        assert_eq!(
+            git_text(&worktree_path, &["status", "--short"]),
+            before_worktree_status
+        );
+        assert_eq!(
+            git_text(&worktree_path, &["diff", "--cached"]),
+            before_worktree_staged_diff
         );
     }
 

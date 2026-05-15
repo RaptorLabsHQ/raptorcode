@@ -58,15 +58,17 @@ Security-relevant actions should be logged or surfaced clearly to the developer:
 - Rejects unsafe task ids and path traversal attempts in task inspection commands.
 - Validates stored worktree paths against `.raptor/worktrees/<task-id>` before review or diff inspection.
 - Uses read-only git status and diff commands for `raptor review <task-id>` and `raptor diff <task-id>`.
+- Runs `raptor merge <task-id>` as a preflight dry run only.
+- Refuses merge preflight when the target repository is dirty, the task worktree has no changes, or unresolved conflicts are present.
 - Does not launch autonomous agents, merge changes, commit changes, or push remotes.
 
 Known gap: if metadata persistence fails after git worktree creation, manual cleanup may be required until an explicit cleanup workflow is implemented.
 
 ## Planned Merge Controls
 
-`raptor merge <task-id>` is not implemented yet. The first merge version must be designed as a supervised workflow, not an autonomous action.
+`raptor merge <task-id>` currently performs preflight checks and prints a dry-run summary only. Merge execution is not implemented yet.
 
-Required controls:
+Current preflight controls and future merge execution controls:
 
 - Treat task ids, task metadata, and stored worktree paths as untrusted input.
 - Reject path traversal, unsafe task ids, and worktree paths outside `.raptor/worktrees/<task-id>`.
@@ -83,4 +85,4 @@ Required controls:
 
 ## Current Status
 
-The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`. Security controls described here are partly implemented for task setup and inspection, and remain design requirements for future agent, merge, and TUI workflows.
+The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, and `raptor merge <task-id>` preflight dry run. Security controls described here are partly implemented for task setup and inspection, and remain design requirements for future agent, merge execution, and TUI workflows.

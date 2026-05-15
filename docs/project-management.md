@@ -46,5 +46,5 @@ V1 CLI, TUI, merge, and multi-agent orchestration are not complete.
 
 ## Near-Term Backlog
 
-- Add `raptor merge <task-id>` preflight checks and dry-run output.
+- Add typed confirmation and supervised merge execution.
 - Add cleanup behavior for failed task creation after worktree creation.

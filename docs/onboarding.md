@@ -46,4 +46,4 @@ Use the stable Rust toolchain.
 
 ## Current Contributor Task
 
-The `task` workflow now creates isolated worktree infrastructure and local task metadata without launching autonomous agents. Task metadata and task worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`. Supervised merge preconditions are documented. The next implementation step is to add `raptor merge <task-id>` preflight checks and dry-run output without merge execution.
+The `task` workflow now creates isolated worktree infrastructure and local task metadata without launching autonomous agents. Task metadata and task worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`. `raptor merge <task-id>` now performs preflight checks and dry-run output without merge execution. The next implementation step is to add typed confirmation and supervised merge execution.

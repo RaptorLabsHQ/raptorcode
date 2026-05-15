@@ -27,6 +27,7 @@ cargo run -p raptor-cli -- task list
 cargo run -p raptor-cli -- task show <id>
 cargo run -p raptor-cli -- review <task-id>
 cargo run -p raptor-cli -- diff <task-id>
+cargo run -p raptor-cli -- merge <task-id>
 ```
 
 Installed binary forms:
@@ -37,6 +38,7 @@ raptor task list
 raptor task show <id>
 raptor review <task-id>
 raptor diff <task-id>
+raptor merge <task-id>
 ```
 
 ## Behavior
@@ -81,9 +83,21 @@ The command:
 - Prints unstaged and staged git diffs for the task worktree.
 - Does not stage, commit, merge, delete, or modify files.
 
-## Planned Supervised Merge Workflow
+`raptor merge <task-id>`:
 
-This section defines the intended first `raptor merge <task-id>` workflow. Merge logic is not implemented yet.
+- Loads existing task metadata from `.raptor/tasks/<task-id>.toml`.
+- Validates the stored worktree path against `.raptor/worktrees/<task-id>`.
+- Verifies the target repository is a git repository.
+- Verifies the target repository worktree is clean.
+- Verifies the task worktree exists and has changes.
+- Rejects unresolved conflict states.
+- Prints a dry-run summary with task metadata, target repository, target branch when detectable, worktree path, worktree branch when detectable, and changed files.
+- Explicitly states that no merge was executed.
+- Does not stage, commit, merge, push, delete worktrees, run tests, install dependencies, execute task-provided commands, or call AI models.
+
+## Supervised Merge Workflow
+
+This section defines the current dry-run behavior and the intended future merge execution behavior.
 
 ### Scope
 
@@ -97,7 +111,7 @@ The first merge workflow must be supervised only.
 
 ### Required Preconditions
 
-The future merge command must stop before any merge attempt unless all of these checks pass:
+The merge command stops before merge execution unless all of these checks pass:
 
 - The task id is valid and path-safe.
 - Task metadata exists under `.raptor/tasks/<task-id>.toml`.
@@ -121,9 +135,9 @@ The first merge version must not include:
 - AI agent execution.
 - Automatic dependency installation.
 
-### Proposed Command Behavior
+### Current Command Behavior
 
-`raptor merge <task-id>` should first behave like a dry run:
+`raptor merge <task-id>` currently performs dry-run preflight only:
 
 1. Validate the task id.
 2. Load task metadata from `.raptor/tasks/<task-id>.toml`.
@@ -135,14 +149,20 @@ The first merge version must not include:
    - task id
    - task status
    - task description
+   - target repository path
    - target branch detected from the main repository
-   - source worktree branch from task metadata
+   - worktree branch detected from the task worktree
    - worktree path
    - changed file list
-8. Require typed confirmation exactly matching `MERGE <task-id>`.
-9. Abort without changes if confirmation is missing or mismatched.
-10. Perform the merge only after successful confirmation.
-11. Print final status after success, abort, or conflict.
+8. Print that no merge was executed.
+9. Print the expected future behavior.
+
+Future merge execution must add:
+
+- typed confirmation exactly matching `MERGE <task-id>`
+- abort on missing or mismatched confirmation
+- merge execution only after successful confirmation
+- final status after success, abort, or conflict
 
 ### Operational Notes
 
@@ -166,12 +186,18 @@ The first merge version must not include:
 
 The implementation should keep CLI orchestration thin and put git-specific checks in `raptor-git`.
 
-- Extend the CLI parser from the current `raptor merge` stub to `raptor merge <task-id>`.
-- Reuse `raptor-store` to load the existing `.raptor/tasks/*.toml` metadata format.
-- Reuse and extend `raptor-git` worktree path validation used by `raptor review` and `raptor diff`.
-- Add read-only git preflight APIs for main repository cleanliness, task worktree status, changed files, and unresolved conflict detection.
-- Add a merge execution API only after dry-run output and typed confirmation are implemented.
-- Add tests for precondition failures, confirmation mismatch, clean merge behavior, conflict handling, and no worktree deletion.
+Implemented preflight pieces:
+
+- CLI parser accepts `raptor merge <task-id>`.
+- `raptor-store` loads the existing `.raptor/tasks/*.toml` metadata format.
+- `raptor-git` validates stored worktree paths using the same safety boundary as `raptor review` and `raptor diff`.
+- Read-only git preflight checks cover main repository cleanliness, task worktree status, changed files, and unresolved conflict detection.
+
+Future merge execution pieces:
+
+- Add typed confirmation before mutation.
+- Add merge execution only after dry-run output and confirmation are stable.
+- Add tests for confirmation mismatch, clean merge behavior, conflict handling during merge execution, and no worktree deletion.
 
 ### Future Phases
 
@@ -207,6 +233,7 @@ Current layout:
 - Git commands are invoked through structured process arguments.
 - Task inspection commands reject unsafe ids and avoid arbitrary file reads.
 - Review and diff commands verify stored worktree paths before invoking read-only git inspection.
+- Merge preflight verifies stored worktree paths before invoking read-only git status inspection.
 
 ## Current Limits
 
@@ -214,10 +241,10 @@ Current layout:
 - No commits are created.
 - No branches are merged.
 - No remote pushes are performed.
-- `raptor merge` is still a stub; this document defines intended behavior only.
+- `raptor merge <task-id>` is preflight dry-run only; merge execution is not implemented yet.
 - No task deletion, cleanup, or archival command exists yet.
 - Failed metadata persistence after worktree creation may require manual cleanup.
 
 ## Recommended Next Step
 
-Implement `raptor merge <task-id>` preflight checks and dry-run summary without merge execution first.
+Add typed confirmation and merge execution after dry-run output and safety checks are stable.

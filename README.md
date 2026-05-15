@@ -23,6 +23,7 @@ Implemented today:
 - `raptor task show <id>`.
 - `raptor review <task-id>`.
 - `raptor diff <task-id>`.
+- `raptor merge <task-id>` preflight dry run.
 - Local task metadata and worktree state under `.raptor/`.
 
 Stubbed commands:
@@ -30,7 +31,6 @@ Stubbed commands:
 - `raptor chat`
 - `raptor swarm`
 - `raptor test`
-- `raptor merge`
 
 ## Safety Model
 
@@ -49,6 +49,7 @@ Current controls:
 - No autonomous agents are launched by the current task workflow.
 - No commits, merges, or pushes are performed by `raptor task`.
 - `raptor review` and `raptor diff` are read-only inspection commands.
+- `raptor merge` runs preflight checks and prints a dry-run summary only; no merge is executed.
 
 Known early gap:
 
@@ -67,6 +68,7 @@ cargo run -p raptor-cli -- task list
 cargo run -p raptor-cli -- task show <id>
 cargo run -p raptor-cli -- review <task-id>
 cargo run -p raptor-cli -- diff <task-id>
+cargo run -p raptor-cli -- merge <task-id>
 ```
 
 Expected installed binary form:
@@ -80,6 +82,7 @@ raptor task list
 raptor task show <id>
 raptor review <task-id>
 raptor diff <task-id>
+raptor merge <task-id>
 ```
 
 ## Task Workflow
@@ -103,6 +106,7 @@ Task inspection commands are read-only:
 - `raptor task show <id>` validates the task id and prints details for one task.
 - `raptor review <task-id>` prints task metadata, git status, and changed files from the task worktree.
 - `raptor diff <task-id>` prints unstaged and staged git diffs from the task worktree.
+- `raptor merge <task-id>` validates merge preconditions and prints a dry-run summary without merging.
 
 ## Repository Layout
 

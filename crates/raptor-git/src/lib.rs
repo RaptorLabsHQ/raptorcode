@@ -43,6 +43,16 @@ pub struct WorktreeDiff {
     pub worktree_path: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergePreflight {
+    pub changed_files: Vec<String>,
+    pub status_lines: Vec<String>,
+    pub target_branch: Option<String>,
+    pub target_repository_path: PathBuf,
+    pub worktree_branch: Option<String>,
+    pub worktree_path: PathBuf,
+}
+
 #[derive(Debug)]
 pub enum GitError {
     BranchExists(String),
@@ -50,12 +60,18 @@ pub enum GitError {
         args: Vec<String>,
         stderr: String,
     },
+    DirtyRepository(PathBuf),
     Io {
         path: PathBuf,
         source: std::io::Error,
     },
     MissingWorktree(PathBuf),
     NotRepository(PathBuf),
+    NoTaskChanges(PathBuf),
+    UnresolvedConflicts {
+        path: PathBuf,
+        files: Vec<String>,
+    },
     UnsafeName(String),
     UnsafePath(PathBuf),
     WorktreeExists(PathBuf),
@@ -192,12 +208,7 @@ pub fn inspect_task_worktree(
 ) -> Result<WorktreeReview, GitError> {
     let worktree_path =
         validate_task_worktree_path(repository_root, task_id, stored_worktree_path)?;
-    let status = git_output_text(&worktree_path, &["status", "--short"])?;
-    let status_lines = status
-        .lines()
-        .map(|line| line.trim_end().to_owned())
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>();
+    let status_lines = status_lines(&worktree_path)?;
     let changed_files = status_lines
         .iter()
         .filter_map(|line| changed_file_from_status_line(line))
@@ -227,6 +238,58 @@ pub fn diff_task_worktree(
     })
 }
 
+pub fn preflight_task_merge(
+    repository_root: &RepositoryRoot,
+    task_id: &str,
+    stored_worktree_path: &Path,
+) -> Result<MergePreflight, GitError> {
+    let worktree_path =
+        validate_task_worktree_path(repository_root, task_id, stored_worktree_path)?;
+    let target_conflicts = unresolved_conflict_files(repository_root.path())?;
+
+    if !target_conflicts.is_empty() {
+        return Err(GitError::UnresolvedConflicts {
+            path: repository_root.path().to_path_buf(),
+            files: target_conflicts,
+        });
+    }
+
+    if !repository_clean_for_merge(repository_root.path())? {
+        return Err(GitError::DirtyRepository(
+            repository_root.path().to_path_buf(),
+        ));
+    }
+
+    let worktree_conflicts = unresolved_conflict_files(&worktree_path)?;
+
+    if !worktree_conflicts.is_empty() {
+        return Err(GitError::UnresolvedConflicts {
+            path: worktree_path,
+            files: worktree_conflicts,
+        });
+    }
+
+    let status_lines = status_lines(&worktree_path)?;
+
+    if status_lines.is_empty() {
+        return Err(GitError::NoTaskChanges(worktree_path));
+    }
+
+    let changed_files = status_lines
+        .iter()
+        .filter_map(|line| changed_file_from_status_line(line))
+        .collect::<Vec<_>>();
+
+    Ok(MergePreflight {
+        changed_files,
+        status_lines,
+        target_branch: git_output_line(repository_root.path(), &["branch", "--show-current"]),
+        target_repository_path: repository_root.path().to_path_buf(),
+        worktree_branch: git_output_line(&worktree_path, &["branch", "--show-current"]),
+        worktree_path,
+    })
+}
+
 impl RepositoryRoot {
     pub fn path(&self) -> &Path {
         &self.path
@@ -251,6 +314,11 @@ impl Display for GitError {
                     }
                 )
             }
+            Self::DirtyRepository(_) => {
+                formatter.write_str(
+                    "target repository has uncommitted changes; commit, stash, or discard changes before merge preflight",
+                )
+            }
             Self::Io { path, source } => {
                 write!(formatter, "{}: {source}", path.display())
             }
@@ -263,6 +331,16 @@ impl Display for GitError {
                     "{} is not inside a git repository",
                     path.display()
                 )
+            }
+            Self::NoTaskChanges(_) => {
+                formatter.write_str("task worktree has no changes to merge")
+            }
+            Self::UnresolvedConflicts { files, .. } => {
+                if files.is_empty() {
+                    formatter.write_str("unresolved conflicts detected")
+                } else {
+                    write!(formatter, "unresolved conflicts detected: {}", files.join(", "))
+                }
             }
             Self::UnsafeName(name) => {
                 write!(formatter, "{name} is not a safe git name")
@@ -291,8 +369,11 @@ impl Error for GitError {
             Self::Io { source, .. } => Some(source),
             Self::BranchExists(_)
             | Self::CommandFailed { .. }
+            | Self::DirtyRepository(_)
             | Self::MissingWorktree(_)
             | Self::NotRepository(_)
+            | Self::NoTaskChanges(_)
+            | Self::UnresolvedConflicts { .. }
             | Self::UnsafeName(_)
             | Self::UnsafePath(_)
             | Self::WorktreeExists(_) => None,
@@ -369,6 +450,37 @@ fn branch_exists(repository_root: &Path, branch_name: &str) -> Result<bool, GitE
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         }),
     }
+}
+
+fn status_lines(path: &Path) -> Result<Vec<String>, GitError> {
+    let status = git_output_text(path, &["status", "--short"])?;
+
+    Ok(status
+        .lines()
+        .map(|line| line.trim_end().to_owned())
+        .filter(|line| !line.is_empty())
+        .collect())
+}
+
+fn repository_clean_for_merge(repository_root: &Path) -> Result<bool, GitError> {
+    let dirty_lines = status_lines(repository_root)?
+        .into_iter()
+        .filter(|line| {
+            changed_file_from_status_line(line)
+                .map(|path| !path_is_raptor_state(&path))
+                .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+
+    Ok(dirty_lines.is_empty())
+}
+
+fn unresolved_conflict_files(path: &Path) -> Result<Vec<String>, GitError> {
+    Ok(status_lines(path)?
+        .into_iter()
+        .filter(|line| status_line_is_unresolved_conflict(line))
+        .filter_map(|line| changed_file_from_status_line(&line))
+        .collect())
 }
 
 fn validate_safe_existing_path(path: &Path) -> Result<(), GitError> {
@@ -465,6 +577,27 @@ fn changed_file_from_status_line(line: &str) -> Option<String> {
     }
 
     Some(line.chars().skip(3).collect())
+}
+
+fn status_line_is_unresolved_conflict(line: &str) -> bool {
+    let mut characters = line.chars();
+    let left = characters.next();
+    let right = characters.next();
+
+    matches!(
+        (left, right),
+        (Some('D'), Some('D'))
+            | (Some('A'), Some('U'))
+            | (Some('U'), Some('D'))
+            | (Some('U'), Some('A'))
+            | (Some('D'), Some('U'))
+            | (Some('A'), Some('A'))
+            | (Some('U'), Some('U'))
+    )
+}
+
+fn path_is_raptor_state(path: &str) -> bool {
+    path == RAPTOR_STATE_DIR || path.starts_with(".raptor/")
 }
 
 #[cfg(test)]
