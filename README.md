@@ -19,6 +19,8 @@ Implemented today:
 - `raptor init`.
 - `raptor doctor`.
 - `raptor task "description"` safe task workflow foundation.
+- `raptor task list`.
+- `raptor task show <id>`.
 - Local task metadata and worktree state under `.raptor/`.
 
 Stubbed commands:
@@ -60,6 +62,8 @@ cargo run -p raptor-cli -- --version
 cargo run -p raptor-cli -- doctor
 cargo run -p raptor-cli -- init
 cargo run -p raptor-cli -- task "describe the supervised task"
+cargo run -p raptor-cli -- task list
+cargo run -p raptor-cli -- task show <id>
 ```
 
 Expected installed binary form:
@@ -69,6 +73,8 @@ raptor --version
 raptor doctor
 raptor init
 raptor task "describe the supervised task"
+raptor task list
+raptor task show <id>
 ```
 
 ## Task Workflow
@@ -85,6 +91,11 @@ It currently:
 - Reports task id, status, branch, worktree path, and metadata path.
 
 It does not launch coding agents yet.
+
+Task inspection commands are read-only:
+
+- `raptor task list` prints persisted task metadata from `.raptor/tasks/`.
+- `raptor task show <id>` validates the task id and prints details for one task.
 
 ## Repository Layout
 

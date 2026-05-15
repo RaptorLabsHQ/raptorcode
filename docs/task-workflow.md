@@ -14,14 +14,25 @@ The first real workflow is `raptor task "description"`. It prepares safe local t
 
 ## Command
 
+Create task infrastructure:
+
 ```bash
 cargo run -p raptor-cli -- task "describe the supervised task"
 ```
 
-The installed binary form is:
+Inspect persisted task metadata:
+
+```bash
+cargo run -p raptor-cli -- task list
+cargo run -p raptor-cli -- task show <id>
+```
+
+Installed binary forms:
 
 ```bash
 raptor task "describe the supervised task"
+raptor task list
+raptor task show <id>
 ```
 
 ## Behavior
@@ -35,6 +46,21 @@ The command:
 - Creates an isolated git worktree under `.raptor/worktrees/<task-id>`.
 - Persists task metadata under `.raptor/tasks/<task-id>.toml`.
 - Reports task id, status, branch, worktree path, and metadata path.
+
+`raptor task list`:
+
+- Reads task metadata from `.raptor/tasks/`.
+- Prints task id, status, created timestamp when available, worktree path, and description.
+- Handles an empty task directory gracefully.
+- Does not modify files.
+
+`raptor task show <id>`:
+
+- Treats the task id as untrusted input.
+- Rejects unsafe ids and path traversal attempts.
+- Reads only `.raptor/tasks/<id>.toml`.
+- Prints full task details.
+- Does not modify files.
 
 ## Local State
 
@@ -59,6 +85,7 @@ Current layout:
 - Existing worktree paths are not overwritten.
 - Existing task metadata is not overwritten.
 - Git commands are invoked through structured process arguments.
+- Task inspection commands reject unsafe ids and avoid arbitrary file reads.
 
 ## Current Limits
 
@@ -66,9 +93,9 @@ Current layout:
 - No commits are created.
 - No branches are merged.
 - No remote pushes are performed.
-- No task list or task show command exists yet.
+- No task deletion, cleanup, or archival command exists yet.
 - Failed metadata persistence after worktree creation may require manual cleanup.
 
 ## Recommended Next Step
 
-Add `raptor task list` and `raptor task show <id>` so developers can inspect task metadata before review and merge workflows are implemented.
+Add review inspection so developers can inspect task worktree diffs before merge workflows are implemented.

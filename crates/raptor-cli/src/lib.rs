@@ -7,7 +7,8 @@ use raptor_git::{
     create_task_worktree, inspect_repository, inspect_repository_root, plan_task_worktree,
 };
 use raptor_store::{
-    init_project_config, persist_task_metadata, task_metadata_exists, InitConfigOutcome,
+    init_project_config, list_task_metadata, persist_task_metadata, read_task_metadata,
+    task_metadata_exists, InitConfigOutcome, StoredTaskMetadata,
 };
 use raptor_tools::command_version;
 
@@ -21,9 +22,16 @@ pub enum CliCommand {
     Merge,
     Review,
     Swarm,
-    Task { description: String },
+    Task(TaskCommand),
     Test,
     Version,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskCommand {
+    Create { description: String },
+    List,
+    Show { id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,10 +68,25 @@ where
         [arg] if arg == "--version" || arg == "-V" => Ok(CliCommand::Version),
         [arg] if arg == "init" => Ok(CliCommand::Init),
         [arg] if arg == "chat" => Ok(CliCommand::Chat),
-        [arg] if arg == "task" => Err(CliError::new("task description is required")),
-        [arg, description @ ..] if arg == "task" => Ok(CliCommand::Task {
+        [arg] if arg == "task" => Err(CliError::new("task command is required")),
+        [arg, subcommand] if arg == "task" && subcommand == "list" => {
+            Ok(CliCommand::Task(TaskCommand::List))
+        }
+        [arg, subcommand, ..] if arg == "task" && subcommand == "list" => {
+            Err(CliError::new("task list accepts no additional arguments"))
+        }
+        [arg, subcommand] if arg == "task" && subcommand == "show" => {
+            Err(CliError::new("task id is required"))
+        }
+        [arg, subcommand, id] if arg == "task" && subcommand == "show" => {
+            Ok(CliCommand::Task(TaskCommand::Show { id: id.to_owned() }))
+        }
+        [arg, subcommand, ..] if arg == "task" && subcommand == "show" => {
+            Err(CliError::new("task show accepts exactly one task id"))
+        }
+        [arg, description @ ..] if arg == "task" => Ok(CliCommand::Task(TaskCommand::Create {
             description: description.join(" "),
-        }),
+        })),
         [arg] if arg == "swarm" => Ok(CliCommand::Swarm),
         [arg] if arg == "review" => Ok(CliCommand::Review),
         [arg] if arg == "diff" => Ok(CliCommand::Diff),
@@ -90,7 +113,11 @@ where
         CliCommand::Merge => Ok(render_stub("merge")),
         CliCommand::Review => Ok(render_stub("review")),
         CliCommand::Swarm => Ok(render_stub("swarm")),
-        CliCommand::Task { description } => create_task(current_dir, &description),
+        CliCommand::Task(TaskCommand::Create { description }) => {
+            create_task(current_dir, &description)
+        }
+        CliCommand::Task(TaskCommand::List) => list_tasks(current_dir),
+        CliCommand::Task(TaskCommand::Show { id }) => show_task(current_dir, &id),
         CliCommand::Test => Ok(render_stub("test")),
         CliCommand::Version => Ok(render_version()),
     }
@@ -102,7 +129,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor chat\n  raptor task \"task description\"\n  raptor swarm\n  raptor review\n  raptor diff\n  raptor test\n  raptor merge\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor swarm\n  raptor review\n  raptor diff\n  raptor test\n  raptor merge\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -159,6 +186,42 @@ pub fn create_task(current_dir: &Path, description: &str) -> Result<String, CliE
     ))
 }
 
+pub fn list_tasks(current_dir: &Path) -> Result<String, CliError> {
+    let repository_root =
+        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let tasks = list_task_metadata(repository_root.path())
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    if tasks.is_empty() {
+        return Ok("No RaptorCode tasks found.\n".to_owned());
+    }
+
+    let mut output = String::from("ID | Status | Created | Worktree | Description\n");
+    output.push_str("--- | --- | --- | --- | ---\n");
+
+    for task in tasks {
+        output.push_str(&format!(
+            "{} | {} | {} | {} | {}\n",
+            task.id,
+            display_optional(task.status.as_deref()),
+            display_optional(task.created_at.as_deref()),
+            display_path_optional(task.worktree_path.as_ref()),
+            display_optional(task.description.as_deref())
+        ));
+    }
+
+    Ok(output)
+}
+
+pub fn show_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> {
+    let repository_root =
+        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let task = read_task_metadata(repository_root.path(), task_id)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(render_task_details(&task))
+}
+
 pub fn render_doctor(current_dir: &Path) -> String {
     let repository = inspect_repository(current_dir);
     let tools = [
@@ -207,6 +270,31 @@ pub fn render_doctor(current_dir: &Path) -> String {
 
 fn render_stub(command: &str) -> String {
     format!("raptor {command}: not implemented yet\n")
+}
+
+fn render_task_details(task: &StoredTaskMetadata) -> String {
+    format!(
+        "Task: {}\nStatus: {}\nDescription: {}\nCreated: {}\nBranch: {}\nRepository root: {}\nWorktree: {}\nMetadata: {}\n",
+        task.id,
+        display_optional(task.status.as_deref()),
+        display_optional(task.description.as_deref()),
+        display_optional(task.created_at.as_deref()),
+        display_optional(task.branch.as_deref()),
+        display_path_optional(task.repository_root.as_ref()),
+        display_path_optional(task.worktree_path.as_ref()),
+        task.metadata_path.display()
+    )
+}
+
+fn display_optional(value: Option<&str>) -> &str {
+    value.filter(|value| !value.is_empty()).unwrap_or("-")
+}
+
+fn display_path_optional(value: Option<&std::path::PathBuf>) -> String {
+    value
+        .map(|path| path.display().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "-".to_owned())
 }
 
 #[cfg(test)]
@@ -303,17 +391,45 @@ mod tests {
     fn parses_task_description() {
         assert_eq!(
             parse_args(["task", "add", "router", "tests"]).unwrap(),
-            CliCommand::Task {
+            CliCommand::Task(TaskCommand::Create {
                 description: "add router tests".to_owned()
-            }
+            })
         );
     }
 
     #[test]
-    fn rejects_missing_task_description() {
+    fn parses_task_list_and_show() {
+        assert_eq!(
+            parse_args(["task", "list"]).unwrap(),
+            CliCommand::Task(TaskCommand::List)
+        );
+        assert_eq!(
+            parse_args(["task", "show", "task-123"]).unwrap(),
+            CliCommand::Task(TaskCommand::Show {
+                id: "task-123".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_missing_task_command() {
         let error = parse_args(["task"]).unwrap_err();
 
-        assert!(error.to_string().contains("description"));
+        assert!(error.to_string().contains("task command"));
+    }
+
+    #[test]
+    fn rejects_missing_task_show_id() {
+        let error = parse_args(["task", "show"]).unwrap_err();
+
+        assert!(error.to_string().contains("task id"));
+    }
+
+    #[test]
+    fn rejects_extra_task_list_arguments() {
+        let error = parse_args(["task", "list", "extra"]).unwrap_err();
+
+        assert!(error.to_string().contains("no additional arguments"));
     }
 
     #[test]
@@ -395,6 +511,99 @@ mod tests {
         let error = run(["task", description], &test_dir.path).unwrap_err();
 
         assert!(error.to_string().contains("refusing to overwrite"));
+    }
+
+    #[test]
+    fn task_list_handles_no_tasks() {
+        let test_dir = TestDir::create("task-list-empty");
+        initialize_git_repo(&test_dir.path);
+
+        let output = run(["task", "list"], &test_dir.path).unwrap();
+
+        assert_eq!(output, "No RaptorCode tasks found.\n");
+    }
+
+    #[test]
+    fn task_list_shows_one_task() {
+        let test_dir = TestDir::create("task-list-one");
+        initialize_git_repo(&test_dir.path);
+        let description = "List task metadata";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let output = run(["task", "list"], &test_dir.path).unwrap();
+
+        assert!(output.contains("ID | Status | Created | Worktree | Description"));
+        assert!(output.contains(task_id.as_str()));
+        assert!(output.contains("planned"));
+        assert!(output.contains(description));
+    }
+
+    #[test]
+    fn task_show_existing_task() {
+        let test_dir = TestDir::create("task-show");
+        initialize_git_repo(&test_dir.path);
+        let description = "Show task metadata";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let output = run(["task", "show", task_id.as_str()], &test_dir.path).unwrap();
+
+        assert!(output.contains(&format!("Task: {}", task_id.as_str())));
+        assert!(output.contains("Status: planned"));
+        assert!(output.contains(&format!("Description: {description}")));
+        assert!(output.contains("Worktree:"));
+        assert!(output.contains("Metadata:"));
+    }
+
+    #[test]
+    fn task_show_missing_task_is_clear() {
+        let test_dir = TestDir::create("task-show-missing");
+        initialize_git_repo(&test_dir.path);
+
+        let error = run(["task", "show", "missing-task"], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn task_show_rejects_unsafe_task_id() {
+        let test_dir = TestDir::create("task-show-unsafe");
+        initialize_git_repo(&test_dir.path);
+
+        let error = run(["task", "show", "Unsafe"], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("not safe"));
+    }
+
+    #[test]
+    fn task_show_rejects_path_traversal_task_id() {
+        let test_dir = TestDir::create("task-show-traversal");
+        initialize_git_repo(&test_dir.path);
+
+        let error = run(["task", "show", "../secret"], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("not safe"));
+    }
+
+    #[test]
+    fn task_list_and_show_preserve_read_only_behavior() {
+        let test_dir = TestDir::create("task-readonly");
+        initialize_git_repo(&test_dir.path);
+        let description = "Preserve task metadata";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let tasks_dir = test_dir.path.join(".raptor").join("tasks");
+        let metadata_path = tasks_dir.join(format!("{}.toml", task_id.as_str()));
+        let before_content = fs::read_to_string(&metadata_path).unwrap();
+        let before_entries = fs::read_dir(&tasks_dir).unwrap().count();
+
+        run(["task", "list"], &test_dir.path).unwrap();
+        run(["task", "show", task_id.as_str()], &test_dir.path).unwrap();
+
+        assert_eq!(fs::read_to_string(metadata_path).unwrap(), before_content);
+        assert_eq!(fs::read_dir(tasks_dir).unwrap().count(), before_entries);
     }
 
     #[test]

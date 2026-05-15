@@ -54,10 +54,12 @@ Security-relevant actions should be logged or surfaced clearly to the developer:
 - Refuses to overwrite existing worktree paths.
 - Refuses to overwrite existing task metadata.
 - Persists task metadata under `.raptor/tasks/`.
+- Reads task metadata only from validated `.raptor/tasks/<id>.toml` paths.
+- Rejects unsafe task ids and path traversal attempts in task inspection commands.
 - Does not launch autonomous agents, merge changes, commit changes, or push remotes.
 
 Known gap: if metadata persistence fails after git worktree creation, manual cleanup may be required until an explicit cleanup workflow is implemented.
 
 ## Current Status
 
-The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, and the first safe `raptor task "description"` workflow. Security controls described here are partly implemented for task setup and remain design requirements for future agent, review, merge, and TUI workflows.
+The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor task "description"`, `raptor task list`, and `raptor task show <id>`. Security controls described here are partly implemented for task setup and inspection, and remain design requirements for future agent, review, merge, and TUI workflows.

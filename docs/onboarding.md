@@ -32,12 +32,16 @@ Use the stable Rust toolchain.
 - Version command: `cargo run -p raptor-cli -- --version`
 - Init command: `cargo run -p raptor-cli -- init`
 - Task command: `cargo run -p raptor-cli -- task "describe the supervised task"`
+- Task list command: `cargo run -p raptor-cli -- task list`
+- Task show command: `cargo run -p raptor-cli -- task show <id>`
 - Doctor command: `cargo run -p raptor-cli -- doctor`
 
 ## Task Workflow Notes
 
 `raptor task "description"` must be run inside a git repository. It creates an isolated git worktree under `.raptor/worktrees/` and writes metadata under `.raptor/tasks/`. It does not start autonomous agents or modify the main worktree.
 
+`raptor task list` and `raptor task show <id>` are read-only inspection commands for persisted task metadata.
+
 ## Current Contributor Task
 
-The `task` workflow now creates isolated worktree infrastructure and local task metadata without launching autonomous agents. The next implementation step is to add task listing and review inspection so developers can supervise task outputs before merge.
+The `task` workflow now creates isolated worktree infrastructure and local task metadata without launching autonomous agents. Task metadata can be inspected with `raptor task list` and `raptor task show <id>`. The next implementation step is to add review inspection so developers can supervise task outputs before merge.
