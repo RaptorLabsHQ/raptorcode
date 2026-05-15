@@ -42,3 +42,14 @@ The repository contains a minimal Cargo workspace with crate boundaries for core
 - `raptor-store`: persists local RaptorCode config and reads or writes task metadata using the existing `.raptor/tasks/*.toml` format.
 
 The current task workflow is intentionally local and supervised. It prepares isolated work but does not call model providers, start background agents, merge branches, commit changes, or push to remotes.
+
+## Planned Merge Boundary
+
+`raptor merge <task-id>` is still a stub. The first implementation should be split into preflight, confirmation, and merge execution boundaries.
+
+- `raptor-cli`: parse `raptor merge <task-id>`, coordinate preflight output, require typed confirmation, and report final status.
+- `raptor-store`: load existing task metadata from `.raptor/tasks/<task-id>.toml`; no new metadata format is required for the first merge version.
+- `raptor-git`: validate the stored worktree path, inspect main repository cleanliness, inspect task worktree changes, detect unresolved conflicts, and perform the final merge only after confirmation.
+- `raptor-core`: continue owning task ids and task status concepts; merge-specific state should not be added until there is a concrete status transition to persist.
+
+The first merge version must remain local and supervised. It must not auto-merge, force merge, auto-resolve conflicts, delete worktrees, push remotes, run AI agents, or install dependencies.
