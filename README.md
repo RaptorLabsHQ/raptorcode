@@ -21,14 +21,14 @@ Implemented today:
 - `raptor task "description"` safe task workflow foundation.
 - `raptor task list`.
 - `raptor task show <id>`.
+- `raptor review <task-id>`.
+- `raptor diff <task-id>`.
 - Local task metadata and worktree state under `.raptor/`.
 
 Stubbed commands:
 
 - `raptor chat`
 - `raptor swarm`
-- `raptor review`
-- `raptor diff`
 - `raptor test`
 - `raptor merge`
 
@@ -48,6 +48,7 @@ Current controls:
 - Git commands are executed through structured process arguments.
 - No autonomous agents are launched by the current task workflow.
 - No commits, merges, or pushes are performed by `raptor task`.
+- `raptor review` and `raptor diff` are read-only inspection commands.
 
 Known early gap:
 
@@ -64,6 +65,8 @@ cargo run -p raptor-cli -- init
 cargo run -p raptor-cli -- task "describe the supervised task"
 cargo run -p raptor-cli -- task list
 cargo run -p raptor-cli -- task show <id>
+cargo run -p raptor-cli -- review <task-id>
+cargo run -p raptor-cli -- diff <task-id>
 ```
 
 Expected installed binary form:
@@ -75,6 +78,8 @@ raptor init
 raptor task "describe the supervised task"
 raptor task list
 raptor task show <id>
+raptor review <task-id>
+raptor diff <task-id>
 ```
 
 ## Task Workflow
@@ -96,6 +101,8 @@ Task inspection commands are read-only:
 
 - `raptor task list` prints persisted task metadata from `.raptor/tasks/`.
 - `raptor task show <id>` validates the task id and prints details for one task.
+- `raptor review <task-id>` prints task metadata, git status, and changed files from the task worktree.
+- `raptor diff <task-id>` prints unstaged and staged git diffs from the task worktree.
 
 ## Repository Layout
 

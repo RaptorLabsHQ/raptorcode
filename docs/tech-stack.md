@@ -18,7 +18,7 @@ Rust is the default implementation language for RaptorCode because the project n
 - Core domain: task ids, task status, task metadata, and worktree information in `raptor-core`.
 - TUI: Rust terminal user interface boundary in `raptor-tui`.
 - Orchestrator: Rust application layer boundary for multi-agent workflow control in `raptor-agent`.
-- Git integration: local git repository inspection and worktree operations in `raptor-git`.
+- Git integration: local git repository inspection, worktree operations, and read-only worktree status/diff inspection in `raptor-git`.
 - Store: local configuration, task metadata persistence, and task metadata inspection in `raptor-store`.
 - Tool diagnostics: local tooling checks in `raptor-tools`.
 - Documentation: Markdown files in the repository root and `docs/`.
@@ -32,6 +32,6 @@ Rust is the default implementation language for RaptorCode because the project n
 
 ## Current Status
 
-The repository contains a Cargo workspace with internal crate dependencies only. The implemented CLI surface includes `raptor --version`, `raptor init`, `raptor doctor`, `raptor task "description"`, `raptor task list`, and `raptor task show <id>`.
+The repository contains a Cargo workspace with internal crate dependencies only. The implemented CLI surface includes `raptor --version`, `raptor init`, `raptor doctor`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`.
 
-The `chat`, `swarm`, `review`, `diff`, `test`, and `merge` commands are routed but intentionally stubbed until their supervised workflows are implemented.
+The `chat`, `swarm`, `test`, and `merge` commands are routed but intentionally stubbed until their supervised workflows are implemented.

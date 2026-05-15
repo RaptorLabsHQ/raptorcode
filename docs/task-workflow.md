@@ -25,6 +25,8 @@ Inspect persisted task metadata:
 ```bash
 cargo run -p raptor-cli -- task list
 cargo run -p raptor-cli -- task show <id>
+cargo run -p raptor-cli -- review <task-id>
+cargo run -p raptor-cli -- diff <task-id>
 ```
 
 Installed binary forms:
@@ -33,6 +35,8 @@ Installed binary forms:
 raptor task "describe the supervised task"
 raptor task list
 raptor task show <id>
+raptor review <task-id>
+raptor diff <task-id>
 ```
 
 ## Behavior
@@ -62,6 +66,21 @@ The command:
 - Prints full task details.
 - Does not modify files.
 
+`raptor review <task-id>`:
+
+- Loads existing task metadata from `.raptor/tasks/<task-id>.toml`.
+- Validates the stored worktree path against `.raptor/worktrees/<task-id>`.
+- Verifies the task worktree exists.
+- Prints task id, status, description, worktree path, git status summary, and changed files.
+- Does not stage, commit, merge, delete, or modify files.
+
+`raptor diff <task-id>`:
+
+- Loads existing task metadata from `.raptor/tasks/<task-id>.toml`.
+- Validates the stored worktree path against `.raptor/worktrees/<task-id>`.
+- Prints unstaged and staged git diffs for the task worktree.
+- Does not stage, commit, merge, delete, or modify files.
+
 ## Local State
 
 `.raptor/` is ignored by git and is reserved for local runtime state.
@@ -86,6 +105,7 @@ Current layout:
 - Existing task metadata is not overwritten.
 - Git commands are invoked through structured process arguments.
 - Task inspection commands reject unsafe ids and avoid arbitrary file reads.
+- Review and diff commands verify stored worktree paths before invoking read-only git inspection.
 
 ## Current Limits
 
@@ -98,4 +118,4 @@ Current layout:
 
 ## Recommended Next Step
 
-Add review inspection so developers can inspect task worktree diffs before merge workflows are implemented.
+Add supervised merge precondition checks after review and diff inspection output is stable.

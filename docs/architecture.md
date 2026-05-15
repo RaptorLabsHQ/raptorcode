@@ -32,13 +32,13 @@ RaptorCode V1 should coordinate coding-agent workflows inside existing developer
 
 The repository contains a minimal Cargo workspace with crate boundaries for core metadata, task metadata, CLI, git diagnostics, tooling diagnostics, agent orchestration, providers, TUI, sandboxing, and local storage. The implemented CLI router supports `raptor init`, `raptor chat`, `raptor task`, `raptor swarm`, `raptor review`, `raptor diff`, `raptor test`, `raptor merge`, and `raptor doctor`.
 
-`raptor task "description"` validates task input, creates a deterministic isolated git worktree under `.raptor/worktrees/`, and persists task metadata under `.raptor/tasks/`. `raptor task list` and `raptor task show <id>` read that persisted metadata without modifying files. The task workflow does not launch autonomous coding agents. `raptor init` and `raptor doctor` also perform meaningful work today. Other routed commands are explicit stubs until the corresponding V1 workflows are implemented.
+`raptor task "description"` validates task input, creates a deterministic isolated git worktree under `.raptor/worktrees/`, and persists task metadata under `.raptor/tasks/`. `raptor task list` and `raptor task show <id>` read that persisted metadata without modifying files. `raptor review <task-id>` and `raptor diff <task-id>` validate stored worktree paths and inspect task worktree status or diffs without modifying files. The task workflow does not launch autonomous coding agents. `raptor init` and `raptor doctor` also perform meaningful work today. Other routed commands are explicit stubs until the corresponding V1 workflows are implemented.
 
 ## Task Workflow Boundaries
 
 - `raptor-core`: owns task identifiers, task status, task metadata, and worktree information models.
-- `raptor-cli`: routes CLI commands and coordinates the task workflow.
-- `raptor-git`: inspects repository roots, validates worktree and branch names, and creates git worktrees.
+- `raptor-cli`: routes CLI commands and coordinates task setup and inspection workflows.
+- `raptor-git`: inspects repository roots, validates worktree and branch names, creates git worktrees, and performs read-only worktree review and diff inspection.
 - `raptor-store`: persists local RaptorCode config and reads or writes task metadata using the existing `.raptor/tasks/*.toml` format.
 
 The current task workflow is intentionally local and supervised. It prepares isolated work but does not call model providers, start background agents, merge branches, commit changes, or push to remotes.

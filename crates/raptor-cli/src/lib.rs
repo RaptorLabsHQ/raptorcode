@@ -4,7 +4,8 @@ use std::path::Path;
 
 use raptor_core::{project_description, project_name, version, TaskId, TaskMetadata, TaskStatus};
 use raptor_git::{
-    create_task_worktree, inspect_repository, inspect_repository_root, plan_task_worktree,
+    create_task_worktree, diff_task_worktree, inspect_repository, inspect_repository_root,
+    inspect_task_worktree, plan_task_worktree, WorktreeDiff, WorktreeReview,
 };
 use raptor_store::{
     init_project_config, list_task_metadata, persist_task_metadata, read_task_metadata,
@@ -15,12 +16,12 @@ use raptor_tools::command_version;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
     Chat,
-    Diff,
+    Diff { task_id: String },
     Doctor,
     Help,
     Init,
     Merge,
-    Review,
+    Review { task_id: String },
     Swarm,
     Task(TaskCommand),
     Test,
@@ -88,8 +89,16 @@ where
             description: description.join(" "),
         })),
         [arg] if arg == "swarm" => Ok(CliCommand::Swarm),
-        [arg] if arg == "review" => Ok(CliCommand::Review),
-        [arg] if arg == "diff" => Ok(CliCommand::Diff),
+        [arg] if arg == "review" => Err(CliError::new("review task id is required")),
+        [arg, task_id] if arg == "review" => Ok(CliCommand::Review {
+            task_id: task_id.to_owned(),
+        }),
+        [arg, ..] if arg == "review" => Err(CliError::new("review accepts exactly one task id")),
+        [arg] if arg == "diff" => Err(CliError::new("diff task id is required")),
+        [arg, task_id] if arg == "diff" => Ok(CliCommand::Diff {
+            task_id: task_id.to_owned(),
+        }),
+        [arg, ..] if arg == "diff" => Err(CliError::new("diff accepts exactly one task id")),
         [arg] if arg == "test" => Ok(CliCommand::Test),
         [arg] if arg == "merge" => Ok(CliCommand::Merge),
         [arg] if arg == "doctor" => Ok(CliCommand::Doctor),
@@ -106,12 +115,12 @@ where
 {
     match parse_args(args)? {
         CliCommand::Chat => Ok(render_stub("chat")),
-        CliCommand::Diff => Ok(render_stub("diff")),
+        CliCommand::Diff { task_id } => diff_task(current_dir, &task_id),
         CliCommand::Doctor => Ok(render_doctor(current_dir)),
         CliCommand::Help => Ok(render_help()),
         CliCommand::Init => init_project(current_dir),
         CliCommand::Merge => Ok(render_stub("merge")),
-        CliCommand::Review => Ok(render_stub("review")),
+        CliCommand::Review { task_id } => review_task(current_dir, &task_id),
         CliCommand::Swarm => Ok(render_stub("swarm")),
         CliCommand::Task(TaskCommand::Create { description }) => {
             create_task(current_dir, &description)
@@ -129,7 +138,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor swarm\n  raptor review\n  raptor diff\n  raptor test\n  raptor merge\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor swarm\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -222,6 +231,36 @@ pub fn show_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> 
     Ok(render_task_details(&task))
 }
 
+pub fn review_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> {
+    let repository_root =
+        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let task = read_task_metadata(repository_root.path(), task_id)
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let worktree_path = task
+        .worktree_path
+        .as_ref()
+        .ok_or_else(|| CliError::new("task metadata is missing worktree_path"))?;
+    let review = inspect_task_worktree(&repository_root, &task.id, worktree_path)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(render_task_review(&task, &review))
+}
+
+pub fn diff_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> {
+    let repository_root =
+        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let task = read_task_metadata(repository_root.path(), task_id)
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let worktree_path = task
+        .worktree_path
+        .as_ref()
+        .ok_or_else(|| CliError::new("task metadata is missing worktree_path"))?;
+    let diff = diff_task_worktree(&repository_root, &task.id, worktree_path)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(render_task_diff(&task, &diff))
+}
+
 pub fn render_doctor(current_dir: &Path) -> String {
     let repository = inspect_repository(current_dir);
     let tools = [
@@ -284,6 +323,67 @@ fn render_task_details(task: &StoredTaskMetadata) -> String {
         display_path_optional(task.worktree_path.as_ref()),
         task.metadata_path.display()
     )
+}
+
+fn render_task_review(task: &StoredTaskMetadata, review: &WorktreeReview) -> String {
+    let mut output = format!(
+        "Task: {}\nStatus: {}\nDescription: {}\nWorktree: {}\n",
+        task.id,
+        display_optional(task.status.as_deref()),
+        display_optional(task.description.as_deref()),
+        review.worktree_path.display()
+    );
+
+    output.push_str("Git status:\n");
+    if review.status_lines.is_empty() {
+        output.push_str("  clean\n");
+    } else {
+        for line in &review.status_lines {
+            output.push_str("  ");
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+
+    output.push_str("Changed files:\n");
+    if review.changed_files.is_empty() {
+        output.push_str("  (none)\n");
+    } else {
+        for file in &review.changed_files {
+            output.push_str("  ");
+            output.push_str(file);
+            output.push('\n');
+        }
+    }
+
+    output
+}
+
+fn render_task_diff(task: &StoredTaskMetadata, diff: &WorktreeDiff) -> String {
+    let mut output = format!(
+        "Task: {}\nWorktree: {}\n",
+        task.id,
+        diff.worktree_path.display()
+    );
+
+    output.push_str("Unstaged diff:\n");
+    push_diff_section(&mut output, &diff.unstaged);
+    output.push_str("Staged diff:\n");
+    push_diff_section(&mut output, &diff.staged);
+
+    output
+}
+
+fn push_diff_section(output: &mut String, diff: &str) {
+    if diff.trim().is_empty() {
+        output.push_str("  (none)\n");
+        return;
+    }
+
+    output.push_str(diff);
+    if !diff.ends_with('\n') {
+        output.push('\n');
+    }
 }
 
 fn display_optional(value: Option<&str>) -> &str {
@@ -364,6 +464,54 @@ mod tests {
         );
     }
 
+    fn git_text(path: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    fn commit_file(path: &Path, relative_path: &str, content: &str) {
+        fs::write(path.join(relative_path), content).unwrap();
+        run_git(path, &["add", relative_path]);
+        run_git(
+            path,
+            &[
+                "-c",
+                "user.name=Raptor Test",
+                "-c",
+                "user.email=raptor@example.invalid",
+                "commit",
+                "-m",
+                "add fixture",
+            ],
+        );
+    }
+
+    fn task_worktree_path(repository_root: &Path, task_id: &TaskId) -> PathBuf {
+        repository_root
+            .join(".raptor")
+            .join("worktrees")
+            .join(task_id.as_str())
+    }
+
+    fn task_metadata_path(repository_root: &Path, task_id: &TaskId) -> PathBuf {
+        repository_root
+            .join(".raptor")
+            .join("tasks")
+            .join(format!("{}.toml", task_id.as_str()))
+    }
+
     #[test]
     fn parses_version_flag() {
         assert_eq!(parse_args(["--version"]).unwrap(), CliCommand::Version);
@@ -375,8 +523,6 @@ mod tests {
             ("init", CliCommand::Init),
             ("chat", CliCommand::Chat),
             ("swarm", CliCommand::Swarm),
-            ("review", CliCommand::Review),
-            ("diff", CliCommand::Diff),
             ("test", CliCommand::Test),
             ("merge", CliCommand::Merge),
             ("doctor", CliCommand::Doctor),
@@ -385,6 +531,22 @@ mod tests {
         for (arg, expected) in commands {
             assert_eq!(parse_args([arg]).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn parses_review_and_diff_task_ids() {
+        assert_eq!(
+            parse_args(["review", "task-123"]).unwrap(),
+            CliCommand::Review {
+                task_id: "task-123".to_owned()
+            }
+        );
+        assert_eq!(
+            parse_args(["diff", "task-123"]).unwrap(),
+            CliCommand::Diff {
+                task_id: "task-123".to_owned()
+            }
+        );
     }
 
     #[test]
@@ -430,6 +592,24 @@ mod tests {
         let error = parse_args(["task", "list", "extra"]).unwrap_err();
 
         assert!(error.to_string().contains("no additional arguments"));
+    }
+
+    #[test]
+    fn rejects_missing_review_and_diff_task_ids() {
+        let review_error = parse_args(["review"]).unwrap_err();
+        let diff_error = parse_args(["diff"]).unwrap_err();
+
+        assert!(review_error.to_string().contains("task id"));
+        assert!(diff_error.to_string().contains("task id"));
+    }
+
+    #[test]
+    fn rejects_extra_review_and_diff_arguments() {
+        let review_error = parse_args(["review", "task-123", "extra"]).unwrap_err();
+        let diff_error = parse_args(["diff", "task-123", "extra"]).unwrap_err();
+
+        assert!(review_error.to_string().contains("exactly one"));
+        assert!(diff_error.to_string().contains("exactly one"));
     }
 
     #[test]
@@ -604,6 +784,163 @@ mod tests {
 
         assert_eq!(fs::read_to_string(metadata_path).unwrap(), before_content);
         assert_eq!(fs::read_dir(tasks_dir).unwrap().count(), before_entries);
+    }
+
+    #[test]
+    fn review_existing_task_with_clean_worktree() {
+        let test_dir = TestDir::create("review-clean");
+        initialize_git_repo(&test_dir.path);
+        let description = "Review clean worktree";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let output = run(["review", task_id.as_str()], &test_dir.path).unwrap();
+
+        assert!(output.contains(&format!("Task: {}", task_id.as_str())));
+        assert!(output.contains("Status: planned"));
+        assert!(output.contains(&format!("Description: {description}")));
+        assert!(output.contains("Git status:"));
+        assert!(output.contains("  clean"));
+        assert!(output.contains("Changed files:"));
+        assert!(output.contains("  (none)"));
+    }
+
+    #[test]
+    fn review_existing_task_with_changed_file() {
+        let test_dir = TestDir::create("review-changed");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "before\n");
+        let description = "Review changed worktree";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        fs::write(
+            task_worktree_path(&test_dir.path, &task_id).join("tracked.txt"),
+            "after\n",
+        )
+        .unwrap();
+        let output = run(["review", task_id.as_str()], &test_dir.path).unwrap();
+
+        assert!(output.contains(" M tracked.txt"));
+        assert!(output.contains("Changed files:"));
+        assert!(output.contains("tracked.txt"));
+    }
+
+    #[test]
+    fn diff_existing_task_with_unstaged_changed_file() {
+        let test_dir = TestDir::create("diff-unstaged");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "before\n");
+        let description = "Diff changed worktree";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        fs::write(
+            task_worktree_path(&test_dir.path, &task_id).join("tracked.txt"),
+            "after\n",
+        )
+        .unwrap();
+        let output = run(["diff", task_id.as_str()], &test_dir.path).unwrap();
+
+        assert!(output.contains("Unstaged diff:"));
+        assert!(output.contains("diff --git"));
+        assert!(output.contains("-before"));
+        assert!(output.contains("+after"));
+        assert!(output.contains("Staged diff:"));
+        assert!(output.contains("  (none)"));
+    }
+
+    #[test]
+    fn diff_existing_task_with_staged_changed_file() {
+        let test_dir = TestDir::create("diff-staged");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "before\n");
+        let description = "Diff staged worktree";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let worktree_path = task_worktree_path(&test_dir.path, &task_id);
+        fs::write(worktree_path.join("tracked.txt"), "after\n").unwrap();
+        run_git(&worktree_path, &["add", "tracked.txt"]);
+        let output = run(["diff", task_id.as_str()], &test_dir.path).unwrap();
+
+        assert!(output.contains("Unstaged diff:"));
+        assert!(output.contains("  (none)"));
+        assert!(output.contains("Staged diff:"));
+        assert!(output.contains("diff --git"));
+        assert!(output.contains("-before"));
+        assert!(output.contains("+after"));
+    }
+
+    #[test]
+    fn review_and_diff_reject_unsafe_task_ids() {
+        let test_dir = TestDir::create("review-unsafe");
+        initialize_git_repo(&test_dir.path);
+
+        let review_error = run(["review", "Unsafe"], &test_dir.path).unwrap_err();
+        let diff_error = run(["diff", "Unsafe"], &test_dir.path).unwrap_err();
+
+        assert!(review_error.to_string().contains("not safe"));
+        assert!(diff_error.to_string().contains("not safe"));
+    }
+
+    #[test]
+    fn review_and_diff_reject_path_traversal_task_ids() {
+        let test_dir = TestDir::create("review-traversal");
+        initialize_git_repo(&test_dir.path);
+
+        let review_error = run(["review", "../secret"], &test_dir.path).unwrap_err();
+        let diff_error = run(["diff", "../secret"], &test_dir.path).unwrap_err();
+
+        assert!(review_error.to_string().contains("not safe"));
+        assert!(diff_error.to_string().contains("not safe"));
+    }
+
+    #[test]
+    fn review_rejects_missing_worktree() {
+        let test_dir = TestDir::create("review-missing-worktree");
+        initialize_git_repo(&test_dir.path);
+        let description = "Review missing worktree";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        fs::remove_dir_all(task_worktree_path(&test_dir.path, &task_id)).unwrap();
+        let error = run(["review", task_id.as_str()], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("worktree not found"));
+    }
+
+    #[test]
+    fn review_and_diff_preserve_read_only_behavior() {
+        let test_dir = TestDir::create("review-readonly");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "before\n");
+        let description = "Read only review";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let worktree_path = task_worktree_path(&test_dir.path, &task_id);
+        fs::write(worktree_path.join("tracked.txt"), "after\n").unwrap();
+        run_git(&worktree_path, &["add", "tracked.txt"]);
+        let metadata_path = task_metadata_path(&test_dir.path, &task_id);
+        let before_metadata = fs::read_to_string(&metadata_path).unwrap();
+        let before_status = git_text(&worktree_path, &["status", "--short"]);
+        let before_unstaged_diff = git_text(&worktree_path, &["diff"]);
+        let before_staged_diff = git_text(&worktree_path, &["diff", "--cached"]);
+
+        run(["review", task_id.as_str()], &test_dir.path).unwrap();
+        run(["diff", task_id.as_str()], &test_dir.path).unwrap();
+
+        assert_eq!(fs::read_to_string(metadata_path).unwrap(), before_metadata);
+        assert_eq!(
+            git_text(&worktree_path, &["status", "--short"]),
+            before_status
+        );
+        assert_eq!(git_text(&worktree_path, &["diff"]), before_unstaged_diff);
+        assert_eq!(
+            git_text(&worktree_path, &["diff", "--cached"]),
+            before_staged_diff
+        );
     }
 
     #[test]
