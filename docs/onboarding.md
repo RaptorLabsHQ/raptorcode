@@ -30,8 +30,9 @@ Use the stable Rust toolchain.
 - Lint: `cargo clippy --all-targets --all-features`
 - Version command: `cargo run -p raptor-cli -- --version`
 - Init command: `cargo run -p raptor-cli -- init`
+- Task command: `cargo run -p raptor-cli -- task "describe the supervised task"`
 - Doctor command: `cargo run -p raptor-cli -- doctor`
 
 ## Current Contributor Task
 
-The CLI router now recognizes the V1 command surface. The next implementation step is to define safe worktree-management interfaces behind the `task`, `diff`, and `review` workflows without implementing unsupervised agent actions.
+The `task` workflow now creates isolated worktree infrastructure and local task metadata without launching autonomous agents. The next implementation step is to add task listing and review inspection so developers can supervise task outputs before merge.

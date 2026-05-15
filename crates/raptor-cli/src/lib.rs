@@ -2,9 +2,13 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
-use raptor_core::{project_description, project_name, version};
-use raptor_git::inspect_repository;
-use raptor_store::{init_project_config, InitConfigOutcome};
+use raptor_core::{project_description, project_name, version, TaskId, TaskMetadata, TaskStatus};
+use raptor_git::{
+    create_task_worktree, inspect_repository, inspect_repository_root, plan_task_worktree,
+};
+use raptor_store::{
+    init_project_config, persist_task_metadata, task_metadata_exists, InitConfigOutcome,
+};
 use raptor_tools::command_version;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,7 +21,7 @@ pub enum CliCommand {
     Merge,
     Review,
     Swarm,
-    Task,
+    Task { description: String },
     Test,
     Version,
 }
@@ -56,7 +60,10 @@ where
         [arg] if arg == "--version" || arg == "-V" => Ok(CliCommand::Version),
         [arg] if arg == "init" => Ok(CliCommand::Init),
         [arg] if arg == "chat" => Ok(CliCommand::Chat),
-        [arg] if arg == "task" => Ok(CliCommand::Task),
+        [arg] if arg == "task" => Err(CliError::new("task description is required")),
+        [arg, description @ ..] if arg == "task" => Ok(CliCommand::Task {
+            description: description.join(" "),
+        }),
         [arg] if arg == "swarm" => Ok(CliCommand::Swarm),
         [arg] if arg == "review" => Ok(CliCommand::Review),
         [arg] if arg == "diff" => Ok(CliCommand::Diff),
@@ -83,7 +90,7 @@ where
         CliCommand::Merge => Ok(render_stub("merge")),
         CliCommand::Review => Ok(render_stub("review")),
         CliCommand::Swarm => Ok(render_stub("swarm")),
-        CliCommand::Task => Ok(render_stub("task")),
+        CliCommand::Task { description } => create_task(current_dir, &description),
         CliCommand::Test => Ok(render_stub("test")),
         CliCommand::Version => Ok(render_version()),
     }
@@ -95,7 +102,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor chat\n  raptor task\n  raptor swarm\n  raptor review\n  raptor diff\n  raptor test\n  raptor merge\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor chat\n  raptor task \"task description\"\n  raptor swarm\n  raptor review\n  raptor diff\n  raptor test\n  raptor merge\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -111,6 +118,45 @@ pub fn init_project(current_dir: &Path) -> Result<String, CliError> {
             path.display()
         )),
     }
+}
+
+pub fn create_task(current_dir: &Path, description: &str) -> Result<String, CliError> {
+    let trimmed_description = description.trim();
+    let task_id = TaskId::from_description(trimmed_description)
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let repository_root =
+        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+
+    if task_metadata_exists(repository_root.path(), &task_id)
+        .map_err(|error| CliError::new(error.to_string()))?
+    {
+        return Err(CliError::new(format!(
+            "task metadata already exists for {}; refusing to overwrite",
+            task_id.as_str()
+        )));
+    }
+
+    let plan = plan_task_worktree(&repository_root, &task_id)
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let worktree = create_task_worktree(&repository_root, &task_id)
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let metadata = TaskMetadata::new(
+        task_id.clone(),
+        trimmed_description,
+        TaskStatus::Planned,
+        worktree,
+    );
+    let metadata_path = persist_task_metadata(repository_root.path(), &metadata)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(format!(
+        "created task {}\nstatus: {}\nbranch: {}\nworktree: {}\nmetadata: {}\n",
+        task_id.as_str(),
+        TaskStatus::Planned.as_str(),
+        plan.branch_name,
+        plan.path.display(),
+        metadata_path.display()
+    ))
 }
 
 pub fn render_doctor(current_dir: &Path) -> String {
@@ -166,9 +212,11 @@ fn render_stub(command: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use raptor_core::TaskId;
     use raptor_store::CONFIG_FILE_NAME;
     use std::fs;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TestDir {
@@ -196,6 +244,38 @@ mod tests {
         }
     }
 
+    fn initialize_git_repo(path: &Path) {
+        run_git(path, &["init"]);
+        run_git(
+            path,
+            &[
+                "-c",
+                "user.name=Raptor Test",
+                "-c",
+                "user.email=raptor@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ],
+        );
+    }
+
+    fn run_git(path: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[test]
     fn parses_version_flag() {
         assert_eq!(parse_args(["--version"]).unwrap(), CliCommand::Version);
@@ -206,7 +286,6 @@ mod tests {
         let commands = [
             ("init", CliCommand::Init),
             ("chat", CliCommand::Chat),
-            ("task", CliCommand::Task),
             ("swarm", CliCommand::Swarm),
             ("review", CliCommand::Review),
             ("diff", CliCommand::Diff),
@@ -218,6 +297,23 @@ mod tests {
         for (arg, expected) in commands {
             assert_eq!(parse_args([arg]).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn parses_task_description() {
+        assert_eq!(
+            parse_args(["task", "add", "router", "tests"]).unwrap(),
+            CliCommand::Task {
+                description: "add router tests".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_missing_task_description() {
+        let error = parse_args(["task"]).unwrap_err();
+
+        assert!(error.to_string().contains("description"));
     }
 
     #[test]
@@ -263,6 +359,42 @@ mod tests {
 
         assert!(output.contains("not overwritten"));
         assert_eq!(fs::read_to_string(config_path).unwrap(), "custom = true\n");
+    }
+
+    #[test]
+    fn task_creates_worktree_and_metadata() {
+        let test_dir = TestDir::create("task");
+        initialize_git_repo(&test_dir.path);
+        let description = "Add task workflow tests";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        let output = run(["task", description], &test_dir.path).unwrap();
+
+        assert!(output.contains(&format!("created task {}", task_id.as_str())));
+        assert!(test_dir
+            .path
+            .join(".raptor")
+            .join("worktrees")
+            .join(task_id.as_str())
+            .is_dir());
+        assert!(test_dir
+            .path
+            .join(".raptor")
+            .join("tasks")
+            .join(format!("{}.toml", task_id.as_str()))
+            .exists());
+    }
+
+    #[test]
+    fn task_refuses_to_overwrite_existing_metadata() {
+        let test_dir = TestDir::create("task-exists");
+        initialize_git_repo(&test_dir.path);
+        let description = "Refuse duplicate task metadata";
+
+        run(["task", description], &test_dir.path).unwrap();
+        let error = run(["task", description], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("refusing to overwrite"));
     }
 
     #[test]

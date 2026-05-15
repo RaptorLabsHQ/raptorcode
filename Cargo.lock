@@ -23,6 +23,9 @@ version = "0.1.0"
 [[package]]
 name = "raptor-git"
 version = "0.1.0"
+dependencies = [
+ "raptor-core",
+]
 
 [[package]]
 name = "raptor-providers"
@@ -35,6 +38,9 @@ version = "0.1.0"
 [[package]]
 name = "raptor-store"
 version = "0.1.0"
+dependencies = [
+ "raptor-core",
+]
 
 [[package]]
 name = "raptor-tools"

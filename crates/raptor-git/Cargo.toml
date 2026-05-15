@@ -7,6 +7,9 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[dependencies]
+raptor-core.workspace = true
+
 [lib]
 name = "raptor_git"
 path = "src/lib.rs"
