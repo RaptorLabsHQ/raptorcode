@@ -5,9 +5,9 @@ use std::path::Path;
 
 use raptor_core::{project_description, project_name, version, TaskId, TaskMetadata, TaskStatus};
 use raptor_git::{
-    create_task_worktree, diff_task_worktree, inspect_repository, inspect_repository_root,
-    inspect_task_worktree, plan_task_worktree, preflight_task_merge, MergePreflight, WorktreeDiff,
-    WorktreeReview,
+    create_task_worktree, diff_task_worktree, execute_task_merge, inspect_repository,
+    inspect_repository_root, inspect_task_worktree, plan_task_worktree, preflight_task_merge,
+    MergeExecution, MergePreflight, RepositoryRoot, WorktreeDiff, WorktreeReview,
 };
 use raptor_store::{
     init_project_config, list_task_metadata, persist_task_metadata, read_task_metadata,
@@ -309,7 +309,7 @@ pub fn diff_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> 
 }
 
 pub fn merge_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> {
-    let (task, preflight) = merge_task_preflight(current_dir, task_id)?;
+    let (_, task, preflight) = merge_task_preflight(current_dir, task_id)?;
 
     Ok(render_merge_preflight(&task, &preflight))
 }
@@ -319,7 +319,7 @@ pub fn merge_task_execute(
     task_id: &str,
     confirmation_input: Option<&mut dyn BufRead>,
 ) -> Result<String, CliError> {
-    let (task, preflight) = merge_task_preflight(current_dir, task_id)?;
+    let (repository_root, task, preflight) = merge_task_preflight(current_dir, task_id)?;
     let mut output = render_merge_preflight(&task, &preflight);
     let confirmation_phrase = format!("MERGE {}", task.id);
 
@@ -353,7 +353,16 @@ pub fn merge_task_execute(
     }
 
     output.push_str("Confirmation result: matched\n");
-    output.push_str("Merge execution is not implemented yet. No merge was performed.\n");
+    let worktree_path = task
+        .worktree_path
+        .as_ref()
+        .ok_or_else(|| CliError::new("task metadata is missing worktree_path"))?;
+    let execution =
+        execute_task_merge(&repository_root, &task.id, worktree_path).map_err(|error| {
+            output.push_str("Merge execution result: failed\n");
+            CliError::with_output(error.to_string(), output.clone())
+        })?;
+    output.push_str(&render_merge_execution(&execution));
 
     Ok(output)
 }
@@ -361,7 +370,7 @@ pub fn merge_task_execute(
 fn merge_task_preflight(
     current_dir: &Path,
     task_id: &str,
-) -> Result<(StoredTaskMetadata, MergePreflight), CliError> {
+) -> Result<(RepositoryRoot, StoredTaskMetadata, MergePreflight), CliError> {
     let repository_root =
         inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
     let task = read_task_metadata(repository_root.path(), task_id)
@@ -373,7 +382,7 @@ fn merge_task_preflight(
     let preflight = preflight_task_merge(&repository_root, &task.id, worktree_path)
         .map_err(|error| CliError::new(error.to_string()))?;
 
-    Ok((task, preflight))
+    Ok((repository_root, task, preflight))
 }
 
 pub fn render_doctor(current_dir: &Path) -> String {
@@ -514,7 +523,59 @@ fn render_merge_preflight(task: &StoredTaskMetadata, preflight: &MergePreflight)
 
     output.push_str("Preflight result: passed\n");
     output.push_str("No merge was executed.\n");
-    output.push_str("Next behavior: raptor merge <task-id> --execute runs typed confirmation scaffolding; merge execution is not implemented yet.\n");
+    output.push_str("Next behavior: raptor merge <task-id> --execute requires typed confirmation before supervised local merge execution.\n");
+
+    output
+}
+
+fn render_merge_execution(execution: &MergeExecution) -> String {
+    let mut output = format!(
+        "Merge execution result: completed\nTarget repository: {}\nTarget branch: {}\nSource branch: {}\nWorktree retained: {}\nRemote push: not performed\n",
+        execution.target_repository_path.display(),
+        execution.target_branch,
+        execution.source_branch,
+        execution.worktree_path.display()
+    );
+
+    output.push_str("Merged files:\n");
+    if execution.changed_files.is_empty() {
+        output.push_str("  (none)\n");
+    } else {
+        for file in &execution.changed_files {
+            output.push_str("  ");
+            output.push_str(file);
+            output.push('\n');
+        }
+    }
+
+    output.push_str("Final git status:\n");
+    if execution.final_status_lines.is_empty() {
+        output.push_str("  clean\n");
+    } else {
+        for line in &execution.final_status_lines {
+            output.push_str("  ");
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+
+    if !execution.merge_stdout.is_empty() {
+        output.push_str("Git merge output:\n");
+        for line in execution.merge_stdout.lines() {
+            output.push_str("  ");
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+
+    if !execution.merge_stderr.is_empty() {
+        output.push_str("Git merge diagnostics:\n");
+        for line in execution.merge_stderr.lines() {
+            output.push_str("  ");
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
 
     output
 }
@@ -587,6 +648,8 @@ mod tests {
 
     fn initialize_git_repo(path: &Path) {
         run_git(path, &["init"]);
+        run_git(path, &["config", "user.name", "Raptor Test"]);
+        run_git(path, &["config", "user.email", "raptor@example.invalid"]);
         run_git(
             path,
             &[
@@ -707,6 +770,19 @@ mod tests {
             "after\n",
         )
         .unwrap();
+
+        (test_dir, task_id)
+    }
+
+    fn committed_merge_task(name: &str, description: &str) -> (TestDir, TaskId) {
+        let test_dir = TestDir::create(name);
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "before\n");
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let worktree_path = task_worktree_path(&test_dir.path, &task_id);
+        commit_file(&worktree_path, "tracked.txt", "after\n");
 
         (test_dir, task_id)
     }
@@ -1217,7 +1293,7 @@ mod tests {
     #[test]
     fn merge_execute_prints_required_confirmation_phrase() {
         let (test_dir, task_id) =
-            changed_merge_task("merge-execute-phrase", "Merge execute phrase");
+            committed_merge_task("merge-execute-phrase", "Merge execute phrase");
         let confirmation = format!("MERGE {}\n", task_id.as_str());
 
         let output = run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap();
@@ -1258,14 +1334,79 @@ mod tests {
     }
 
     #[test]
-    fn merge_execute_exact_phrase_reaches_not_implemented_message() {
-        let (test_dir, task_id) = changed_merge_task("merge-execute-exact", "Merge exact phrase");
+    fn merge_execute_merges_simple_committed_task_after_exact_confirmation() {
+        let (test_dir, task_id) = committed_merge_task("merge-execute-simple", "Merge simple task");
         let confirmation = format!("MERGE {}\n", task_id.as_str());
+        let worktree_path = task_worktree_path(&test_dir.path, &task_id);
 
         let output = run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap();
 
         assert!(output.contains("Confirmation result: matched"));
-        assert!(output.contains("Merge execution is not implemented yet. No merge was performed."));
+        assert!(output.contains("Merge execution result: completed"));
+        assert!(output.contains("Merged files:"));
+        assert!(output.contains("tracked.txt"));
+        assert!(output.contains("Remote push: not performed"));
+        assert_eq!(
+            fs::read_to_string(test_dir.path.join("tracked.txt")).unwrap(),
+            "after\n"
+        );
+        assert_eq!(
+            git_text(
+                &test_dir.path,
+                &["status", "--short", "--untracked-files=no"]
+            ),
+            ""
+        );
+        assert!(worktree_path.exists());
+    }
+
+    #[test]
+    fn merge_execute_reports_conflict_without_auto_resolution() {
+        let test_dir = TestDir::create("merge-execute-conflict");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "base\n");
+        let description = "Merge execute conflict";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let worktree_path = task_worktree_path(&test_dir.path, &task_id);
+        commit_file(&worktree_path, "tracked.txt", "task\n");
+        commit_file(&test_dir.path, "tracked.txt", "target\n");
+        let confirmation = format!("MERGE {}\n", task_id.as_str());
+
+        let error =
+            run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap_err();
+
+        assert!(
+            error.to_string().contains("merge conflicts detected"),
+            "unexpected error: {error}"
+        );
+        assert!(error
+            .output()
+            .unwrap()
+            .contains("Merge execution result: failed"));
+        assert!(git_text(&test_dir.path, &["status", "--short"]).contains("UU tracked.txt"));
+        assert!(worktree_path.exists());
+    }
+
+    #[test]
+    fn merge_execute_rejects_uncommitted_task_worktree_after_confirmation() {
+        let (test_dir, task_id) =
+            changed_merge_task("merge-execute-uncommitted", "Merge uncommitted task");
+        let confirmation = format!("MERGE {}\n", task_id.as_str());
+
+        let error =
+            run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap_err();
+
+        assert!(error.to_string().contains("uncommitted changes"));
+        assert!(error
+            .output()
+            .unwrap()
+            .contains("Confirmation result: matched"));
+        assert!(error
+            .output()
+            .unwrap()
+            .contains("Merge execution result: failed"));
     }
 
     #[test]
@@ -1285,6 +1426,80 @@ mod tests {
             "Required confirmation: MERGE {}",
             task_id.as_str()
         )));
+    }
+
+    #[test]
+    fn merge_execute_rejects_dirty_target_repository() {
+        let (test_dir, task_id) =
+            committed_merge_task("merge-execute-dirty-root", "Merge dirty target");
+        fs::write(test_dir.path.join("root-dirty.txt"), "dirty\n").unwrap();
+        let confirmation = format!("MERGE {}\n", task_id.as_str());
+
+        let error =
+            run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap_err();
+
+        assert!(error.to_string().contains("uncommitted changes"));
+    }
+
+    #[test]
+    fn merge_execute_rejects_missing_worktree() {
+        let (test_dir, task_id) = committed_merge_task(
+            "merge-execute-missing-worktree",
+            "Merge missing execute worktree",
+        );
+        fs::remove_dir_all(task_worktree_path(&test_dir.path, &task_id)).unwrap();
+        let confirmation = format!("MERGE {}\n", task_id.as_str());
+
+        let error =
+            run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap_err();
+
+        assert!(error.to_string().contains("worktree not found"));
+    }
+
+    #[test]
+    fn merge_execute_rejects_unsafe_worktree_path() {
+        let (test_dir, task_id) = committed_merge_task(
+            "merge-execute-unsafe-worktree",
+            "Merge unsafe execute worktree",
+        );
+        let unsafe_path = test_dir.path.join("outside").join(task_id.as_str());
+        replace_worktree_path_in_metadata(&test_dir.path, &task_id, &unsafe_path);
+        let confirmation = format!("MERGE {}\n", task_id.as_str());
+
+        let error =
+            run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap_err();
+
+        assert!(error.to_string().contains("not a safe repository path"));
+    }
+
+    #[test]
+    fn merge_execute_rejects_source_branch_equal_to_target_branch() {
+        let test_dir = TestDir::create("merge-execute-same-branch");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "before\n");
+        let description = "Merge same branch";
+        let task_id = TaskId::from_description(description).unwrap();
+        let target_branch = git_text(&test_dir.path, &["branch", "--show-current"])
+            .trim()
+            .to_owned();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let worktree_path = task_worktree_path(&test_dir.path, &task_id);
+        run_git(
+            &worktree_path,
+            &["checkout", "--ignore-other-worktrees", &target_branch],
+        );
+        fs::write(worktree_path.join("tracked.txt"), "after\n").unwrap();
+        let confirmation = format!("MERGE {}\n", task_id.as_str());
+
+        let error =
+            run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap_err();
+
+        assert!(error.to_string().contains("same"));
+        assert!(error
+            .output()
+            .unwrap()
+            .contains("Confirmation result: matched"));
     }
 
     #[test]
@@ -1488,50 +1703,41 @@ mod tests {
     }
 
     #[test]
-    fn merge_execute_scaffold_has_no_merge_stage_commit_push_or_delete_side_effects() {
-        let test_dir = TestDir::create("merge-execute-readonly");
-        initialize_git_repo(&test_dir.path);
-        commit_file(&test_dir.path, "tracked.txt", "before\n");
-        let description = "Merge execute readonly";
-        let task_id = TaskId::from_description(description).unwrap();
-
-        run(["task", description], &test_dir.path).unwrap();
+    fn merge_execute_does_not_push_and_keeps_worktree_after_success() {
+        let (test_dir, task_id) =
+            committed_merge_task("merge-execute-no-push", "Merge without push");
+        let remote_dir = TestDir::create("merge-execute-remote");
+        run_git(&remote_dir.path, &["init", "--bare"]);
+        run_git(
+            &test_dir.path,
+            &["remote", "add", "origin", remote_dir.path.to_str().unwrap()],
+        );
+        let target_branch = git_text(&test_dir.path, &["branch", "--show-current"])
+            .trim()
+            .to_owned();
+        run_git(&test_dir.path, &["push", "origin", &target_branch]);
+        let remote_ref = format!("refs/heads/{target_branch}");
+        let remote_before = git_text(&test_dir.path, &["ls-remote", "origin", &remote_ref]);
         let worktree_path = task_worktree_path(&test_dir.path, &task_id);
-        fs::write(worktree_path.join("tracked.txt"), "after\n").unwrap();
-        run_git(&worktree_path, &["add", "tracked.txt"]);
         let metadata_path = task_metadata_path(&test_dir.path, &task_id);
         let before_metadata = fs::read_to_string(&metadata_path).unwrap();
-        let before_root_head = git_text(&test_dir.path, &["rev-parse", "HEAD"]);
-        let before_worktree_head = git_text(&worktree_path, &["rev-parse", "HEAD"]);
-        let before_root_status = git_text(&test_dir.path, &["status", "--short"]);
-        let before_worktree_status = git_text(&worktree_path, &["status", "--short"]);
-        let before_worktree_staged_diff = git_text(&worktree_path, &["diff", "--cached"]);
         let confirmation = format!("MERGE {}\n", task_id.as_str());
 
         let output = run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap();
 
-        assert!(output.contains("Merge execution is not implemented yet."));
+        assert!(output.contains("Merge execution result: completed"));
         assert!(worktree_path.exists());
         assert_eq!(fs::read_to_string(metadata_path).unwrap(), before_metadata);
         assert_eq!(
-            git_text(&test_dir.path, &["rev-parse", "HEAD"]),
-            before_root_head
+            git_text(
+                &test_dir.path,
+                &["status", "--short", "--untracked-files=no"]
+            ),
+            ""
         );
         assert_eq!(
-            git_text(&worktree_path, &["rev-parse", "HEAD"]),
-            before_worktree_head
-        );
-        assert_eq!(
-            git_text(&test_dir.path, &["status", "--short"]),
-            before_root_status
-        );
-        assert_eq!(
-            git_text(&worktree_path, &["status", "--short"]),
-            before_worktree_status
-        );
-        assert_eq!(
-            git_text(&worktree_path, &["diff", "--cached"]),
-            before_worktree_staged_diff
+            git_text(&test_dir.path, &["ls-remote", "origin", &remote_ref]),
+            remote_before
         );
     }
 

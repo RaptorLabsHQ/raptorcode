@@ -60,22 +60,26 @@ Security-relevant actions should be logged or surfaced clearly to the developer:
 - Uses read-only git status and diff commands for `raptor review <task-id>` and `raptor diff <task-id>`.
 - Runs `raptor merge <task-id>` as a preflight dry run only.
 - Refuses merge preflight when the target repository is dirty, the task worktree has no changes, or unresolved conflicts are present.
-- Runs `raptor merge <task-id> --execute` as a typed confirmation scaffold only.
-- Does not launch autonomous agents, merge changes, commit changes, or push remotes.
+- Runs `raptor merge <task-id> --execute` only after exact typed confirmation.
+- Refuses merge execution when branches cannot be detected, source and target branches match, the task worktree has uncommitted edits, or conflicts occur.
+- Does not launch autonomous agents, execute task-provided commands, install dependencies, push remotes, or delete worktrees.
 
 Known gap: if metadata persistence fails after git worktree creation, manual cleanup may be required until an explicit cleanup workflow is implemented.
 
 ## Merge Controls
 
-`raptor merge <task-id>` currently performs preflight checks and prints a dry-run summary only. `raptor merge <task-id> --execute` performs the same preflight checks, prints the exact confirmation phrase, reads typed confirmation from stdin, and then stops with a not-implemented message. Merge execution is not implemented yet.
+`raptor merge <task-id>` performs preflight checks and prints a dry-run summary only. `raptor merge <task-id> --execute` performs the same preflight checks, prints the exact confirmation phrase, reads typed confirmation from stdin, and then runs a supervised local git merge from the task branch into the current target branch.
 
-Current preflight controls and future merge execution controls:
+Current preflight and merge execution controls:
 
 - Treat task ids, task metadata, and stored worktree paths as untrusted input.
 - Reject path traversal, unsafe task ids, and worktree paths outside `.raptor/worktrees/<task-id>`.
 - Refuse to proceed if task metadata or the task worktree is missing.
 - Refuse to proceed if the main repository has uncommitted changes.
 - Refuse to proceed when unresolved conflicts are already present.
+- Refuse to execute when the source or target branch cannot be detected.
+- Refuse to execute when the source branch equals the target branch.
+- Refuse to execute when task worktree changes are uncommitted, because V1 execution merges committed branch changes only.
 - Require the developer to review `raptor review <task-id>` and/or `raptor diff <task-id>` output before merge confirmation.
 - Print a dry-run summary before any mutation.
 - Require typed confirmation exactly matching `MERGE <task-id>`.
@@ -84,11 +88,11 @@ Current preflight controls and future merge execution controls:
 - Never push to a remote or delete the task worktree in the first merge version.
 - Never trust generated files blindly; the developer remains responsible for code review before confirming merge.
 
-## Current Confirmation Scaffold
+## Current Confirmation Flow
 
-Future merge execution must remain explicit. Default `raptor merge <task-id>` remains dry-run/preflight and never prompts.
+Merge execution is explicit. Default `raptor merge <task-id>` remains dry-run/preflight and never prompts.
 
-Current scaffold command:
+Execution command:
 
 ```bash
 raptor merge <task-id> --execute
@@ -105,7 +109,7 @@ Confirmation requirements:
 - Confirmation must come from the interactive user prompt only.
 - Confirmation must not come from task metadata, environment variables, generated files, or model output.
 - The command must never proceed because an AI model produced the confirmation phrase.
-- Exact confirmation currently reaches only: `Merge execution is not implemented yet. No merge was performed.`
+- Exact confirmation proceeds to local git merge execution only after preflight passes.
 
 Optional future automation command:
 
@@ -122,4 +126,4 @@ Auditability requirements:
 
 ## Current Status
 
-The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` confirmation scaffold. Security controls described here are partly implemented for task setup and inspection, and remain design requirements for future agent, merge execution, and TUI workflows.
+The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are partly implemented for task setup, inspection, and merge execution, and remain design requirements for future agent and TUI workflows.

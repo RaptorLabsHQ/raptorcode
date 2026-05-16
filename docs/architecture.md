@@ -32,7 +32,7 @@ RaptorCode V1 should coordinate coding-agent workflows inside existing developer
 
 The repository contains a minimal Cargo workspace with crate boundaries for core metadata, task metadata, CLI, git diagnostics, tooling diagnostics, agent orchestration, providers, TUI, sandboxing, and local storage. The implemented CLI router supports `raptor init`, `raptor chat`, `raptor task`, `raptor swarm`, `raptor review`, `raptor diff`, `raptor test`, `raptor merge`, and `raptor doctor`.
 
-`raptor task "description"` validates task input, creates a deterministic isolated git worktree under `.raptor/worktrees/`, and persists task metadata under `.raptor/tasks/`. `raptor task list` and `raptor task show <id>` read that persisted metadata without modifying files. `raptor review <task-id>` and `raptor diff <task-id>` validate stored worktree paths and inspect task worktree status or diffs without modifying files. `raptor merge <task-id>` performs preflight dry-run checks only. `raptor merge <task-id> --execute` adds typed confirmation scaffolding but still performs no merge. The task workflow does not launch autonomous coding agents. `raptor init` and `raptor doctor` also perform meaningful work today. Other routed commands are explicit stubs until the corresponding V1 workflows are implemented.
+`raptor task "description"` validates task input, creates a deterministic isolated git worktree under `.raptor/worktrees/`, and persists task metadata under `.raptor/tasks/`. `raptor task list` and `raptor task show <id>` read that persisted metadata without modifying files. `raptor review <task-id>` and `raptor diff <task-id>` validate stored worktree paths and inspect task worktree status or diffs without modifying files. `raptor merge <task-id>` performs preflight dry-run checks only. `raptor merge <task-id> --execute` requires typed confirmation and performs supervised local merge execution for committed task branch changes. The task workflow does not launch autonomous coding agents. `raptor init` and `raptor doctor` also perform meaningful work today. Other routed commands are explicit stubs until the corresponding V1 workflows are implemented.
 
 ## Task Workflow Boundaries
 
@@ -45,11 +45,11 @@ The current task workflow is intentionally local and supervised. It prepares iso
 
 ## Merge Boundary
 
-`raptor merge <task-id>` currently implements preflight dry-run checks only. `raptor merge <task-id> --execute` reuses those checks, prints `MERGE <task-id>`, reads typed confirmation from stdin, and then stops because merge execution is not implemented yet. Future merge execution should remain split into preflight, confirmation, and merge execution boundaries.
+`raptor merge <task-id>` currently implements preflight dry-run checks only. `raptor merge <task-id> --execute` reuses those checks, prints `MERGE <task-id>`, reads typed confirmation from stdin, and performs a local git merge from the task branch into the target branch. The merge boundary remains split into preflight, confirmation, and execution phases.
 
-- `raptor-cli`: parses `raptor merge <task-id>` and `raptor merge <task-id> --execute`, coordinates preflight output, and requires typed confirmation before the execution scaffold can continue.
+- `raptor-cli`: parses `raptor merge <task-id>` and `raptor merge <task-id> --execute`, coordinates preflight output, and requires typed confirmation before merge execution can continue.
 - `raptor-store`: load existing task metadata from `.raptor/tasks/<task-id>.toml`; no new metadata format is required for the first merge version.
-- `raptor-git`: validates the stored worktree path, inspects main repository cleanliness, inspects task worktree changes, detects unresolved conflicts, and should perform the final merge only after confirmation in a future implementation.
+- `raptor-git`: validates the stored worktree path, inspects main repository cleanliness, inspects task worktree changes, detects unresolved conflicts, and performs the final local merge only after confirmation.
 - `raptor-core`: continue owning task ids and task status concepts; merge-specific state should not be added until there is a concrete status transition to persist.
 
 The first merge version must remain local and supervised. It must not auto-merge, force merge, auto-resolve conflicts, delete worktrees, push remotes, run AI agents, or install dependencies.

@@ -53,6 +53,18 @@ pub struct MergePreflight {
     pub worktree_path: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeExecution {
+    pub changed_files: Vec<String>,
+    pub final_status_lines: Vec<String>,
+    pub merge_stderr: String,
+    pub merge_stdout: String,
+    pub source_branch: String,
+    pub target_branch: String,
+    pub target_repository_path: PathBuf,
+    pub worktree_path: PathBuf,
+}
+
 #[derive(Debug)]
 pub enum GitError {
     BranchExists(String),
@@ -65,9 +77,20 @@ pub enum GitError {
         path: PathBuf,
         source: std::io::Error,
     },
+    MergeConflict {
+        path: PathBuf,
+        files: Vec<String>,
+        stderr: String,
+    },
+    MissingBranch {
+        path: PathBuf,
+        role: &'static str,
+    },
     MissingWorktree(PathBuf),
     NotRepository(PathBuf),
     NoTaskChanges(PathBuf),
+    SameBranch(String),
+    UncommittedTaskChanges(PathBuf),
     UnresolvedConflicts {
         path: PathBuf,
         files: Vec<String>,
@@ -270,23 +293,123 @@ pub fn preflight_task_merge(
     }
 
     let status_lines = status_lines(&worktree_path)?;
-
-    if status_lines.is_empty() {
-        return Err(GitError::NoTaskChanges(worktree_path));
-    }
-
-    let changed_files = status_lines
+    let target_branch = git_output_line(repository_root.path(), &["branch", "--show-current"]);
+    let worktree_branch = git_output_line(&worktree_path, &["branch", "--show-current"]);
+    let mut changed_files = status_lines
         .iter()
         .filter_map(|line| changed_file_from_status_line(line))
         .collect::<Vec<_>>();
 
+    if let (Some(target_branch), Some(worktree_branch)) =
+        (target_branch.as_deref(), worktree_branch.as_deref())
+    {
+        validate_detected_branch_name(repository_root.path(), target_branch)?;
+        validate_detected_branch_name(repository_root.path(), worktree_branch)?;
+
+        if target_branch != worktree_branch {
+            for file in
+                branch_changed_files(repository_root.path(), target_branch, worktree_branch)?
+            {
+                push_unique_changed_file(&mut changed_files, file);
+            }
+        }
+    }
+
+    if changed_files.is_empty() {
+        return Err(GitError::NoTaskChanges(worktree_path));
+    }
+
     Ok(MergePreflight {
         changed_files,
         status_lines,
-        target_branch: git_output_line(repository_root.path(), &["branch", "--show-current"]),
+        target_branch,
         target_repository_path: repository_root.path().to_path_buf(),
-        worktree_branch: git_output_line(&worktree_path, &["branch", "--show-current"]),
+        worktree_branch,
         worktree_path,
+    })
+}
+
+pub fn execute_task_merge(
+    repository_root: &RepositoryRoot,
+    task_id: &str,
+    stored_worktree_path: &Path,
+) -> Result<MergeExecution, GitError> {
+    let preflight = preflight_task_merge(repository_root, task_id, stored_worktree_path)?;
+    let target_branch = preflight
+        .target_branch
+        .clone()
+        .ok_or_else(|| GitError::MissingBranch {
+            path: repository_root.path().to_path_buf(),
+            role: "target branch",
+        })?;
+    let source_branch =
+        preflight
+            .worktree_branch
+            .clone()
+            .ok_or_else(|| GitError::MissingBranch {
+                path: preflight.worktree_path.clone(),
+                role: "source branch",
+            })?;
+
+    validate_detected_branch_name(repository_root.path(), &target_branch)?;
+    validate_detected_branch_name(repository_root.path(), &source_branch)?;
+
+    if source_branch == target_branch {
+        return Err(GitError::SameBranch(source_branch));
+    }
+
+    if !preflight.status_lines.is_empty() {
+        return Err(GitError::UncommittedTaskChanges(preflight.worktree_path));
+    }
+
+    let changed_files =
+        branch_changed_files(repository_root.path(), &target_branch, &source_branch)?;
+
+    if changed_files.is_empty() {
+        return Err(GitError::NoTaskChanges(preflight.worktree_path));
+    }
+
+    let source_ref = branch_ref(&source_branch);
+    let output = Command::new("git")
+        .arg("merge")
+        .arg("--no-edit")
+        .arg(&source_ref)
+        .current_dir(repository_root.path())
+        .output()
+        .map_err(|source| GitError::Io {
+            path: repository_root.path().to_path_buf(),
+            source,
+        })?;
+
+    let merge_stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let merge_stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+
+    if !output.status.success() {
+        let conflicts = unresolved_conflict_files(repository_root.path())?;
+
+        if !conflicts.is_empty() {
+            return Err(GitError::MergeConflict {
+                path: repository_root.path().to_path_buf(),
+                files: conflicts,
+                stderr: merge_command_detail(&merge_stdout, &merge_stderr),
+            });
+        }
+
+        return Err(GitError::CommandFailed {
+            args: vec!["merge".to_owned(), "--no-edit".to_owned(), source_ref],
+            stderr: merge_command_detail(&merge_stdout, &merge_stderr),
+        });
+    }
+
+    Ok(MergeExecution {
+        changed_files,
+        final_status_lines: status_lines(repository_root.path())?,
+        merge_stderr,
+        merge_stdout,
+        source_branch,
+        target_branch,
+        target_repository_path: repository_root.path().to_path_buf(),
+        worktree_path: preflight.worktree_path,
     })
 }
 
@@ -322,6 +445,25 @@ impl Display for GitError {
             Self::Io { path, source } => {
                 write!(formatter, "{}: {source}", path.display())
             }
+            Self::MergeConflict { files, stderr, .. } => {
+                if files.is_empty() {
+                    write!(
+                        formatter,
+                        "merge conflicts detected; no automatic resolution attempted{}",
+                        display_command_detail(stderr)
+                    )
+                } else {
+                    write!(
+                        formatter,
+                        "merge conflicts detected; no automatic resolution attempted: {}{}",
+                        files.join(", "),
+                        display_command_detail(stderr)
+                    )
+                }
+            }
+            Self::MissingBranch { role, .. } => {
+                write!(formatter, "{role} could not be detected; merge execution requires a named branch")
+            }
             Self::MissingWorktree(path) => {
                 write!(formatter, "worktree not found: {}", path.display())
             }
@@ -334,6 +476,17 @@ impl Display for GitError {
             }
             Self::NoTaskChanges(_) => {
                 formatter.write_str("task worktree has no changes to merge")
+            }
+            Self::SameBranch(branch) => {
+                write!(
+                    formatter,
+                    "source branch and target branch are the same: {branch}"
+                )
+            }
+            Self::UncommittedTaskChanges(_) => {
+                formatter.write_str(
+                    "task worktree has uncommitted changes; commit or discard them before merge execution",
+                )
             }
             Self::UnresolvedConflicts { files, .. } => {
                 if files.is_empty() {
@@ -370,9 +523,13 @@ impl Error for GitError {
             Self::BranchExists(_)
             | Self::CommandFailed { .. }
             | Self::DirtyRepository(_)
+            | Self::MergeConflict { .. }
+            | Self::MissingBranch { .. }
             | Self::MissingWorktree(_)
             | Self::NotRepository(_)
             | Self::NoTaskChanges(_)
+            | Self::SameBranch(_)
+            | Self::UncommittedTaskChanges(_)
             | Self::UnresolvedConflicts { .. }
             | Self::UnsafeName(_)
             | Self::UnsafePath(_)
@@ -449,6 +606,56 @@ fn branch_exists(repository_root: &Path, branch_name: &str) -> Result<bool, GitE
             ],
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         }),
+    }
+}
+
+fn branch_changed_files(
+    repository_root: &Path,
+    target_branch: &str,
+    source_branch: &str,
+) -> Result<Vec<String>, GitError> {
+    let range = format!(
+        "{}...{}",
+        branch_ref(target_branch),
+        branch_ref(source_branch)
+    );
+    let diff = git_output_text(repository_root, &["diff", "--name-only", range.as_str()])?;
+
+    Ok(diff
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
+fn branch_ref(branch_name: &str) -> String {
+    format!("refs/heads/{branch_name}")
+}
+
+fn validate_detected_branch_name(
+    repository_root: &Path,
+    branch_name: &str,
+) -> Result<(), GitError> {
+    if branch_name.is_empty() || branch_name.starts_with('-') || branch_name.contains('\0') {
+        return Err(GitError::UnsafeName(branch_name.to_owned()));
+    }
+
+    let output = Command::new("git")
+        .arg("check-ref-format")
+        .arg("--branch")
+        .arg(branch_name)
+        .current_dir(repository_root)
+        .output()
+        .map_err(|source| GitError::Io {
+            path: repository_root.to_path_buf(),
+            source,
+        })?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(GitError::UnsafeName(branch_name.to_owned()))
     }
 }
 
@@ -594,6 +801,29 @@ fn status_line_is_unresolved_conflict(line: &str) -> bool {
             | (Some('A'), Some('A'))
             | (Some('U'), Some('U'))
     )
+}
+
+fn push_unique_changed_file(files: &mut Vec<String>, file: String) {
+    if !files.iter().any(|existing| existing == &file) {
+        files.push(file);
+    }
+}
+
+fn merge_command_detail(stdout: &str, stderr: &str) -> String {
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => "no stdout or stderr output".to_owned(),
+        (false, true) => stdout.to_owned(),
+        (true, false) => stderr.to_owned(),
+        (false, false) => format!("{stdout}\n{stderr}"),
+    }
+}
+
+fn display_command_detail(detail: &str) -> String {
+    if detail.is_empty() {
+        String::new()
+    } else {
+        format!(" ({detail})")
+    }
 }
 
 fn path_is_raptor_state(path: &str) -> bool {
