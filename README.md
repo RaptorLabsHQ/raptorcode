@@ -18,6 +18,9 @@ Implemented today:
 - `raptor --version`.
 - `raptor init`.
 - `raptor doctor`.
+- `raptor provider list`.
+- `raptor agent list`.
+- `raptor agent show <id>`.
 - `raptor task "description"` safe task workflow foundation.
 - `raptor task list`.
 - `raptor task show <id>`.
@@ -27,6 +30,8 @@ Implemented today:
 - `raptor diff <task-id>`.
 - `raptor merge <task-id>` preflight dry run.
 - `raptor merge <task-id> --execute` supervised local merge execution.
+- Provider metadata catalog for DeepSeek first, plus future OpenAI/Codex, Claude, Gemini, and local model boundaries.
+- Read-only local agent session model for future multi-agent orchestration.
 - Local task metadata and worktree state under `.raptor/`.
 
 Stubbed commands:
@@ -50,6 +55,9 @@ Current controls:
 - Path traversal is rejected.
 - Git commands are executed through structured process arguments.
 - No autonomous agents are launched by the current task workflow.
+- Provider inspection performs no external requests and no model calls.
+- Agent inspection is read-only and currently uses empty local session state.
+- Agent sessions do not modify files, execute shell commands, or call AI models in this foundation.
 - No commits, merges, or pushes are performed by `raptor task`.
 - `raptor review` and `raptor diff` are read-only inspection commands.
 - `raptor merge` runs preflight checks and prints a dry-run summary only; no merge is executed.
@@ -69,6 +77,9 @@ Run the CLI through Cargo during development:
 cargo run -p raptor-cli -- --version
 cargo run -p raptor-cli -- doctor
 cargo run -p raptor-cli -- init
+cargo run -p raptor-cli -- provider list
+cargo run -p raptor-cli -- agent list
+cargo run -p raptor-cli -- agent show <id>
 cargo run -p raptor-cli -- task "describe the supervised task"
 cargo run -p raptor-cli -- task list
 cargo run -p raptor-cli -- task show <id>
@@ -86,6 +97,9 @@ Expected installed binary form:
 raptor --version
 raptor doctor
 raptor init
+raptor provider list
+raptor agent list
+raptor agent show <id>
 raptor task "describe the supervised task"
 raptor task list
 raptor task show <id>
@@ -123,6 +137,19 @@ Task inspection commands are read-only:
 - Successful merge execution records task status as `merged`; merge conflicts record `merge_conflict`; failed preflight does not mark a task merged.
 - `raptor task abandon <id>` marks an unmerged task as `abandoned` without deleting metadata or the worktree.
 - `raptor task cleanup <id>` validates the stored worktree path, prints a cleanup plan, requires `CLEANUP <task-id>`, and deletes only the associated worktree directory.
+
+## Provider And Agent Foundation
+
+`raptor provider list` reads `raptor.toml` when present and reports registered provider metadata. New configs created by `raptor init` include:
+
+```toml
+[providers.deepseek]
+enabled = true
+```
+
+Provider support is metadata-only in this iteration. No API keys, secrets, network calls, or model execution are implemented.
+
+`raptor agent list` and `raptor agent show <id>` inspect local read-only agent session state. The session model supports future task binding, provider/model metadata, lifecycle state, messages, events, and audit entries, but there is no autonomous coding loop yet.
 
 ## Repository Layout
 

@@ -31,6 +31,9 @@ Use the stable Rust toolchain.
 - Lint: `cargo clippy --all-targets --all-features`
 - Version command: `cargo run -p raptor-cli -- --version`
 - Init command: `cargo run -p raptor-cli -- init`
+- Provider list command: `cargo run -p raptor-cli -- provider list`
+- Agent list command: `cargo run -p raptor-cli -- agent list`
+- Agent show command: `cargo run -p raptor-cli -- agent show <id>`
 - Task command: `cargo run -p raptor-cli -- task "describe the supervised task"`
 - Task list command: `cargo run -p raptor-cli -- task list`
 - Task show command: `cargo run -p raptor-cli -- task show <id>`
@@ -44,10 +47,12 @@ Use the stable Rust toolchain.
 
 ## Task Workflow Notes
 
+`raptor provider list` reads `raptor.toml` when present and lists provider metadata without network calls or model execution. `raptor agent list` and `raptor agent show <id>` inspect read-only local agent session state. No autonomous coding loop, shell execution, or agent file modification exists yet.
+
 `raptor task "description"` must be run inside a git repository. It creates an isolated git worktree under `.raptor/worktrees/` and writes metadata under `.raptor/tasks/`. It does not start autonomous agents or modify the main worktree.
 
 `raptor task list` and `raptor task show <id>` are read-only inspection commands for persisted task metadata. `raptor task abandon <id>` marks an unmerged task as abandoned without deleting metadata or the worktree. `raptor task cleanup <id>` validates the stored worktree path and deletes only the associated worktree after exact `CLEANUP <task-id>` confirmation. `raptor review <task-id>` and `raptor diff <task-id>` inspect the associated task worktree without staging, committing, merging, deleting, or modifying files. `raptor merge <task-id>` performs merge preflight dry-run checks only. `raptor merge <task-id> --execute` requires typed confirmation, performs a supervised local merge for committed task branch changes, and records task status as `merged` or `merge_conflict`.
 
 ## Current Contributor Task
 
-The `task` workflow now creates isolated worktree infrastructure and local task metadata without launching autonomous agents. Task metadata and task worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`. Merge preflight, typed confirmation, supervised local merge execution, lifecycle status updates, abandonment, and safe worktree cleanup are in place. The next implementation step is cleanup status recording and lifecycle display refinement for the future TUI.
+The `task` workflow now creates isolated worktree infrastructure and local task metadata without launching autonomous agents. Provider metadata and read-only agent session foundations are in place for future orchestration. Task metadata and task worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`. Merge preflight, typed confirmation, supervised local merge execution, lifecycle status updates, abandonment, and safe worktree cleanup are in place. The next implementation step is a persisted agent session store after execution policy is designed.

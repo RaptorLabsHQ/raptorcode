@@ -10,8 +10,10 @@ version = "0.1.0"
 name = "raptor-cli"
 version = "0.1.0"
 dependencies = [
+ "raptor-agent",
  "raptor-core",
  "raptor-git",
+ "raptor-providers",
  "raptor-store",
  "raptor-tools",
 ]

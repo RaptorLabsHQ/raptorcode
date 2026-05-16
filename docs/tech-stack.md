@@ -17,9 +17,10 @@ Rust is the default implementation language for RaptorCode because the project n
 - CLI: Rust command-line interface built by `raptor-cli` as the `raptor` binary.
 - Core domain: task ids, task status, task metadata, and worktree information in `raptor-core`.
 - TUI: Rust terminal user interface boundary in `raptor-tui`.
-- Orchestrator: Rust application layer boundary for multi-agent workflow control in `raptor-agent`.
+- Orchestrator: Rust application layer boundary for read-only agent session state and future multi-agent workflow control in `raptor-agent`.
+- Providers: Rust provider abstraction boundary for DeepSeek first, future OpenAI/Codex, future Claude, future Gemini, and future local models in `raptor-providers`.
 - Git integration: local git repository inspection, worktree operations, read-only worktree status/diff inspection, supervised merge execution, and validated worktree cleanup in `raptor-git`.
-- Store: local configuration, task metadata persistence, task metadata inspection, and lifecycle status updates in `raptor-store`.
+- Store: local configuration, provider enablement parsing, task metadata persistence, task metadata inspection, and lifecycle status updates in `raptor-store`.
 - Tool diagnostics: local tooling checks in `raptor-tools`.
 - Documentation: Markdown files in the repository root and `docs/`.
 
@@ -32,6 +33,8 @@ Rust is the default implementation language for RaptorCode because the project n
 
 ## Current Status
 
-The repository contains a Cargo workspace with internal crate dependencies only. The implemented CLI surface includes `raptor --version`, `raptor init`, `raptor doctor`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>`, and `raptor merge <task-id> --execute`.
+The repository contains a Cargo workspace with internal crate dependencies only. The implemented CLI surface includes `raptor --version`, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor agent list`, `raptor agent show <id>`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>`, and `raptor merge <task-id> --execute`.
+
+Provider and agent foundations are synchronous, metadata-only, and dependency-free. They do not add HTTP clients, async runtimes, provider SDKs, or serialization crates yet.
 
 The `chat`, `swarm`, and `test` commands are routed but intentionally stubbed until their supervised workflows are implemented.

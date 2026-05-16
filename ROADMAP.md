@@ -25,6 +25,7 @@ V1 is not a full terminal emulator replacement. It will focus on supervised codi
 
 3. CLI workflow
    - Commands to initialize project state.
+   - Commands to inspect provider metadata and local agent session state.
    - Commands to create, list, inspect, and clean isolated worktrees.
    - Supervised merge preflight for task worktrees.
    - Typed `MERGE <task-id>` confirmation before supervised local merge execution.
@@ -38,7 +39,9 @@ V1 is not a full terminal emulator replacement. It will focus on supervised codi
    - Worktree status and task state display.
 
 5. Multi-agent orchestrator
+   - Provider abstraction with DeepSeek first and future OpenAI/Codex, Claude, Gemini, and local model boundaries.
    - Agent lifecycle management.
+   - Read-only agent session state before any autonomous coding loop.
    - Per-agent worktree isolation.
    - Review points before merge, commit, or push actions.
 
@@ -52,6 +55,8 @@ V1 is not a full terminal emulator replacement. It will focus on supervised codi
 
 - Full terminal emulator replacement.
 - Unsupervised autonomous production changes.
+- Provider API calls before explicit provider integration design.
+- Agent shell execution before explicit permissioning design.
 - Auto-merge without explicit developer confirmation.
 - Force merge and automatic conflict resolution.
 - Remote push from the first merge workflow.

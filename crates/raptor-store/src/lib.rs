@@ -12,7 +12,8 @@ pub const CRATE_PURPOSE: &str = "Local state storage boundaries for RaptorCode."
 pub const RAPTOR_STATE_DIR: &str = ".raptor";
 pub const TASKS_DIR: &str = "tasks";
 
-const DEFAULT_CONFIG: &str = "# RaptorCode project configuration\nversion = 1\n";
+const DEFAULT_CONFIG: &str =
+    "# RaptorCode project configuration\nversion = 1\n\n[providers.deepseek]\nenabled = true\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InitConfigOutcome {
@@ -25,6 +26,15 @@ pub enum InitConfigError {
     Io { path: PathBuf, source: io::Error },
     NotDirectory(PathBuf),
     UnsafeBasePath(PathBuf),
+}
+
+#[derive(Debug)]
+pub enum ProjectConfigError {
+    Io { path: PathBuf, source: io::Error },
+    NotFound(PathBuf),
+    Parse { path: PathBuf, message: String },
+    UnsafeBasePath(PathBuf),
+    UnsafeProviderId(String),
 }
 
 #[derive(Debug)]
@@ -58,6 +68,19 @@ pub struct StoredTaskMetadata {
     pub status: Option<String>,
     pub updated_at: Option<String>,
     pub worktree_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectConfig {
+    pub path: PathBuf,
+    pub providers: Vec<ProjectProviderConfig>,
+    pub version: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectProviderConfig {
+    pub enabled: bool,
+    pub id: String,
 }
 
 impl TaskStatusTransition {
@@ -99,6 +122,40 @@ impl Error for InitConfigError {
         match self {
             Self::Io { source, .. } => Some(source),
             Self::NotDirectory(_) | Self::UnsafeBasePath(_) => None,
+        }
+    }
+}
+
+impl Display for ProjectConfigError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io { path, source } => {
+                write!(formatter, "{}: {source}", path.display())
+            }
+            Self::NotFound(path) => {
+                write!(formatter, "RaptorCode config not found: {}", path.display())
+            }
+            Self::Parse { path, message } => {
+                write!(formatter, "{}: {message}", path.display())
+            }
+            Self::UnsafeBasePath(path) => {
+                write!(formatter, "{} is not a safe project path", path.display())
+            }
+            Self::UnsafeProviderId(provider_id) => {
+                write!(formatter, "provider id is not safe: {provider_id}")
+            }
+        }
+    }
+}
+
+impl Error for ProjectConfigError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Io { source, .. } => Some(source),
+            Self::NotFound(_)
+            | Self::Parse { .. }
+            | Self::UnsafeBasePath(_)
+            | Self::UnsafeProviderId(_) => None,
         }
     }
 }
@@ -187,6 +244,36 @@ pub fn init_project_config(base_dir: &Path) -> Result<InitConfigOutcome, InitCon
         })?;
 
     Ok(InitConfigOutcome::Created(config_path))
+}
+
+pub fn read_project_config(base_dir: &Path) -> Result<ProjectConfig, ProjectConfigError> {
+    validate_project_config_base_dir(base_dir)?;
+
+    let config_path = base_dir.join(CONFIG_FILE_NAME);
+
+    let file_metadata = match fs::symlink_metadata(&config_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(ProjectConfigError::NotFound(config_path));
+        }
+        Err(source) => {
+            return Err(ProjectConfigError::Io {
+                path: config_path,
+                source,
+            });
+        }
+    };
+
+    if !file_metadata.file_type().is_file() {
+        return Err(ProjectConfigError::UnsafeBasePath(config_path));
+    }
+
+    let content = fs::read_to_string(&config_path).map_err(|source| ProjectConfigError::Io {
+        path: config_path.clone(),
+        source,
+    })?;
+
+    parse_project_config(&config_path, &content)
 }
 
 pub fn persist_task_metadata(
@@ -403,6 +490,18 @@ fn validate_base_dir(base_dir: &Path) -> Result<(), InitConfigError> {
     Ok(())
 }
 
+fn validate_project_config_base_dir(base_dir: &Path) -> Result<(), ProjectConfigError> {
+    if base_dir.as_os_str().is_empty()
+        || base_dir
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(ProjectConfigError::UnsafeBasePath(base_dir.to_path_buf()));
+    }
+
+    Ok(())
+}
+
 fn validate_task_base_dir(base_dir: &Path) -> Result<(), TaskStoreError> {
     if base_dir.as_os_str().is_empty()
         || base_dir
@@ -440,6 +539,22 @@ fn validate_task_id(task_id: &str) -> Result<(), TaskStoreError> {
         Ok(())
     } else {
         Err(TaskStoreError::UnsafeTaskId(task_id.to_owned()))
+    }
+}
+
+fn validate_provider_id(provider_id: &str) -> Result<(), ProjectConfigError> {
+    let valid = !provider_id.is_empty()
+        && !provider_id.starts_with('-')
+        && !provider_id.ends_with('-')
+        && !provider_id.contains("..")
+        && provider_id.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        });
+
+    if valid {
+        Ok(())
+    } else {
+        Err(ProjectConfigError::UnsafeProviderId(provider_id.to_owned()))
     }
 }
 
@@ -486,6 +601,119 @@ fn task_id_from_metadata_path(path: &Path) -> Option<String> {
     }
 
     Some(path.file_stem()?.to_str()?.to_owned())
+}
+
+fn parse_project_config(
+    config_path: &Path,
+    content: &str,
+) -> Result<ProjectConfig, ProjectConfigError> {
+    let mut parsed = ProjectConfig {
+        path: config_path.to_path_buf(),
+        providers: Vec::new(),
+        version: None,
+    };
+    let mut current_provider_id = None;
+
+    for (line_index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if trimmed.starts_with('[') || trimmed.ends_with(']') {
+            if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+                return Err(ProjectConfigError::Parse {
+                    path: config_path.to_path_buf(),
+                    message: format!("line {} has an invalid section header", line_index + 1),
+                });
+            }
+
+            let section = &trimmed[1..trimmed.len() - 1];
+            if let Some(provider_id) = section.strip_prefix("providers.") {
+                validate_provider_id(provider_id)?;
+                ensure_provider_config(&mut parsed.providers, provider_id);
+                current_provider_id = Some(provider_id.to_owned());
+            } else {
+                current_provider_id = None;
+            }
+
+            continue;
+        }
+
+        let (key, value) = trimmed
+            .split_once('=')
+            .ok_or_else(|| ProjectConfigError::Parse {
+                path: config_path.to_path_buf(),
+                message: format!("line {} is not a key/value pair", line_index + 1),
+            })?;
+        let key = key.trim();
+        let value = value.trim();
+
+        if let Some(provider_id) = current_provider_id.as_deref() {
+            if key == "enabled" {
+                let enabled = parse_config_bool(config_path, line_index + 1, value)?;
+                provider_config_mut(&mut parsed.providers, provider_id).enabled = enabled;
+            }
+
+            continue;
+        }
+
+        if key == "version" {
+            parsed.version = Some(
+                value
+                    .parse::<u32>()
+                    .map_err(|_| ProjectConfigError::Parse {
+                        path: config_path.to_path_buf(),
+                        message: format!("line {} has invalid version", line_index + 1),
+                    })?,
+            );
+        }
+    }
+
+    Ok(parsed)
+}
+
+fn ensure_provider_config<'a>(
+    providers: &'a mut Vec<ProjectProviderConfig>,
+    provider_id: &str,
+) -> &'a mut ProjectProviderConfig {
+    if providers
+        .iter()
+        .all(|provider| provider.id.as_str() != provider_id)
+    {
+        providers.push(ProjectProviderConfig {
+            enabled: false,
+            id: provider_id.to_owned(),
+        });
+    }
+
+    provider_config_mut(providers, provider_id)
+}
+
+fn provider_config_mut<'a>(
+    providers: &'a mut [ProjectProviderConfig],
+    provider_id: &str,
+) -> &'a mut ProjectProviderConfig {
+    providers
+        .iter_mut()
+        .find(|provider| provider.id.as_str() == provider_id)
+        .expect("provider config was inserted before mutation")
+}
+
+fn parse_config_bool(
+    config_path: &Path,
+    line_number: usize,
+    value: &str,
+) -> Result<bool, ProjectConfigError> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(ProjectConfigError::Parse {
+            path: config_path.to_path_buf(),
+            message: format!("line {line_number} has invalid boolean"),
+        }),
+    }
 }
 
 fn parse_task_metadata(
@@ -698,7 +926,11 @@ mod tests {
         let config_path = test_dir.path.join(CONFIG_FILE_NAME);
 
         assert_eq!(outcome, InitConfigOutcome::Created(config_path.clone()));
-        assert_eq!(fs::read_to_string(config_path).unwrap(), DEFAULT_CONFIG);
+        let content = fs::read_to_string(config_path).unwrap();
+
+        assert!(content.contains("version = 1"));
+        assert!(content.contains("[providers.deepseek]"));
+        assert!(content.contains("enabled = true"));
     }
 
     #[test]
@@ -718,6 +950,58 @@ mod tests {
         let error = init_project_config(Path::new("../unsafe")).unwrap_err();
 
         assert!(matches!(error, InitConfigError::UnsafeBasePath(_)));
+    }
+
+    #[test]
+    fn reads_provider_config_from_project_config() {
+        let test_dir = TestDir::create("provider-config");
+        fs::write(
+            test_dir.path.join(CONFIG_FILE_NAME),
+            "version = 1\n\n[providers.deepseek]\nenabled = true\n\n[providers.openai]\nenabled = false\n",
+        )
+        .unwrap();
+
+        let config = read_project_config(&test_dir.path).unwrap();
+
+        assert_eq!(config.version, Some(1));
+        assert_eq!(config.providers.len(), 2);
+        assert_eq!(config.providers[0].id, "deepseek");
+        assert!(config.providers[0].enabled);
+        assert_eq!(config.providers[1].id, "openai");
+        assert!(!config.providers[1].enabled);
+    }
+
+    #[test]
+    fn provider_config_handles_empty_provider_sections() {
+        let test_dir = TestDir::create("provider-config-empty");
+        fs::write(test_dir.path.join(CONFIG_FILE_NAME), "version = 1\n").unwrap();
+
+        let config = read_project_config(&test_dir.path).unwrap();
+
+        assert!(config.providers.is_empty());
+    }
+
+    #[test]
+    fn provider_config_rejects_unsafe_provider_ids() {
+        let test_dir = TestDir::create("provider-config-unsafe");
+        fs::write(
+            test_dir.path.join(CONFIG_FILE_NAME),
+            "[providers.DeepSeek]\nenabled = true\n",
+        )
+        .unwrap();
+
+        let error = read_project_config(&test_dir.path).unwrap_err();
+
+        assert!(matches!(error, ProjectConfigError::UnsafeProviderId(_)));
+    }
+
+    #[test]
+    fn missing_project_config_is_explicit() {
+        let test_dir = TestDir::create("provider-config-missing");
+
+        let error = read_project_config(&test_dir.path).unwrap_err();
+
+        assert!(matches!(error, ProjectConfigError::NotFound(_)));
     }
 
     #[test]

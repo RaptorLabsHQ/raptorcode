@@ -30,18 +30,51 @@ RaptorCode V1 should coordinate coding-agent workflows inside existing developer
 
 ## Current Implementation
 
-The repository contains a minimal Cargo workspace with crate boundaries for core metadata, task metadata, CLI, git diagnostics, tooling diagnostics, agent orchestration, providers, TUI, sandboxing, and local storage. The implemented CLI router supports `raptor init`, `raptor chat`, `raptor task`, `raptor swarm`, `raptor review`, `raptor diff`, `raptor test`, `raptor merge`, and `raptor doctor`.
+The repository contains a minimal Cargo workspace with crate boundaries for core metadata, task metadata, CLI, git diagnostics, tooling diagnostics, agent orchestration, providers, TUI, sandboxing, and local storage. The implemented CLI router supports `raptor init`, `raptor provider list`, `raptor agent list`, `raptor agent show <id>`, `raptor chat`, `raptor task`, `raptor swarm`, `raptor review`, `raptor diff`, `raptor test`, `raptor merge`, and `raptor doctor`.
 
-`raptor task "description"` validates task input, creates a deterministic isolated git worktree under `.raptor/worktrees/`, and persists task metadata under `.raptor/tasks/`. `raptor task list` and `raptor task show <id>` read that persisted metadata without modifying files. `raptor task abandon <id>` records abandoned lifecycle state without deleting metadata or worktrees. `raptor task cleanup <id>` validates the stored worktree path and removes only the associated worktree directory after exact typed confirmation. `raptor review <task-id>` and `raptor diff <task-id>` validate stored worktree paths and inspect task worktree status or diffs without modifying files. `raptor merge <task-id>` performs preflight dry-run checks only. `raptor merge <task-id> --execute` requires typed confirmation, performs supervised local merge execution for committed task branch changes, and records lifecycle state as `merged` or `merge_conflict`. The task workflow does not launch autonomous coding agents. `raptor init` and `raptor doctor` also perform meaningful work today. Other routed commands are explicit stubs until the corresponding V1 workflows are implemented.
+`raptor provider list` reads safe project configuration and reports registered provider metadata without external requests or model calls. `raptor agent list` and `raptor agent show <id>` inspect read-only local agent session state; there is no autonomous coding loop, shell execution, or file modification path. `raptor task "description"` validates task input, creates a deterministic isolated git worktree under `.raptor/worktrees/`, and persists task metadata under `.raptor/tasks/`. `raptor task list` and `raptor task show <id>` read that persisted metadata without modifying files. `raptor task abandon <id>` records abandoned lifecycle state without deleting metadata or worktrees. `raptor task cleanup <id>` validates the stored worktree path and removes only the associated worktree directory after exact typed confirmation. `raptor review <task-id>` and `raptor diff <task-id>` validate stored worktree paths and inspect task worktree status or diffs without modifying files. `raptor merge <task-id>` performs preflight dry-run checks only. `raptor merge <task-id> --execute` requires typed confirmation, performs supervised local merge execution for committed task branch changes, and records lifecycle state as `merged` or `merge_conflict`. The task workflow does not launch autonomous coding agents. `raptor init` and `raptor doctor` also perform meaningful work today. Other routed commands are explicit stubs until the corresponding V1 workflows are implemented.
+
+## Provider Boundary
+
+`raptor-providers` owns provider and model metadata only in this foundation.
+
+- Built-in provider catalog lists DeepSeek first, followed by future OpenAI/Codex, Claude, Gemini, and local model boundaries.
+- Provider ids and model ids are validated before use.
+- Provider capabilities describe chat, streaming, system prompt, tool call, local, and network requirements.
+- Completion request and response types exist for future integration, but provider execution returns an explicit disabled error today.
+- No API keys, secrets, network calls, async runtime, or external service clients are implemented.
+
+`raptor-store` parses provider configuration from `raptor.toml` using the existing local config boundary. New project configs include:
+
+```toml
+[providers.deepseek]
+enabled = true
+```
+
+Provider configuration currently records enablement only. It does not contain API keys or secrets.
+
+## Agent Session Boundary
+
+`raptor-agent` owns local agent session state only in this foundation.
+
+- Agent ids are validated before lookup.
+- Sessions model role, lifecycle state, execution mode, optional task binding, optional provider/model metadata, messages, events, and audit entries.
+- The default execution mode is `read_only`.
+- Read-only mode does not allow file modification, shell execution, or model calls.
+- Session metadata can round-trip through a minimal local text representation for future persistence.
+
+No agent session is persisted or executed yet. `raptor agent list` currently reports empty local state, and `raptor agent show <id>` validates the id before returning a clear not-found result.
 
 ## Task Workflow Boundaries
 
 - `raptor-core`: owns task identifiers, task status, task metadata, and worktree information models.
 - `raptor-cli`: routes CLI commands and coordinates task setup, inspection, lifecycle, merge, and cleanup workflows.
 - `raptor-git`: inspects repository roots, validates worktree and branch names, creates git worktrees, performs read-only worktree review and diff inspection, executes supervised local merges, and removes validated task worktree directories.
-- `raptor-store`: persists local RaptorCode config, reads or writes task metadata, and records lifecycle status transitions using the existing `.raptor/tasks/*.toml` format.
+- `raptor-store`: persists local RaptorCode config, reads provider configuration, reads or writes task metadata, and records lifecycle status transitions using the existing `.raptor/tasks/*.toml` format.
+- `raptor-providers`: owns provider ids, model ids, capability metadata, completion request/response shapes, and the disabled provider trait boundary.
+- `raptor-agent`: owns read-only local session state, lifecycle models, task binding metadata, messages, events, and audit entry structures.
 
-The current task workflow is intentionally local and supervised. Task creation and inspection prepare isolated work but do not call model providers, start background agents, commit changes, or push to remotes. Merge execution is available only through the explicit `--execute` path after preflight and exact typed confirmation.
+The current task workflow is intentionally local and supervised. Task creation and inspection prepare isolated work but do not call model providers, start background agents, commit changes, or push to remotes. The current provider and agent foundations are inspection-only. Merge execution is available only through the explicit `--execute` path after preflight and exact typed confirmation.
 
 ## Merge Boundary
 

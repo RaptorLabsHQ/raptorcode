@@ -39,7 +39,32 @@ Security-relevant actions should be logged or surfaced clearly to the developer:
 - Shell injection through generated commands.
 - Accidental overwrite of user work.
 - Unsafely merging unreviewed agent output.
+- Uncontrolled model or provider execution.
+- Secret leakage through provider configuration.
 - Leaking secrets through logs or generated files.
+
+## Provider And Agent Foundation Controls
+
+`raptor provider list`, `raptor agent list`, and `raptor agent show <id>` are inspection-only commands.
+
+Current provider controls:
+
+- Provider ids are validated before configuration is accepted.
+- Provider metadata is built in and local.
+- DeepSeek is listed first for future integration, with OpenAI/Codex, Claude, Gemini, and local model boundaries represented as future providers.
+- `raptor.toml` supports provider enablement metadata only.
+- No API keys, tokens, secrets, endpoints, or credentials are stored in `raptor.toml`.
+- No external requests, model calls, streaming connections, or provider SDKs are implemented.
+- Completion execution returns an explicit disabled/not-implemented error.
+
+Current agent controls:
+
+- Agent ids are validated before lookup.
+- Agent sessions are local-only and read-only in this foundation.
+- `raptor agent list` starts from empty local session state.
+- `raptor agent show <id>` validates the id and returns a clear not-found error when no session exists.
+- Read-only agent execution mode does not allow file modification, shell execution, or model calls.
+- Agent session models support future audit entries, but no autonomous coding loop exists.
 
 ## Implemented Task Workflow Controls
 
@@ -66,7 +91,7 @@ Security-relevant actions should be logged or surfaced clearly to the developer:
 - Records task status as `merge_conflict` when merge execution reaches a conflict.
 - Supports `raptor task abandon <task-id>` to mark an unmerged task as `abandoned` without deleting metadata or worktrees.
 - Supports `raptor task cleanup <task-id>` for validated cleanup of `merged`, `completed`, or `abandoned` task worktrees only.
-- Does not launch autonomous agents, execute task-provided commands, install dependencies, or push remotes.
+- Does not launch autonomous agents, execute task-provided commands, install dependencies, call provider APIs, or push remotes.
 
 Known gap: if metadata persistence fails before a task record exists, manual cleanup may still be required because cleanup is task-metadata driven.
 
@@ -150,4 +175,4 @@ Auditability requirements:
 
 ## Current Status
 
-The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for task setup, inspection, lifecycle updates, cleanup, and merge execution, and remain design requirements for future agent and TUI workflows.
+The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor agent list`, `raptor agent show <id>`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for provider metadata inspection, read-only agent session inspection, task setup, task inspection, lifecycle updates, cleanup, and merge execution. They remain design requirements for future model execution, autonomous agent, and TUI workflows.

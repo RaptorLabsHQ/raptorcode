@@ -8,8 +8,10 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+raptor-agent.workspace = true
 raptor-core.workspace = true
 raptor-git.workspace = true
+raptor-providers.workspace = true
 raptor-store.workspace = true
 raptor-tools.workspace = true
 

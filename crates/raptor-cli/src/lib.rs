@@ -1,8 +1,9 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io::BufRead;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use raptor_agent::{AgentId, AgentSession, AgentSessionRegistry};
 use raptor_core::{project_description, project_name, version, TaskId, TaskMetadata, TaskStatus};
 use raptor_git::{
     create_task_worktree, diff_task_worktree, execute_task_merge, execute_task_worktree_cleanup,
@@ -10,21 +11,24 @@ use raptor_git::{
     plan_task_worktree_cleanup, preflight_task_merge, GitError, MergeExecution, MergePreflight,
     RepositoryRoot, WorktreeCleanupPlan, WorktreeDiff, WorktreeReview,
 };
+use raptor_providers::{ProviderCatalog, ProviderConfiguration, ProviderId, ProviderSummary};
 use raptor_store::{
-    init_project_config, list_task_metadata, persist_task_metadata, read_task_metadata,
-    task_metadata_exists, update_task_status, InitConfigOutcome, StoredTaskMetadata,
-    TaskStatusTransition,
+    init_project_config, list_task_metadata, persist_task_metadata, read_project_config,
+    read_task_metadata, task_metadata_exists, update_task_status, InitConfigOutcome,
+    ProjectConfigError, StoredTaskMetadata, TaskStatusTransition,
 };
 use raptor_tools::command_version;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
+    Agent(AgentCommand),
     Chat,
     Diff { task_id: String },
     Doctor,
     Help,
     Init,
     Merge(MergeCommand),
+    Provider(ProviderCommand),
     Review { task_id: String },
     Swarm,
     Task(TaskCommand),
@@ -33,9 +37,20 @@ pub enum CliCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentCommand {
+    List,
+    Show { id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MergeCommand {
     DryRun { task_id: String },
     Execute { task_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderCommand {
+    List,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,7 +108,30 @@ where
         [arg] if arg == "--help" || arg == "-h" => Ok(CliCommand::Help),
         [arg] if arg == "--version" || arg == "-V" => Ok(CliCommand::Version),
         [arg] if arg == "init" => Ok(CliCommand::Init),
+        [arg] if arg == "agent" => Err(CliError::new("agent command is required")),
+        [arg, subcommand] if arg == "agent" && subcommand == "list" => {
+            Ok(CliCommand::Agent(AgentCommand::List))
+        }
+        [arg, subcommand, ..] if arg == "agent" && subcommand == "list" => {
+            Err(CliError::new("agent list accepts no additional arguments"))
+        }
+        [arg, subcommand] if arg == "agent" && subcommand == "show" => {
+            Err(CliError::new("agent id is required"))
+        }
+        [arg, subcommand, id] if arg == "agent" && subcommand == "show" => {
+            Ok(CliCommand::Agent(AgentCommand::Show { id: id.to_owned() }))
+        }
+        [arg, subcommand, ..] if arg == "agent" && subcommand == "show" => {
+            Err(CliError::new("agent show accepts exactly one agent id"))
+        }
         [arg] if arg == "chat" => Ok(CliCommand::Chat),
+        [arg] if arg == "provider" => Err(CliError::new("provider command is required")),
+        [arg, subcommand] if arg == "provider" && subcommand == "list" => {
+            Ok(CliCommand::Provider(ProviderCommand::List))
+        }
+        [arg, subcommand, ..] if arg == "provider" && subcommand == "list" => Err(CliError::new(
+            "provider list accepts no additional arguments",
+        )),
         [arg] if arg == "task" => Err(CliError::new("task command is required")),
         [arg, subcommand] if arg == "task" && subcommand == "abandon" => {
             Err(CliError::new("task id is required"))
@@ -180,6 +218,8 @@ where
     S: Into<String>,
 {
     match parse_args(args)? {
+        CliCommand::Agent(AgentCommand::List) => list_agents(),
+        CliCommand::Agent(AgentCommand::Show { id }) => show_agent(&id),
         CliCommand::Chat => Ok(render_stub("chat")),
         CliCommand::Diff { task_id } => diff_task(current_dir, &task_id),
         CliCommand::Doctor => Ok(render_doctor(current_dir)),
@@ -189,6 +229,7 @@ where
         CliCommand::Merge(MergeCommand::Execute { task_id }) => {
             merge_task_execute(current_dir, &task_id, confirmation_input)
         }
+        CliCommand::Provider(ProviderCommand::List) => list_providers(current_dir),
         CliCommand::Review { task_id } => review_task(current_dir, &task_id),
         CliCommand::Swarm => Ok(render_stub("swarm")),
         CliCommand::Task(TaskCommand::Abandon { id }) => abandon_task(current_dir, &id),
@@ -211,7 +252,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -227,6 +268,53 @@ pub fn init_project(current_dir: &Path) -> Result<String, CliError> {
             path.display()
         )),
     }
+}
+
+pub fn list_providers(current_dir: &Path) -> Result<String, CliError> {
+    let config_dir = project_config_dir(current_dir);
+    let catalog = ProviderCatalog::built_in();
+    let (config_status, configurations) = match read_project_config(&config_dir) {
+        Ok(config) => {
+            let configurations = config
+                .providers
+                .iter()
+                .map(|provider| {
+                    ProviderId::new(provider.id.clone())
+                        .map(|provider_id| {
+                            ProviderConfiguration::new(provider_id, provider.enabled)
+                        })
+                        .map_err(|error| CliError::new(error.to_string()))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            (
+                format!("configured ({})", config.path.display()),
+                configurations,
+            )
+        }
+        Err(ProjectConfigError::NotFound(path)) => (
+            format!("not configured ({} not found)", path.display()),
+            Vec::new(),
+        ),
+        Err(error) => return Err(CliError::new(error.to_string())),
+    };
+    let summaries = catalog.summaries(&configurations);
+
+    Ok(render_provider_list(&config_status, &summaries))
+}
+
+pub fn list_agents() -> Result<String, CliError> {
+    Ok(render_agent_list(&AgentSessionRegistry::empty()))
+}
+
+pub fn show_agent(agent_id: &str) -> Result<String, CliError> {
+    let agent_id = AgentId::new(agent_id).map_err(|error| CliError::new(error.to_string()))?;
+    let registry = AgentSessionRegistry::empty();
+    let session = registry
+        .find(&agent_id)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(render_agent_session(session))
 }
 
 pub fn create_task(current_dir: &Path, description: &str) -> Result<String, CliError> {
@@ -588,6 +676,112 @@ pub fn render_doctor(current_dir: &Path) -> String {
     }
 
     output
+}
+
+fn project_config_dir(current_dir: &Path) -> PathBuf {
+    inspect_repository_root(current_dir)
+        .map(|repository_root| repository_root.path().to_path_buf())
+        .unwrap_or_else(|_| current_dir.to_path_buf())
+}
+
+fn render_provider_list(config_status: &str, providers: &[ProviderSummary]) -> String {
+    let mut output = format!("Provider configuration: {config_status}\n");
+
+    if providers.is_empty() {
+        output.push_str("No RaptorCode providers registered.\n");
+        output.push_str("No external requests, model calls, or API integrations are enabled.\n");
+        return output;
+    }
+
+    output.push_str("Provider | Name | Status | Registered | Default model | Capabilities\n");
+    output.push_str("--- | --- | --- | --- | --- | ---\n");
+
+    for provider in providers {
+        let status = if provider.enabled {
+            "enabled"
+        } else if provider.configured {
+            "disabled"
+        } else {
+            "not configured"
+        };
+        let default_model = provider
+            .default_model
+            .as_ref()
+            .map(|model| model.as_str())
+            .unwrap_or("-");
+        let capabilities = provider.capabilities.labels();
+        let capabilities = if capabilities.is_empty() {
+            "-".to_owned()
+        } else {
+            capabilities.join(", ")
+        };
+
+        output.push_str(&format!(
+            "{} | {} | {} | {} | {} | {}\n",
+            provider.provider_id.as_str(),
+            provider.display_name,
+            status,
+            if provider.registered { "yes" } else { "no" },
+            default_model,
+            capabilities
+        ));
+    }
+
+    output.push_str("Execution: disabled; provider list performs no network or model calls.\n");
+    output
+}
+
+fn render_agent_list(registry: &AgentSessionRegistry) -> String {
+    if registry.sessions().is_empty() {
+        return "No RaptorCode agent sessions found.\nExecution: read-only foundation only; no model calls, shell execution, or file modification are configured.\n".to_owned();
+    }
+
+    let mut output = String::from("ID | Role | State | Execution mode | Provider | Model | Task\n");
+    output.push_str("--- | --- | --- | --- | --- | --- | ---\n");
+
+    for session in registry.sessions() {
+        output.push_str(&format!(
+            "{} | {} | {} | {} | {} | {} | {}\n",
+            session.id.as_str(),
+            session.role.as_str(),
+            session.state.as_str(),
+            session.execution_mode.as_str(),
+            display_optional(session.provider_id.as_deref()),
+            display_optional(session.model_id.as_deref()),
+            session
+                .task_binding
+                .as_ref()
+                .map(|binding| binding.task_id.as_str())
+                .unwrap_or("-")
+        ));
+    }
+
+    output
+}
+
+fn render_agent_session(session: &AgentSession) -> String {
+    format!(
+        "Agent: {}\nRole: {}\nState: {}\nExecution mode: {}\nProvider: {}\nModel: {}\nTask: {}\nWorktree: {}\nMessages: {}\nEvents: {}\nAudit entries: {}\n",
+        session.id.as_str(),
+        session.role.as_str(),
+        session.state.as_str(),
+        session.execution_mode.as_str(),
+        display_optional(session.provider_id.as_deref()),
+        display_optional(session.model_id.as_deref()),
+        session
+            .task_binding
+            .as_ref()
+            .map(|binding| binding.task_id.as_str())
+            .unwrap_or("-"),
+        session
+            .task_binding
+            .as_ref()
+            .map(|binding| binding.worktree_path.display().to_string())
+            .unwrap_or_else(|| "-".to_owned()),
+        session.messages.len(),
+        session.events.len(),
+        session.audit_entries.len()
+    )
 }
 
 fn render_stub(command: &str) -> String {
@@ -1018,6 +1212,24 @@ mod tests {
     }
 
     #[test]
+    fn parses_provider_and_agent_inspection_commands() {
+        assert_eq!(
+            parse_args(["provider", "list"]).unwrap(),
+            CliCommand::Provider(ProviderCommand::List)
+        );
+        assert_eq!(
+            parse_args(["agent", "list"]).unwrap(),
+            CliCommand::Agent(AgentCommand::List)
+        );
+        assert_eq!(
+            parse_args(["agent", "show", "agent-1"]).unwrap(),
+            CliCommand::Agent(AgentCommand::Show {
+                id: "agent-1".to_owned()
+            })
+        );
+    }
+
+    #[test]
     fn parses_review_and_diff_task_ids() {
         assert_eq!(
             parse_args(["review", "task-123"]).unwrap(),
@@ -1144,6 +1356,17 @@ mod tests {
     }
 
     #[test]
+    fn rejects_missing_provider_and_agent_subcommands() {
+        let provider_error = parse_args(["provider"]).unwrap_err();
+        let agent_error = parse_args(["agent"]).unwrap_err();
+        let agent_show_error = parse_args(["agent", "show"]).unwrap_err();
+
+        assert!(provider_error.to_string().contains("provider command"));
+        assert!(agent_error.to_string().contains("agent command"));
+        assert!(agent_show_error.to_string().contains("agent id"));
+    }
+
+    #[test]
     fn renders_version_output() {
         assert_eq!(render_version(), "raptor 0.1.0\n");
     }
@@ -1180,6 +1403,53 @@ mod tests {
 
         assert!(output.contains("not overwritten"));
         assert_eq!(fs::read_to_string(config_path).unwrap(), "custom = true\n");
+    }
+
+    #[test]
+    fn provider_list_handles_missing_config_without_writing_files() {
+        let test_dir = TestDir::create("provider-list-missing");
+        let config_path = test_dir.path.join(CONFIG_FILE_NAME);
+
+        let output = run(["provider", "list"], &test_dir.path).unwrap();
+
+        assert!(output.contains("Provider configuration: not configured"));
+        assert!(output.contains("deepseek"));
+        assert!(output.contains("not configured"));
+        assert!(output.contains("Execution: disabled"));
+        assert!(!config_path.exists());
+    }
+
+    #[test]
+    fn provider_list_reads_deepseek_config() {
+        let test_dir = TestDir::create("provider-list-configured");
+
+        run(["init"], &test_dir.path).unwrap();
+        let output = run(["provider", "list"], &test_dir.path).unwrap();
+
+        assert!(output.contains("Provider configuration: configured"));
+        assert!(output.contains("deepseek"));
+        assert!(output.contains("enabled"));
+        assert!(output.contains("deepseek-chat"));
+        assert!(output.contains("network-required"));
+    }
+
+    #[test]
+    fn agent_list_handles_empty_local_state() {
+        let output = run(["agent", "list"], Path::new(".")).unwrap();
+
+        assert_eq!(
+            output,
+            "No RaptorCode agent sessions found.\nExecution: read-only foundation only; no model calls, shell execution, or file modification are configured.\n"
+        );
+    }
+
+    #[test]
+    fn agent_show_validates_id_and_reports_missing_session() {
+        let unsafe_error = run(["agent", "show", "../agent"], Path::new(".")).unwrap_err();
+        let missing_error = run(["agent", "show", "agent-1"], Path::new(".")).unwrap_err();
+
+        assert!(unsafe_error.to_string().contains("not safe"));
+        assert!(missing_error.to_string().contains("not found"));
     }
 
     #[test]
