@@ -28,6 +28,8 @@ V1 is not a full terminal emulator replacement. It will focus on supervised codi
    - Commands to create, list, inspect, and clean isolated worktrees.
    - Supervised merge preflight for task worktrees.
    - Typed `MERGE <task-id>` confirmation before supervised local merge execution.
+   - Task lifecycle status updates for merge success, merge conflict, and abandonment.
+   - Typed `CLEANUP <task-id>` confirmation before deleting validated task worktrees.
    - Explicit safety checks before destructive operations.
 
 4. TUI workflow

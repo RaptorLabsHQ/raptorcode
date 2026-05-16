@@ -21,6 +21,8 @@ Implemented today:
 - `raptor task "description"` safe task workflow foundation.
 - `raptor task list`.
 - `raptor task show <id>`.
+- `raptor task abandon <id>`.
+- `raptor task cleanup <id>`.
 - `raptor review <task-id>`.
 - `raptor diff <task-id>`.
 - `raptor merge <task-id>` preflight dry run.
@@ -51,11 +53,13 @@ Current controls:
 - No commits, merges, or pushes are performed by `raptor task`.
 - `raptor review` and `raptor diff` are read-only inspection commands.
 - `raptor merge` runs preflight checks and prints a dry-run summary only; no merge is executed.
-- `raptor merge <task-id> --execute` runs the same preflight checks, requires exact typed confirmation `MERGE <task-id>`, and performs a local git merge from the task branch without pushing or deleting the worktree.
+- `raptor merge <task-id> --execute` runs the same preflight checks, requires exact typed confirmation `MERGE <task-id>`, performs a local git merge from the task branch, and records task status as `merged` or `merge_conflict`.
+- `raptor task cleanup <id>` deletes only the validated task worktree after exact typed confirmation `CLEANUP <task-id>` and only for `merged`, `completed`, or `abandoned` tasks.
+- Cleanup preserves task metadata, branches, and remotes.
 
 Known early gap:
 
-- If task metadata persistence fails after git worktree creation, manual cleanup may be required until an explicit cleanup workflow is implemented.
+- If task metadata persistence fails before a task record is available, manual cleanup may still be required because cleanup is task-metadata driven.
 
 ## Command Examples
 
@@ -68,6 +72,8 @@ cargo run -p raptor-cli -- init
 cargo run -p raptor-cli -- task "describe the supervised task"
 cargo run -p raptor-cli -- task list
 cargo run -p raptor-cli -- task show <id>
+cargo run -p raptor-cli -- task abandon <id>
+cargo run -p raptor-cli -- task cleanup <id>
 cargo run -p raptor-cli -- review <task-id>
 cargo run -p raptor-cli -- diff <task-id>
 cargo run -p raptor-cli -- merge <task-id>
@@ -83,6 +89,8 @@ raptor init
 raptor task "describe the supervised task"
 raptor task list
 raptor task show <id>
+raptor task abandon <id>
+raptor task cleanup <id>
 raptor review <task-id>
 raptor diff <task-id>
 raptor merge <task-id>
@@ -112,6 +120,9 @@ Task inspection commands are read-only:
 - `raptor diff <task-id>` prints unstaged and staged git diffs from the task worktree.
 - `raptor merge <task-id>` validates merge preconditions and prints a dry-run summary without merging.
 - `raptor merge <task-id> --execute` validates preconditions, requires `MERGE <task-id>`, and merges committed task branch changes into the current target branch.
+- Successful merge execution records task status as `merged`; merge conflicts record `merge_conflict`; failed preflight does not mark a task merged.
+- `raptor task abandon <id>` marks an unmerged task as `abandoned` without deleting metadata or the worktree.
+- `raptor task cleanup <id>` validates the stored worktree path, prints a cleanup plan, requires `CLEANUP <task-id>`, and deletes only the associated worktree directory.
 
 ## Repository Layout
 

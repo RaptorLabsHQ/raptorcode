@@ -44,6 +44,11 @@ pub struct WorktreeDiff {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeCleanupPlan {
+    worktree_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergePreflight {
     pub changed_files: Vec<String>,
     pub status_lines: Vec<String>,
@@ -261,6 +266,27 @@ pub fn diff_task_worktree(
     })
 }
 
+pub fn plan_task_worktree_cleanup(
+    repository_root: &RepositoryRoot,
+    task_id: &str,
+    stored_worktree_path: &Path,
+) -> Result<WorktreeCleanupPlan, GitError> {
+    let worktree_path =
+        validate_task_worktree_path(repository_root, task_id, stored_worktree_path)?;
+
+    Ok(WorktreeCleanupPlan { worktree_path })
+}
+
+pub fn execute_task_worktree_cleanup(plan: &WorktreeCleanupPlan) -> Result<PathBuf, GitError> {
+    ensure_existing_directory(&plan.worktree_path, &plan.worktree_path)?;
+    fs::remove_dir_all(&plan.worktree_path).map_err(|source| GitError::Io {
+        path: plan.worktree_path.clone(),
+        source,
+    })?;
+
+    Ok(plan.worktree_path.clone())
+}
+
 pub fn preflight_task_merge(
     repository_root: &RepositoryRoot,
     task_id: &str,
@@ -416,6 +442,12 @@ pub fn execute_task_merge(
 impl RepositoryRoot {
     pub fn path(&self) -> &Path {
         &self.path
+    }
+}
+
+impl WorktreeCleanupPlan {
+    pub fn worktree_path(&self) -> &Path {
+        &self.worktree_path
     }
 }
 

@@ -5,13 +5,15 @@ use std::path::Path;
 
 use raptor_core::{project_description, project_name, version, TaskId, TaskMetadata, TaskStatus};
 use raptor_git::{
-    create_task_worktree, diff_task_worktree, execute_task_merge, inspect_repository,
-    inspect_repository_root, inspect_task_worktree, plan_task_worktree, preflight_task_merge,
-    MergeExecution, MergePreflight, RepositoryRoot, WorktreeDiff, WorktreeReview,
+    create_task_worktree, diff_task_worktree, execute_task_merge, execute_task_worktree_cleanup,
+    inspect_repository, inspect_repository_root, inspect_task_worktree, plan_task_worktree,
+    plan_task_worktree_cleanup, preflight_task_merge, GitError, MergeExecution, MergePreflight,
+    RepositoryRoot, WorktreeCleanupPlan, WorktreeDiff, WorktreeReview,
 };
 use raptor_store::{
     init_project_config, list_task_metadata, persist_task_metadata, read_task_metadata,
-    task_metadata_exists, InitConfigOutcome, StoredTaskMetadata,
+    task_metadata_exists, update_task_status, InitConfigOutcome, StoredTaskMetadata,
+    TaskStatusTransition,
 };
 use raptor_tools::command_version;
 
@@ -38,6 +40,8 @@ pub enum MergeCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskCommand {
+    Abandon { id: String },
+    Cleanup { id: String },
     Create { description: String },
     List,
     Show { id: String },
@@ -91,6 +95,24 @@ where
         [arg] if arg == "init" => Ok(CliCommand::Init),
         [arg] if arg == "chat" => Ok(CliCommand::Chat),
         [arg] if arg == "task" => Err(CliError::new("task command is required")),
+        [arg, subcommand] if arg == "task" && subcommand == "abandon" => {
+            Err(CliError::new("task id is required"))
+        }
+        [arg, subcommand, id] if arg == "task" && subcommand == "abandon" => {
+            Ok(CliCommand::Task(TaskCommand::Abandon { id: id.to_owned() }))
+        }
+        [arg, subcommand, ..] if arg == "task" && subcommand == "abandon" => {
+            Err(CliError::new("task abandon accepts exactly one task id"))
+        }
+        [arg, subcommand] if arg == "task" && subcommand == "cleanup" => {
+            Err(CliError::new("task id is required"))
+        }
+        [arg, subcommand, id] if arg == "task" && subcommand == "cleanup" => {
+            Ok(CliCommand::Task(TaskCommand::Cleanup { id: id.to_owned() }))
+        }
+        [arg, subcommand, ..] if arg == "task" && subcommand == "cleanup" => {
+            Err(CliError::new("task cleanup accepts exactly one task id"))
+        }
         [arg, subcommand] if arg == "task" && subcommand == "list" => {
             Ok(CliCommand::Task(TaskCommand::List))
         }
@@ -169,6 +191,10 @@ where
         }
         CliCommand::Review { task_id } => review_task(current_dir, &task_id),
         CliCommand::Swarm => Ok(render_stub("swarm")),
+        CliCommand::Task(TaskCommand::Abandon { id }) => abandon_task(current_dir, &id),
+        CliCommand::Task(TaskCommand::Cleanup { id }) => {
+            cleanup_task(current_dir, &id, confirmation_input)
+        }
         CliCommand::Task(TaskCommand::Create { description }) => {
             create_task(current_dir, &description)
         }
@@ -185,7 +211,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor swarm\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -278,6 +304,110 @@ pub fn show_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> 
     Ok(render_task_details(&task))
 }
 
+pub fn abandon_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> {
+    let repository_root =
+        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let task = read_task_metadata(repository_root.path(), task_id)
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let status = task.status.as_deref().unwrap_or("unknown");
+
+    if matches!(status, "merged" | "completed") {
+        return Err(CliError::new(format!(
+            "task status {status} cannot be abandoned"
+        )));
+    }
+
+    let updated = update_task_status(
+        repository_root.path(),
+        &task.id,
+        TaskStatusTransition::Abandoned,
+    )
+    .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(format!(
+        "Task abandoned\nTask: {}\nStatus: {}\nWorktree retained: {}\nMetadata: {}\n",
+        updated.id,
+        display_optional(updated.status.as_deref()),
+        display_path_optional(updated.worktree_path.as_ref()),
+        updated.metadata_path.display()
+    ))
+}
+
+pub fn cleanup_task(
+    current_dir: &Path,
+    task_id: &str,
+    confirmation_input: Option<&mut dyn BufRead>,
+) -> Result<String, CliError> {
+    let repository_root =
+        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let task = read_task_metadata(repository_root.path(), task_id)
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let status = task.status.as_deref().unwrap_or("unknown");
+    let worktree_path = task
+        .worktree_path
+        .as_ref()
+        .ok_or_else(|| CliError::new("task metadata is missing worktree_path"))?;
+    let plan = plan_task_worktree_cleanup(&repository_root, &task.id, worktree_path)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    if !task_status_allows_cleanup(status) {
+        return Err(CliError::new(format!(
+            "task status {status} is not safe for cleanup; expected merged, completed, or abandoned"
+        )));
+    }
+
+    let mut output = render_cleanup_plan(&task, status, &plan);
+    let confirmation_phrase = format!("CLEANUP {}", task.id);
+
+    output.push_str(&format!("Required confirmation: {confirmation_phrase}\n"));
+
+    let Some(input) = confirmation_input else {
+        return Err(CliError::with_output(
+            "task cleanup requires interactive confirmation; aborting",
+            output,
+        ));
+    };
+
+    let mut confirmation = String::new();
+    input.read_line(&mut confirmation).map_err(|_| {
+        CliError::with_output("failed to read cleanup confirmation", output.clone())
+    })?;
+    let confirmation = strip_line_ending(&confirmation);
+
+    if confirmation.is_empty() {
+        return Err(CliError::with_output(
+            "cleanup confirmation was empty; aborting",
+            output,
+        ));
+    }
+
+    if confirmation != confirmation_phrase {
+        return Err(CliError::with_output(
+            "cleanup confirmation did not match; aborting",
+            output,
+        ));
+    }
+
+    output.push_str("Confirmation result: matched\n");
+    match execute_task_worktree_cleanup(&plan) {
+        Ok(deleted_path) => {
+            output.push_str("Cleanup result: completed\n");
+            output.push_str(&format!("Deleted worktree: {}\n", deleted_path.display()));
+            output.push_str(&format!(
+                "Task metadata retained: {}\n",
+                task.metadata_path.display()
+            ));
+            output.push_str("Branch deletion: not performed\n");
+            output.push_str("Remote push: not performed\n");
+            Ok(output)
+        }
+        Err(error) => {
+            output.push_str("Cleanup result: failed\n");
+            Err(CliError::with_output(error.to_string(), output))
+        }
+    }
+}
+
 pub fn review_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> {
     let repository_root =
         inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
@@ -357,12 +487,41 @@ pub fn merge_task_execute(
         .worktree_path
         .as_ref()
         .ok_or_else(|| CliError::new("task metadata is missing worktree_path"))?;
-    let execution =
-        execute_task_merge(&repository_root, &task.id, worktree_path).map_err(|error| {
+    let execution = match execute_task_merge(&repository_root, &task.id, worktree_path) {
+        Ok(execution) => execution,
+        Err(error) => {
             output.push_str("Merge execution result: failed\n");
-            CliError::with_output(error.to_string(), output.clone())
-        })?;
+            if matches!(&error, GitError::MergeConflict { .. }) {
+                match update_task_status(
+                    repository_root.path(),
+                    &task.id,
+                    TaskStatusTransition::MergeConflict,
+                ) {
+                    Ok(updated) => output.push_str(&render_task_status_update(&updated)),
+                    Err(status_error) => {
+                        output.push_str(&format!("Task status update failed: {status_error}\n"))
+                    }
+                }
+            }
+
+            return Err(CliError::with_output(error.to_string(), output));
+        }
+    };
     output.push_str(&render_merge_execution(&execution));
+    match update_task_status(
+        repository_root.path(),
+        &task.id,
+        TaskStatusTransition::Merged,
+    ) {
+        Ok(updated) => output.push_str(&render_task_status_update(&updated)),
+        Err(error) => {
+            output.push_str("Task status update failed\n");
+            return Err(CliError::with_output(
+                format!("merge completed but failed to update task metadata: {error}"),
+                output,
+            ));
+        }
+    }
 
     Ok(output)
 }
@@ -437,11 +596,15 @@ fn render_stub(command: &str) -> String {
 
 fn render_task_details(task: &StoredTaskMetadata) -> String {
     format!(
-        "Task: {}\nStatus: {}\nDescription: {}\nCreated: {}\nBranch: {}\nRepository root: {}\nWorktree: {}\nMetadata: {}\n",
+        "Task: {}\nStatus: {}\nDescription: {}\nCreated: {}\nUpdated: {}\nMerged: {}\nConflict: {}\nAbandoned: {}\nBranch: {}\nRepository root: {}\nWorktree: {}\nMetadata: {}\n",
         task.id,
         display_optional(task.status.as_deref()),
         display_optional(task.description.as_deref()),
         display_optional(task.created_at.as_deref()),
+        display_optional(task.updated_at.as_deref()),
+        display_optional(task.merged_at.as_deref()),
+        display_optional(task.conflict_at.as_deref()),
+        display_optional(task.abandoned_at.as_deref()),
         display_optional(task.branch.as_deref()),
         display_path_optional(task.repository_root.as_ref()),
         display_path_optional(task.worktree_path.as_ref()),
@@ -528,6 +691,20 @@ fn render_merge_preflight(task: &StoredTaskMetadata, preflight: &MergePreflight)
     output
 }
 
+fn render_cleanup_plan(
+    task: &StoredTaskMetadata,
+    status: &str,
+    plan: &WorktreeCleanupPlan,
+) -> String {
+    format!(
+        "Task cleanup plan\nTask: {}\nStatus: {}\nDelete worktree: {}\nRetain metadata: {}\nBranch deletion: not performed\nRemote push: not performed\n",
+        task.id,
+        status,
+        plan.worktree_path().display(),
+        task.metadata_path.display()
+    )
+}
+
 fn render_merge_execution(execution: &MergeExecution) -> String {
     let mut output = format!(
         "Merge execution result: completed\nTarget repository: {}\nTarget branch: {}\nSource branch: {}\nWorktree retained: {}\nRemote push: not performed\n",
@@ -580,6 +757,16 @@ fn render_merge_execution(execution: &MergeExecution) -> String {
     output
 }
 
+fn render_task_status_update(task: &StoredTaskMetadata) -> String {
+    format!(
+        "Task status updated\nTask: {}\nStatus: {}\nUpdated: {}\nMetadata: {}\n",
+        task.id,
+        display_optional(task.status.as_deref()),
+        display_optional(task.updated_at.as_deref()),
+        task.metadata_path.display()
+    )
+}
+
 fn push_diff_section(output: &mut String, diff: &str) {
     if diff.trim().is_empty() {
         output.push_str("  (none)\n");
@@ -603,6 +790,10 @@ fn display_path_optional(value: Option<&std::path::PathBuf>) -> String {
         .unwrap_or_else(|| "-".to_owned())
 }
 
+fn task_status_allows_cleanup(status: &str) -> bool {
+    matches!(status, "merged" | "completed" | "abandoned")
+}
+
 fn strip_line_ending(value: &str) -> &str {
     value
         .strip_suffix("\r\n")
@@ -614,7 +805,7 @@ fn strip_line_ending(value: &str) -> &str {
 mod tests {
     use super::*;
     use raptor_core::TaskId;
-    use raptor_store::CONFIG_FILE_NAME;
+    use raptor_store::{read_task_metadata, CONFIG_FILE_NAME};
     use std::fs;
     use std::io::Cursor;
     use std::path::PathBuf;
@@ -749,13 +940,32 @@ mod tests {
         current_dir: &Path,
         input: &str,
     ) -> Result<String, CliError> {
+        run_with_confirmation_input(["merge", task_id.as_str(), "--execute"], current_dir, input)
+    }
+
+    fn run_task_cleanup_with_input(
+        task_id: &TaskId,
+        current_dir: &Path,
+        input: &str,
+    ) -> Result<String, CliError> {
+        run_with_confirmation_input(["task", "cleanup", task_id.as_str()], current_dir, input)
+    }
+
+    fn run_with_confirmation_input<const N: usize>(
+        args: [&str; N],
+        current_dir: &Path,
+        input: &str,
+    ) -> Result<String, CliError> {
         let mut input = Cursor::new(input.as_bytes());
 
-        run_with_merge_confirmation(
-            ["merge", task_id.as_str(), "--execute"],
-            current_dir,
-            Some(&mut input),
-        )
+        run_with_merge_confirmation(args, current_dir, Some(&mut input))
+    }
+
+    fn task_status(repository_root: &Path, task_id: &TaskId) -> String {
+        read_task_metadata(repository_root, task_id.as_str())
+            .unwrap()
+            .status
+            .unwrap()
     }
 
     fn changed_merge_task(name: &str, description: &str) -> (TestDir, TaskId) {
@@ -862,6 +1072,18 @@ mod tests {
         assert_eq!(
             parse_args(["task", "show", "task-123"]).unwrap(),
             CliCommand::Task(TaskCommand::Show {
+                id: "task-123".to_owned()
+            })
+        );
+        assert_eq!(
+            parse_args(["task", "abandon", "task-123"]).unwrap(),
+            CliCommand::Task(TaskCommand::Abandon {
+                id: "task-123".to_owned()
+            })
+        );
+        assert_eq!(
+            parse_args(["task", "cleanup", "task-123"]).unwrap(),
+            CliCommand::Task(TaskCommand::Cleanup {
                 id: "task-123".to_owned()
             })
         );
@@ -1087,6 +1309,24 @@ mod tests {
 
         assert_eq!(fs::read_to_string(metadata_path).unwrap(), before_content);
         assert_eq!(fs::read_dir(tasks_dir).unwrap().count(), before_entries);
+    }
+
+    #[test]
+    fn task_abandon_marks_task_without_deleting_worktree_or_metadata() {
+        let test_dir = TestDir::create("task-abandon");
+        initialize_git_repo(&test_dir.path);
+        let description = "Abandon task";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let worktree_path = task_worktree_path(&test_dir.path, &task_id);
+        let metadata_path = task_metadata_path(&test_dir.path, &task_id);
+        let output = run(["task", "abandon", task_id.as_str()], &test_dir.path).unwrap();
+
+        assert!(output.contains("Task abandoned"));
+        assert_eq!(task_status(&test_dir.path, &task_id), "abandoned");
+        assert!(worktree_path.exists());
+        assert!(metadata_path.exists());
     }
 
     #[test]
@@ -1358,6 +1598,7 @@ mod tests {
             ""
         );
         assert!(worktree_path.exists());
+        assert_eq!(task_status(&test_dir.path, &task_id), "merged");
     }
 
     #[test]
@@ -1387,6 +1628,7 @@ mod tests {
             .contains("Merge execution result: failed"));
         assert!(git_text(&test_dir.path, &["status", "--short"]).contains("UU tracked.txt"));
         assert!(worktree_path.exists());
+        assert_eq!(task_status(&test_dir.path, &task_id), "merge_conflict");
     }
 
     #[test]
@@ -1407,6 +1649,7 @@ mod tests {
             .output()
             .unwrap()
             .contains("Merge execution result: failed"));
+        assert_eq!(task_status(&test_dir.path, &task_id), "planned");
     }
 
     #[test]
@@ -1439,6 +1682,22 @@ mod tests {
             run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap_err();
 
         assert!(error.to_string().contains("uncommitted changes"));
+    }
+
+    #[test]
+    fn merge_execute_failed_preflight_does_not_mark_merged() {
+        let test_dir = TestDir::create("merge-execute-preflight-status");
+        initialize_git_repo(&test_dir.path);
+        let description = "Merge preflight status";
+        let task_id = TaskId::from_description(description).unwrap();
+        let confirmation = format!("MERGE {}\n", task_id.as_str());
+
+        run(["task", description], &test_dir.path).unwrap();
+        let error =
+            run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap_err();
+
+        assert!(error.to_string().contains("no changes to merge"));
+        assert_eq!(task_status(&test_dir.path, &task_id), "planned");
     }
 
     #[test]
@@ -1719,15 +1978,13 @@ mod tests {
         let remote_ref = format!("refs/heads/{target_branch}");
         let remote_before = git_text(&test_dir.path, &["ls-remote", "origin", &remote_ref]);
         let worktree_path = task_worktree_path(&test_dir.path, &task_id);
-        let metadata_path = task_metadata_path(&test_dir.path, &task_id);
-        let before_metadata = fs::read_to_string(&metadata_path).unwrap();
         let confirmation = format!("MERGE {}\n", task_id.as_str());
 
         let output = run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap();
 
         assert!(output.contains("Merge execution result: completed"));
         assert!(worktree_path.exists());
-        assert_eq!(fs::read_to_string(metadata_path).unwrap(), before_metadata);
+        assert_eq!(task_status(&test_dir.path, &task_id), "merged");
         assert_eq!(
             git_text(
                 &test_dir.path,
@@ -1739,6 +1996,158 @@ mod tests {
             git_text(&test_dir.path, &["ls-remote", "origin", &remote_ref]),
             remote_before
         );
+    }
+
+    #[test]
+    fn cleanup_rejects_missing_task() {
+        let test_dir = TestDir::create("cleanup-missing-task");
+        initialize_git_repo(&test_dir.path);
+
+        let error = run(["task", "cleanup", "missing-task"], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn cleanup_rejects_unsafe_and_path_traversal_task_ids() {
+        let test_dir = TestDir::create("cleanup-unsafe-id");
+        initialize_git_repo(&test_dir.path);
+
+        let unsafe_error = run(["task", "cleanup", "Unsafe"], &test_dir.path).unwrap_err();
+        let traversal_error = run(["task", "cleanup", "../secret"], &test_dir.path).unwrap_err();
+
+        assert!(unsafe_error.to_string().contains("not safe"));
+        assert!(traversal_error.to_string().contains("not safe"));
+    }
+
+    #[test]
+    fn cleanup_rejects_active_task() {
+        let test_dir = TestDir::create("cleanup-active");
+        initialize_git_repo(&test_dir.path);
+        let description = "Cleanup active task";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let error = run(["task", "cleanup", task_id.as_str()], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("not safe for cleanup"));
+        assert!(task_worktree_path(&test_dir.path, &task_id).exists());
+    }
+
+    #[test]
+    fn cleanup_rejects_unsafe_worktree_path() {
+        let (test_dir, task_id) =
+            committed_merge_task("cleanup-unsafe-worktree", "Cleanup unsafe worktree");
+        let confirmation = format!("MERGE {}\n", task_id.as_str());
+        run_merge_execute_with_input(&task_id, &test_dir.path, &confirmation).unwrap();
+        let unsafe_path = test_dir.path.join("outside").join(task_id.as_str());
+        replace_worktree_path_in_metadata(&test_dir.path, &task_id, &unsafe_path);
+        let cleanup_confirmation = format!("CLEANUP {}\n", task_id.as_str());
+
+        let error = run_task_cleanup_with_input(&task_id, &test_dir.path, &cleanup_confirmation)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("not a safe repository path"));
+    }
+
+    #[test]
+    fn cleanup_aborts_on_missing_or_wrong_confirmation() {
+        let (test_dir, task_id) =
+            committed_merge_task("cleanup-confirmation", "Cleanup confirmation");
+        let merge_confirmation = format!("MERGE {}\n", task_id.as_str());
+        run_merge_execute_with_input(&task_id, &test_dir.path, &merge_confirmation).unwrap();
+        let worktree_path = task_worktree_path(&test_dir.path, &task_id);
+
+        let missing_error = run_with_merge_confirmation(
+            ["task", "cleanup", task_id.as_str()],
+            &test_dir.path,
+            None,
+        )
+        .unwrap_err();
+        let wrong_error =
+            run_task_cleanup_with_input(&task_id, &test_dir.path, "CLEANUP wrong\n").unwrap_err();
+
+        assert!(missing_error
+            .to_string()
+            .contains("interactive confirmation"));
+        assert!(missing_error
+            .output()
+            .unwrap()
+            .contains("Task cleanup plan"));
+        assert!(wrong_error.to_string().contains("did not match"));
+        assert!(worktree_path.exists());
+    }
+
+    #[test]
+    fn cleanup_deletes_only_expected_worktree_and_preserves_metadata_branch_and_remote() {
+        let (test_dir, task_id) =
+            committed_merge_task("cleanup-success", "Cleanup successful task");
+        let remote_dir = TestDir::create("cleanup-remote");
+        run_git(&remote_dir.path, &["init", "--bare"]);
+        run_git(
+            &test_dir.path,
+            &["remote", "add", "origin", remote_dir.path.to_str().unwrap()],
+        );
+        let target_branch = git_text(&test_dir.path, &["branch", "--show-current"])
+            .trim()
+            .to_owned();
+        run_git(&test_dir.path, &["push", "origin", &target_branch]);
+        let remote_ref = format!("refs/heads/{target_branch}");
+        let remote_before = git_text(&test_dir.path, &["ls-remote", "origin", &remote_ref]);
+        let merge_confirmation = format!("MERGE {}\n", task_id.as_str());
+        run_merge_execute_with_input(&task_id, &test_dir.path, &merge_confirmation).unwrap();
+        let worktree_path = task_worktree_path(&test_dir.path, &task_id);
+        let metadata_path = task_metadata_path(&test_dir.path, &task_id);
+        let branch_name = format!("raptor-task-{}", task_id.as_str());
+        let branch_ref = format!("refs/heads/{branch_name}");
+        run_git(
+            &test_dir.path,
+            &["show-ref", "--verify", "--quiet", &branch_ref],
+        );
+        let sibling = test_dir
+            .path
+            .join(".raptor")
+            .join("worktrees")
+            .join("sibling");
+        fs::create_dir_all(&sibling).unwrap();
+        let cleanup_confirmation = format!("CLEANUP {}\n", task_id.as_str());
+
+        let output =
+            run_task_cleanup_with_input(&task_id, &test_dir.path, &cleanup_confirmation).unwrap();
+
+        assert!(output.contains("Task cleanup plan"));
+        assert!(output.contains("Cleanup result: completed"));
+        assert!(!worktree_path.exists());
+        assert!(sibling.exists());
+        assert!(metadata_path.exists());
+        run_git(
+            &test_dir.path,
+            &["show-ref", "--verify", "--quiet", &branch_ref],
+        );
+        assert_eq!(
+            git_text(&test_dir.path, &["ls-remote", "origin", &remote_ref]),
+            remote_before
+        );
+    }
+
+    #[test]
+    fn cleanup_allows_abandoned_task() {
+        let test_dir = TestDir::create("cleanup-abandoned");
+        initialize_git_repo(&test_dir.path);
+        let description = "Cleanup abandoned task";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        run(["task", "abandon", task_id.as_str()], &test_dir.path).unwrap();
+        let worktree_path = task_worktree_path(&test_dir.path, &task_id);
+        let cleanup_confirmation = format!("CLEANUP {}\n", task_id.as_str());
+
+        let output =
+            run_task_cleanup_with_input(&task_id, &test_dir.path, &cleanup_confirmation).unwrap();
+
+        assert!(output.contains("Cleanup result: completed"));
+        assert!(!worktree_path.exists());
+        assert!(task_metadata_path(&test_dir.path, &task_id).exists());
     }
 
     #[test]

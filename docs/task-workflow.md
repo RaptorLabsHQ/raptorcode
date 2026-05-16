@@ -25,6 +25,8 @@ Inspect persisted task metadata:
 ```bash
 cargo run -p raptor-cli -- task list
 cargo run -p raptor-cli -- task show <id>
+cargo run -p raptor-cli -- task abandon <id>
+cargo run -p raptor-cli -- task cleanup <id>
 cargo run -p raptor-cli -- review <task-id>
 cargo run -p raptor-cli -- diff <task-id>
 cargo run -p raptor-cli -- merge <task-id>
@@ -37,6 +39,8 @@ Installed binary forms:
 raptor task "describe the supervised task"
 raptor task list
 raptor task show <id>
+raptor task abandon <id>
+raptor task cleanup <id>
 raptor review <task-id>
 raptor diff <task-id>
 raptor merge <task-id>
@@ -69,6 +73,28 @@ The command:
 - Reads only `.raptor/tasks/<id>.toml`.
 - Prints full task details.
 - Does not modify files.
+
+`raptor task abandon <id>`:
+
+- Treats the task id as untrusted input.
+- Loads existing task metadata from `.raptor/tasks/<task-id>.toml`.
+- Refuses already merged or completed tasks.
+- Marks the task as `abandoned`.
+- Records an `updated_at` timestamp and an `abandoned_at` timestamp.
+- Does not delete metadata, delete the worktree, delete branches, push remotes, execute task metadata commands, or call AI models.
+
+`raptor task cleanup <id>`:
+
+- Treats the task id and stored worktree path as untrusted input.
+- Loads existing task metadata from `.raptor/tasks/<task-id>.toml`.
+- Validates the stored worktree path against `.raptor/worktrees/<task-id>`.
+- Refuses cleanup unless task status is `merged`, `completed`, or `abandoned`.
+- Prints a cleanup plan before deleting anything.
+- Prints the exact required phrase `CLEANUP <task-id>`.
+- Reads typed confirmation from stdin only.
+- Deletes only the associated validated worktree directory after exact confirmation.
+- Preserves task metadata, task branches, and remotes.
+- Does not push, run tests, install dependencies, execute task-provided commands, or call AI models.
 
 `raptor review <task-id>`:
 
@@ -109,6 +135,9 @@ The command:
 - Rejects uncommitted task worktree changes because V1 merge execution merges committed branch changes only.
 - Runs a supervised local `git merge` from the task worktree branch into the current target branch after exact confirmation.
 - Prints final merge status and merged files.
+- Records task status as `merged` after successful merge execution.
+- Records task status as `merge_conflict` if merge execution reaches a conflict.
+- Does not mark a task as merged when preflight fails.
 - Does not push, delete worktrees, run tests, install dependencies, execute task-provided commands, or call AI models.
 
 ## Supervised Merge Workflow
@@ -221,16 +250,59 @@ Merge execution output includes:
 
 - final status after success, abort, or conflict
 - auditable output recording task id, source worktree, target branch, changed files, and confirmation result
+- task status update output when merge succeeds or when a merge conflict is recorded
 
 ### Operational Notes
 
-- Clean merge: print the resulting target branch status and leave the task worktree intact.
-- Conflict: stop immediately, report conflicted files, do not auto-resolve, do not delete the worktree, and leave the repository state visible for developer recovery.
+- Clean merge: print the resulting target branch status, mark the task `merged`, and leave the task worktree intact.
+- Conflict: stop immediately, mark the task `merge_conflict`, report conflicted files, do not auto-resolve, do not delete the worktree, and leave the repository state visible for developer recovery.
 - Dirty main repository: abort before merge planning and instruct the developer to commit, stash, or discard local changes manually.
 - Dirty task worktree: abort before merge execution because uncommitted task edits are not part of a branch merge.
 - Missing task metadata: return a clear not-found error for the task id.
 - Missing task worktree: return a clear worktree-not-found error and do not read arbitrary filesystem paths.
 - No task changes: abort because there is nothing to merge.
+
+## Task Lifecycle
+
+Task metadata stores status values as plain strings for compatibility with the existing `.raptor/tasks/*.toml` format.
+
+Current lifecycle statuses:
+
+- `planned`: task infrastructure exists and is not merged or abandoned.
+- `merged`: supervised merge execution completed successfully.
+- `merge_conflict`: merge execution reached a conflict and stopped without auto-resolution.
+- `abandoned`: a developer marked the task as intentionally abandoned.
+- `completed`: accepted as a safe cleanup state for compatibility with future lifecycle naming.
+
+Current timestamp fields:
+
+- `created_at`: written when task metadata is first persisted.
+- `updated_at`: written when task metadata is created or when lifecycle status changes.
+- `merged_at`: written when status changes to `merged`.
+- `conflict_at`: written when status changes to `merge_conflict`.
+- `abandoned_at`: written when status changes to `abandoned`.
+
+### Cleanup Workflow
+
+`raptor task cleanup <task-id>` removes only the validated task worktree directory. It does not delete task metadata in V1, because metadata is the local audit record for what was created, merged, abandoned, or cleaned up.
+
+Cleanup requires:
+
+- Valid task id.
+- Existing task metadata.
+- Stored worktree path present in metadata.
+- Stored worktree path validated under `.raptor/worktrees/<task-id>`.
+- Existing worktree directory.
+- Task status of `merged`, `completed`, or `abandoned`.
+- Exact typed confirmation:
+
+```text
+CLEANUP <task-id>
+```
+
+Cleanup aborts on missing metadata, unsafe task id, unsafe stored worktree path, missing worktree, unsafe status, missing confirmation, empty confirmation, or mismatched confirmation.
+
+Cleanup does not delete task metadata, delete branches, push remotes, run generated commands, install dependencies, execute task metadata commands, or call AI models.
 
 ### Security Notes
 
@@ -257,8 +329,12 @@ Implemented preflight pieces:
 
 - CLI parser accepts `raptor merge <task-id>`.
 - CLI parser accepts `raptor merge <task-id> --execute`.
+- CLI parser accepts `raptor task abandon <task-id>`.
+- CLI parser accepts `raptor task cleanup <task-id>`.
 - `raptor-store` loads the existing `.raptor/tasks/*.toml` metadata format.
+- `raptor-store` updates task lifecycle status and transition timestamps.
 - `raptor-git` validates stored worktree paths using the same safety boundary as `raptor review` and `raptor diff`.
+- `raptor-git` plans and executes validated worktree cleanup with filesystem APIs instead of shelling out to `rm`.
 - Read-only git preflight checks cover main repository cleanliness, task worktree status, changed files, and unresolved conflict detection.
 - CLI confirmation flow prints the exact confirmation phrase and aborts on empty, mismatched, or unavailable confirmation input.
 - `raptor-git` executes local merges from committed task branches after confirmation.
@@ -267,11 +343,11 @@ Implemented preflight pieces:
 Future merge pieces:
 
 - Add optional merge preflight and execution timestamps to future task metadata.
-- Add task status transitions after successful merge when lifecycle states are defined.
 
 ### Future Phases
 
-- Cleanup command for completed or abandoned task worktrees.
+- Cleanup status recording after validated worktree deletion.
+- Optional branch cleanup command after explicit design.
 - Merge conflict assistant that explains conflicts without applying automatic resolution.
 - Automated test execution before merge.
 - Policy engine for repository-specific merge rules.
@@ -304,6 +380,7 @@ Current layout:
 - Task inspection commands reject unsafe ids and avoid arbitrary file reads.
 - Review and diff commands verify stored worktree paths before invoking read-only git inspection.
 - Merge preflight verifies stored worktree paths before invoking read-only git status inspection.
+- Cleanup verifies stored worktree paths before deleting and removes only the associated validated worktree directory.
 
 ## Current Limits
 
@@ -313,9 +390,10 @@ Current layout:
 - `raptor merge <task-id>` is preflight dry-run only.
 - `raptor merge <task-id> --execute` may create a normal git merge commit when Git requires one.
 - `raptor merge <task-id> --execute` does not merge uncommitted task worktree edits; commit task branch changes first.
-- No task deletion, cleanup, or archival command exists yet.
-- Failed metadata persistence after worktree creation may require manual cleanup.
+- `raptor task cleanup <task-id>` deletes validated task worktree directories only for safe lifecycle states.
+- Task cleanup does not delete metadata or branches in V1.
+- Failed metadata persistence before a task record is available may require manual cleanup.
 
 ## Recommended Next Step
 
-Add task cleanup and lifecycle status updates after supervised merge execution.
+Add cleanup status recording and lifecycle display refinements for the future TUI.

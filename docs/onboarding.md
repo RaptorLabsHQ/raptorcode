@@ -1,6 +1,6 @@
 # Onboarding
 
-Date: 2026-05-15
+Date: 2026-05-16
 Author: Tim
 Company: RaptorLabs.dev
 
@@ -34,6 +34,8 @@ Use the stable Rust toolchain.
 - Task command: `cargo run -p raptor-cli -- task "describe the supervised task"`
 - Task list command: `cargo run -p raptor-cli -- task list`
 - Task show command: `cargo run -p raptor-cli -- task show <id>`
+- Task abandon command: `cargo run -p raptor-cli -- task abandon <id>`
+- Task cleanup command: `cargo run -p raptor-cli -- task cleanup <id>`
 - Review command: `cargo run -p raptor-cli -- review <task-id>`
 - Diff command: `cargo run -p raptor-cli -- diff <task-id>`
 - Merge dry-run command: `cargo run -p raptor-cli -- merge <task-id>`
@@ -44,8 +46,8 @@ Use the stable Rust toolchain.
 
 `raptor task "description"` must be run inside a git repository. It creates an isolated git worktree under `.raptor/worktrees/` and writes metadata under `.raptor/tasks/`. It does not start autonomous agents or modify the main worktree.
 
-`raptor task list` and `raptor task show <id>` are read-only inspection commands for persisted task metadata. `raptor review <task-id>` and `raptor diff <task-id>` inspect the associated task worktree without staging, committing, merging, deleting, or modifying files. `raptor merge <task-id>` performs merge preflight dry-run checks only. `raptor merge <task-id> --execute` requires typed confirmation and performs a supervised local merge for committed task branch changes.
+`raptor task list` and `raptor task show <id>` are read-only inspection commands for persisted task metadata. `raptor task abandon <id>` marks an unmerged task as abandoned without deleting metadata or the worktree. `raptor task cleanup <id>` validates the stored worktree path and deletes only the associated worktree after exact `CLEANUP <task-id>` confirmation. `raptor review <task-id>` and `raptor diff <task-id>` inspect the associated task worktree without staging, committing, merging, deleting, or modifying files. `raptor merge <task-id>` performs merge preflight dry-run checks only. `raptor merge <task-id> --execute` requires typed confirmation, performs a supervised local merge for committed task branch changes, and records task status as `merged` or `merge_conflict`.
 
 ## Current Contributor Task
 
-The `task` workflow now creates isolated worktree infrastructure and local task metadata without launching autonomous agents. Task metadata and task worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`. Merge preflight, typed confirmation, and supervised local merge execution are in place. The next implementation step is cleanup and task lifecycle status updates.
+The `task` workflow now creates isolated worktree infrastructure and local task metadata without launching autonomous agents. Task metadata and task worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`. Merge preflight, typed confirmation, supervised local merge execution, lifecycle status updates, abandonment, and safe worktree cleanup are in place. The next implementation step is cleanup status recording and lifecycle display refinement for the future TUI.

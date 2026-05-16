@@ -27,6 +27,9 @@ pub struct TaskId(String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskStatus {
+    Abandoned,
+    MergeConflict,
+    Merged,
     Planned,
 }
 
@@ -73,6 +76,9 @@ impl TaskId {
 impl TaskStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Abandoned => "abandoned",
+            Self::MergeConflict => "merge_conflict",
+            Self::Merged => "merged",
             Self::Planned => "planned",
         }
     }
@@ -171,6 +177,14 @@ mod tests {
             .all(|character| character.is_ascii_lowercase()
                 || character.is_ascii_digit()
                 || character == '-'));
+    }
+
+    #[test]
+    fn exposes_task_status_values() {
+        assert_eq!(TaskStatus::Planned.as_str(), "planned");
+        assert_eq!(TaskStatus::Merged.as_str(), "merged");
+        assert_eq!(TaskStatus::MergeConflict.as_str(), "merge_conflict");
+        assert_eq!(TaskStatus::Abandoned.as_str(), "abandoned");
     }
 
     #[test]

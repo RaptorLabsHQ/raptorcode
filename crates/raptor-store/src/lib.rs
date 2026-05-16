@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use raptor_core::{TaskId, TaskMetadata};
 
@@ -36,16 +37,45 @@ pub enum TaskStoreError {
     UnsafeTaskId(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskStatusTransition {
+    Abandoned,
+    MergeConflict,
+    Merged,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredTaskMetadata {
+    pub abandoned_at: Option<String>,
     pub branch: Option<String>,
+    pub conflict_at: Option<String>,
     pub created_at: Option<String>,
     pub description: Option<String>,
     pub id: String,
     pub metadata_path: PathBuf,
+    pub merged_at: Option<String>,
     pub repository_root: Option<PathBuf>,
     pub status: Option<String>,
+    pub updated_at: Option<String>,
     pub worktree_path: Option<PathBuf>,
+}
+
+impl TaskStatusTransition {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Abandoned => "abandoned",
+            Self::MergeConflict => "merge_conflict",
+            Self::Merged => "merged",
+        }
+    }
+
+    fn timestamp_key(&self) -> &'static str {
+        match self {
+            Self::Abandoned => "abandoned_at",
+            Self::MergeConflict => "conflict_at",
+            Self::Merged => "merged_at",
+        }
+    }
 }
 
 impl Display for InitConfigError {
@@ -313,6 +343,29 @@ pub fn read_task_metadata(
     parse_task_metadata(&metadata_path, task_id, &content)
 }
 
+pub fn update_task_status(
+    repository_root: &Path,
+    task_id: &str,
+    transition: TaskStatusTransition,
+) -> Result<StoredTaskMetadata, TaskStoreError> {
+    let mut task = read_task_metadata(repository_root, task_id)?;
+    let timestamp = current_unix_timestamp();
+
+    task.status = Some(transition.as_str().to_owned());
+    task.updated_at = Some(timestamp.clone());
+
+    match transition.timestamp_key() {
+        "abandoned_at" => task.abandoned_at = Some(timestamp),
+        "conflict_at" => task.conflict_at = Some(timestamp),
+        "merged_at" => task.merged_at = Some(timestamp),
+        _ => {}
+    }
+
+    write_stored_task_metadata(&task)?;
+
+    read_task_metadata(repository_root, task_id)
+}
+
 fn task_metadata_path_for_id(
     repository_root: &Path,
     task_id: &str,
@@ -391,15 +444,23 @@ fn validate_task_id(task_id: &str) -> Result<(), TaskStoreError> {
 }
 
 fn render_task_metadata(metadata: &TaskMetadata) -> String {
-    format!(
-        "id = \"{}\"\ndescription = \"{}\"\nstatus = \"{}\"\nbranch = \"{}\"\nrepository_root = \"{}\"\nworktree_path = \"{}\"\n",
-        metadata.id.as_str(),
-        escape_toml_string(&metadata.description),
-        metadata.status.as_str(),
-        escape_toml_string(&metadata.worktree.branch_name),
-        escape_toml_string(&metadata.worktree.repository_root.display().to_string()),
-        escape_toml_string(&metadata.worktree.path.display().to_string())
-    )
+    let timestamp = current_unix_timestamp();
+    let task = StoredTaskMetadata {
+        abandoned_at: None,
+        branch: Some(metadata.worktree.branch_name.clone()),
+        conflict_at: None,
+        created_at: Some(timestamp.clone()),
+        description: Some(metadata.description.clone()),
+        id: metadata.id.as_str().to_owned(),
+        metadata_path: PathBuf::new(),
+        merged_at: None,
+        repository_root: Some(metadata.worktree.repository_root.clone()),
+        status: Some(metadata.status.as_str().to_owned()),
+        updated_at: Some(timestamp),
+        worktree_path: Some(metadata.worktree.path.clone()),
+    };
+
+    render_stored_task_metadata(&task)
 }
 
 fn escape_toml_string(value: &str) -> String {
@@ -433,13 +494,17 @@ fn parse_task_metadata(
     content: &str,
 ) -> Result<StoredTaskMetadata, TaskStoreError> {
     let mut parsed = StoredTaskMetadata {
+        abandoned_at: None,
         branch: None,
+        conflict_at: None,
         created_at: None,
         description: None,
         id: fallback_task_id.to_owned(),
         metadata_path: metadata_path.to_path_buf(),
+        merged_at: None,
         repository_root: None,
         status: None,
+        updated_at: None,
         worktree_path: None,
     };
 
@@ -475,14 +540,68 @@ fn parse_task_metadata(
             "description" => parsed.description = Some(value),
             "status" => parsed.status = Some(value),
             "branch" => parsed.branch = Some(value),
+            "abandoned_at" => parsed.abandoned_at = Some(value),
+            "conflict_at" => parsed.conflict_at = Some(value),
             "created" | "created_at" => parsed.created_at = Some(value),
+            "merged_at" => parsed.merged_at = Some(value),
             "repository_root" => parsed.repository_root = Some(PathBuf::from(value)),
+            "updated" | "updated_at" => parsed.updated_at = Some(value),
             "worktree_path" => parsed.worktree_path = Some(PathBuf::from(value)),
             _ => {}
         }
     }
 
     Ok(parsed)
+}
+
+fn write_stored_task_metadata(task: &StoredTaskMetadata) -> Result<(), TaskStoreError> {
+    fs::write(&task.metadata_path, render_stored_task_metadata(task)).map_err(|source| {
+        TaskStoreError::Io {
+            path: task.metadata_path.clone(),
+            source,
+        }
+    })
+}
+
+fn render_stored_task_metadata(task: &StoredTaskMetadata) -> String {
+    let mut output = String::new();
+
+    push_toml_string(&mut output, "id", Some(&task.id));
+    push_toml_string(&mut output, "description", task.description.as_deref());
+    push_toml_string(&mut output, "status", task.status.as_deref());
+    push_toml_string(&mut output, "branch", task.branch.as_deref());
+    push_toml_path(
+        &mut output,
+        "repository_root",
+        task.repository_root.as_ref(),
+    );
+    push_toml_path(&mut output, "worktree_path", task.worktree_path.as_ref());
+    push_toml_string(&mut output, "created_at", task.created_at.as_deref());
+    push_toml_string(&mut output, "updated_at", task.updated_at.as_deref());
+    push_toml_string(&mut output, "merged_at", task.merged_at.as_deref());
+    push_toml_string(&mut output, "conflict_at", task.conflict_at.as_deref());
+    push_toml_string(&mut output, "abandoned_at", task.abandoned_at.as_deref());
+
+    output
+}
+
+fn push_toml_string(output: &mut String, key: &str, value: Option<&str>) {
+    if let Some(value) = value {
+        output.push_str(&format!("{key} = \"{}\"\n", escape_toml_string(value)));
+    }
+}
+
+fn push_toml_path(output: &mut String, key: &str, value: Option<&PathBuf>) {
+    if let Some(value) = value {
+        push_toml_string(output, key, Some(&value.display().to_string()));
+    }
+}
+
+fn current_unix_timestamp() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_owned())
 }
 
 fn parse_quoted_value(
@@ -650,6 +769,8 @@ mod tests {
         assert_eq!(tasks[0].id, task_id.as_str());
         assert_eq!(tasks[0].status.as_deref(), Some("planned"));
         assert_eq!(tasks[0].description.as_deref(), Some("List one task"));
+        assert!(tasks[0].created_at.is_some());
+        assert!(tasks[0].updated_at.is_some());
     }
 
     #[test]
@@ -713,6 +834,46 @@ mod tests {
                 .count(),
             before_entries
         );
+    }
+
+    #[test]
+    fn updates_task_status_with_transition_timestamp() {
+        let test_dir = TestDir::create("status-update");
+        let task_id = TaskId::from_description("Update status").unwrap();
+        let metadata = test_metadata(&test_dir.path, task_id.clone(), "Update status");
+        persist_task_metadata(&test_dir.path, &metadata).unwrap();
+
+        let updated = update_task_status(
+            &test_dir.path,
+            task_id.as_str(),
+            TaskStatusTransition::Merged,
+        )
+        .unwrap();
+
+        assert_eq!(updated.status.as_deref(), Some("merged"));
+        assert!(updated.updated_at.is_some());
+        assert!(updated.merged_at.is_some());
+        assert_eq!(updated.conflict_at, None);
+        assert_eq!(updated.abandoned_at, None);
+    }
+
+    #[test]
+    fn marks_task_abandoned_without_deleting_metadata() {
+        let test_dir = TestDir::create("status-abandoned");
+        let task_id = TaskId::from_description("Abandon status").unwrap();
+        let metadata = test_metadata(&test_dir.path, task_id.clone(), "Abandon status");
+        let metadata_path = persist_task_metadata(&test_dir.path, &metadata).unwrap();
+
+        let updated = update_task_status(
+            &test_dir.path,
+            task_id.as_str(),
+            TaskStatusTransition::Abandoned,
+        )
+        .unwrap();
+
+        assert_eq!(updated.status.as_deref(), Some("abandoned"));
+        assert!(updated.abandoned_at.is_some());
+        assert!(metadata_path.exists());
     }
 
     #[test]

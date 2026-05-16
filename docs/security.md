@@ -62,9 +62,13 @@ Security-relevant actions should be logged or surfaced clearly to the developer:
 - Refuses merge preflight when the target repository is dirty, the task worktree has no changes, or unresolved conflicts are present.
 - Runs `raptor merge <task-id> --execute` only after exact typed confirmation.
 - Refuses merge execution when branches cannot be detected, source and target branches match, the task worktree has uncommitted edits, or conflicts occur.
-- Does not launch autonomous agents, execute task-provided commands, install dependencies, push remotes, or delete worktrees.
+- Records task status as `merged` after successful merge execution.
+- Records task status as `merge_conflict` when merge execution reaches a conflict.
+- Supports `raptor task abandon <task-id>` to mark an unmerged task as `abandoned` without deleting metadata or worktrees.
+- Supports `raptor task cleanup <task-id>` for validated cleanup of `merged`, `completed`, or `abandoned` task worktrees only.
+- Does not launch autonomous agents, execute task-provided commands, install dependencies, or push remotes.
 
-Known gap: if metadata persistence fails after git worktree creation, manual cleanup may be required until an explicit cleanup workflow is implemented.
+Known gap: if metadata persistence fails before a task record exists, manual cleanup may still be required because cleanup is task-metadata driven.
 
 ## Merge Controls
 
@@ -84,9 +88,29 @@ Current preflight and merge execution controls:
 - Print a dry-run summary before any mutation.
 - Require typed confirmation exactly matching `MERGE <task-id>`.
 - Abort on missing or mismatched confirmation.
+- Update task metadata after merge success or merge conflict.
 - Never execute task-provided commands, generated scripts, or dependency installation steps during merge.
 - Never push to a remote or delete the task worktree in the first merge version.
 - Never trust generated files blindly; the developer remains responsible for code review before confirming merge.
+
+## Cleanup Controls
+
+`raptor task cleanup <task-id>` is a destructive filesystem operation limited to task worktrees.
+
+Current cleanup controls:
+
+- Treat task ids, task metadata, and stored worktree paths as untrusted input.
+- Reject unsafe task ids and path traversal attempts.
+- Load only `.raptor/tasks/<task-id>.toml`.
+- Validate the stored worktree path under `.raptor/worktrees/<task-id>`.
+- Refuse cleanup unless task status is `merged`, `completed`, or `abandoned`.
+- Print a cleanup plan before deletion.
+- Require typed confirmation exactly matching `CLEANUP <task-id>`.
+- Abort on missing, empty, or mismatched confirmation.
+- Delete only the associated validated worktree directory.
+- Use filesystem APIs directly instead of shelling out to `rm`.
+- Preserve task metadata, task branches, and remotes.
+- Never execute task-provided commands, generated scripts, dependency installation steps, push operations, or AI model calls.
 
 ## Current Confirmation Flow
 
@@ -122,8 +146,8 @@ That mode is not a V1 goal. It should be reserved for CI or policy-approved auto
 Auditability requirements:
 
 - Output records task id, source worktree, target branch, changed files, and confirmation result.
-- Future task metadata may record merge preflight and execution timestamps.
+- Task metadata records lifecycle transition timestamps for merge success, merge conflict, and abandonment.
 
 ## Current Status
 
-The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are partly implemented for task setup, inspection, and merge execution, and remain design requirements for future agent and TUI workflows.
+The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for task setup, inspection, lifecycle updates, cleanup, and merge execution, and remain design requirements for future agent and TUI workflows.
