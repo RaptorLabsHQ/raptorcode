@@ -3,6 +3,24 @@ use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 
 pub const CRATE_PURPOSE: &str = "Agent lifecycle primitives for RaptorCode.";
+pub const BACKEND_AGENT_TEMPLATE: &str = include_str!("../../../templates/backend-agent.md");
+pub const FRONTEND_AGENT_TEMPLATE: &str = include_str!("../../../templates/frontend-agent.md");
+pub const SECURITY_AGENT_TEMPLATE: &str = include_str!("../../../templates/security-agent.md");
+pub const TEST_AGENT_TEMPLATE: &str = include_str!("../../../templates/test-agent.md");
+
+pub const BACKEND_AGENT_ROLE: &str = "backend-agent";
+pub const FRONTEND_AGENT_ROLE: &str = "frontend-agent";
+pub const SECURITY_AGENT_ROLE: &str = "security-agent";
+pub const TEST_AGENT_ROLE: &str = "test-agent";
+
+const SWARM_PLANNING_FOOTER: &str = "Return a concise Markdown implementation plan. Planning only. Do not modify files. Do not execute commands. Do not include autonomous coding loops, policy enforcement hooks, additional providers, cloud features, desktop UI, MCP, plugin systems, or any Phase 2 feature.";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RolePromptTemplate {
+    pub content: &'static str,
+    pub file_name: &'static str,
+    pub role: &'static str,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AgentId(String);
@@ -143,6 +161,63 @@ pub enum NetworkPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellExecutionPolicy {
     Deny,
+}
+
+pub fn v1_swarm_role_templates() -> &'static [RolePromptTemplate] {
+    const TEMPLATES: [RolePromptTemplate; 4] = [
+        RolePromptTemplate {
+            content: FRONTEND_AGENT_TEMPLATE,
+            file_name: "templates/frontend-agent.md",
+            role: FRONTEND_AGENT_ROLE,
+        },
+        RolePromptTemplate {
+            content: BACKEND_AGENT_TEMPLATE,
+            file_name: "templates/backend-agent.md",
+            role: BACKEND_AGENT_ROLE,
+        },
+        RolePromptTemplate {
+            content: TEST_AGENT_TEMPLATE,
+            file_name: "templates/test-agent.md",
+            role: TEST_AGENT_ROLE,
+        },
+        RolePromptTemplate {
+            content: SECURITY_AGENT_TEMPLATE,
+            file_name: "templates/security-agent.md",
+            role: SECURITY_AGENT_ROLE,
+        },
+    ];
+
+    &TEMPLATES
+}
+
+pub fn role_prompt_template(role: &str) -> Result<RolePromptTemplate, AgentError> {
+    v1_swarm_role_templates()
+        .iter()
+        .copied()
+        .find(|template| template.role == role)
+        .ok_or_else(|| AgentError::InvalidMetadata(format!("unknown swarm agent role: {role}")))
+}
+
+pub fn build_role_planning_prompt(
+    task_id: &str,
+    task_description: &str,
+    role: &str,
+) -> Result<String, AgentError> {
+    validate_task_id(task_id)?;
+
+    let template = role_prompt_template(role)?;
+    let description = task_description.trim();
+
+    if description.is_empty() {
+        return Err(AgentError::InvalidMetadata(
+            "task description is required".to_owned(),
+        ));
+    }
+
+    Ok(format!(
+        "RaptorCode v0.1 swarm planning request\n\nTask id: {task_id}\nTask description:\n{description}\n\nAgent role: {role}\nTemplate source: {}\n\nRole template:\n{}\n\n{SWARM_PLANNING_FOOTER}\n",
+        template.file_name, template.content
+    ))
 }
 
 impl AgentId {
@@ -720,6 +795,56 @@ mod tests {
         assert!(AgentId::new("Agent-1").is_err());
         assert!(AgentId::new("../agent").is_err());
         assert!(AgentId::new("-agent").is_err());
+    }
+
+    #[test]
+    fn loads_v1_swarm_role_templates() {
+        let templates = v1_swarm_role_templates();
+
+        assert_eq!(templates.len(), 4);
+        assert!(templates
+            .iter()
+            .any(|template| template.role == FRONTEND_AGENT_ROLE
+                && template.file_name == "templates/frontend-agent.md"
+                && template.content.contains("UI and authentication flow")));
+        assert!(templates
+            .iter()
+            .any(|template| template.role == BACKEND_AGENT_ROLE
+                && template
+                    .content
+                    .contains("Environment variable considerations")));
+        assert!(templates
+            .iter()
+            .any(|template| template.role == TEST_AGENT_ROLE
+                && template.content.contains("Failure path tests")));
+        assert!(templates
+            .iter()
+            .any(|template| template.role == SECURITY_AGENT_ROLE
+                && template.content.contains("Security checklist")));
+    }
+
+    #[test]
+    fn builds_role_planning_prompt_per_role() {
+        let prompt = build_role_planning_prompt(
+            "add-github-oauth-123",
+            "Add GitHub OAuth to this Next.js app",
+            SECURITY_AGENT_ROLE,
+        )
+        .unwrap();
+
+        assert!(prompt.contains("RaptorCode v0.1 swarm planning request"));
+        assert!(prompt.contains("Task id: add-github-oauth-123"));
+        assert!(prompt.contains("Agent role: security-agent"));
+        assert!(prompt.contains("templates/security-agent.md"));
+        assert!(prompt.contains("Authentication and authorization risks"));
+        assert!(prompt.contains("Planning only"));
+    }
+
+    #[test]
+    fn role_planning_prompt_rejects_unsafe_input() {
+        assert!(build_role_planning_prompt("../bad", "Task", FRONTEND_AGENT_ROLE).is_err());
+        assert!(build_role_planning_prompt("safe-task", "   ", FRONTEND_AGENT_ROLE).is_err());
+        assert!(build_role_planning_prompt("safe-task", "Task", "unknown-agent").is_err());
     }
 
     #[test]

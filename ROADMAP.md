@@ -14,7 +14,8 @@ Only these items are active before v0.1 is complete, tagged, documented, and lau
 - [x] `raptor swarm` MVP
 - [x] DeepSeek provider execution
 - [x] `raptor chat`
-- [ ] Agent role templates
+- [x] Agent role templates
+- [x] Swarm DeepSeek planning artifacts
 - [ ] Minimal worktree file modification path
 - [ ] `raptor test`
 - [ ] Ratatui dashboard
@@ -58,10 +59,12 @@ Complete and in-scope:
 - `raptor swarm` role-based worktree MVP with `.raptor/swarms/<task-id>.toml` metadata.
 - DeepSeek provider execution through `DEEPSEEK_API_KEY`.
 - `raptor chat "message"` smoke-test command for DeepSeek completion.
+- Role templates for `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent`.
+- `raptor swarm "description"` DeepSeek planning that writes `RAPTOR_PLAN.md` per role when `DEEPSEEK_API_KEY` is set.
+- Missing `DEEPSEEK_API_KEY` blocks planning status without failing swarm worktree creation.
 
 Incomplete but required:
 
-- Role templates for `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent`.
 - Minimal model-output-to-worktree file modification path.
 - `raptor test <task-id>`.
 - Simple Ratatui dashboard.
@@ -141,4 +144,4 @@ The output must be understandable, safe, demo-ready, and aligned with the premiu
 
 ## Next Implementation Prompt
 
-PROMPT 19 - Implement agent role templates and swarm DeepSeek planning
+PROMPT 20 - Implement minimal supervised worktree file modification path

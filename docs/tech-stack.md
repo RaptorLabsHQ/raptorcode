@@ -17,11 +17,12 @@ Rust is the default implementation language for RaptorCode because the project n
 - CLI: Rust command-line interface built by `raptor-cli` as the `raptor` binary.
 - Core domain: task ids, task status, task metadata, and worktree information in `raptor-core`.
 - TUI: Rust terminal user interface boundary in `raptor-tui`.
-- Orchestrator: Rust application layer boundary for read-only agent session state, permission policy modeling, and future multi-agent workflow control in `raptor-agent`.
+- Orchestrator: Rust application layer boundary for read-only agent session state, permission policy modeling, v0.1 role templates, and future multi-agent workflow control in `raptor-agent`.
 - Providers: Rust provider abstraction boundary for DeepSeek first, future OpenAI/Codex, future Claude, future Gemini, and future local models in `raptor-providers`.
 - Git integration: local git repository inspection, worktree operations, read-only worktree status/diff inspection, supervised merge execution, and validated worktree cleanup in `raptor-git`.
-- Store: local configuration, provider enablement parsing, task metadata persistence, agent metadata persistence, task metadata inspection, and lifecycle status updates in `raptor-store`.
+- Store: local configuration, provider enablement parsing, task metadata persistence, swarm metadata persistence and planning status updates, agent metadata persistence, task metadata inspection, and lifecycle status updates in `raptor-store`.
 - Tool diagnostics: local tooling checks in `raptor-tools`.
+- Templates: Markdown role templates in repository root `templates/`.
 - Documentation: Markdown files in the repository root and `docs/`.
 
 ## Dependency Policy
@@ -35,7 +36,7 @@ Rust is the default implementation language for RaptorCode because the project n
 
 The repository contains a Cargo workspace with internal crate dependencies plus the minimal HTTP and serialization crates needed for DeepSeek execution. The implemented CLI surface includes `raptor --version`, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor chat "message"`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor swarm "description"`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>`, and `raptor merge <task-id> --execute`.
 
-Provider execution is synchronous and uses `reqwest` for HTTPS, `serde` for explicit request/response structs, and `serde_json` for response parsing tests and error handling. DeepSeek is the only implemented provider before v0.1. Persisted agent sessions use the existing local store boundary and a minimal text format under `.raptor/agents/`. The permission policy foundation uses Rust enums and explicit allow/deny helpers. These components were implemented early and are frozen until after v0.1.
+Provider execution is synchronous and uses `reqwest` for HTTPS, `serde` for explicit request/response structs, and `serde_json` for response parsing tests and error handling. DeepSeek is the only implemented provider before v0.1. `raptor swarm "description"` uses DeepSeek for planning only and writes `RAPTOR_PLAN.md` artifacts inside role worktrees. Persisted agent sessions use the existing local store boundary and a minimal text format under `.raptor/agents/`. The permission policy foundation uses Rust enums and explicit allow/deny helpers. Persisted agent sessions and permission policy were implemented early and are frozen until after v0.1.
 
 Before v0.1, the tech stack may grow only to support the launch path:
 

@@ -118,6 +118,7 @@ pub struct SwarmMetadata {
     pub description: String,
     pub id: String,
     pub model: String,
+    pub planning_status: Option<String>,
     pub provider: String,
     pub status: String,
     pub updated_at: Option<String>,
@@ -127,6 +128,10 @@ pub struct SwarmMetadata {
 pub struct SwarmAgentMetadata {
     pub agent_id: String,
     pub branch: String,
+    pub model: Option<String>,
+    pub plan_file_path: Option<PathBuf>,
+    pub planning_status: Option<String>,
+    pub provider: Option<String>,
     pub role: String,
     pub status: String,
     pub worktree_path: PathBuf,
@@ -671,6 +676,42 @@ pub fn persist_swarm_metadata(
     Ok(metadata_path)
 }
 
+pub fn update_swarm_metadata(
+    repository_root: &Path,
+    metadata: &SwarmMetadata,
+) -> Result<PathBuf, SwarmStoreError> {
+    validate_swarm_base_dir(repository_root)?;
+    validate_swarm_metadata(repository_root, metadata)?;
+
+    let metadata_path = swarm_metadata_path_for_id(repository_root, &metadata.id)?;
+    let file_metadata =
+        fs::symlink_metadata(&metadata_path).map_err(|source| SwarmStoreError::Io {
+            path: metadata_path.clone(),
+            source,
+        })?;
+
+    if !file_metadata.file_type().is_file() {
+        return Err(SwarmStoreError::UnsafeBasePath(metadata_path));
+    }
+
+    let timestamp = current_unix_timestamp();
+    let mut stored_metadata = metadata.clone();
+
+    if stored_metadata.created_at.is_none() {
+        stored_metadata.created_at = Some(timestamp.clone());
+    }
+    stored_metadata.updated_at = Some(timestamp);
+
+    fs::write(&metadata_path, render_swarm_metadata(&stored_metadata)).map_err(|source| {
+        SwarmStoreError::Io {
+            path: metadata_path.clone(),
+            source,
+        }
+    })?;
+
+    Ok(metadata_path)
+}
+
 pub fn swarm_metadata_exists(
     repository_root: &Path,
     task_id: &TaskId,
@@ -1023,11 +1064,23 @@ fn validate_swarm_metadata(
     validate_safe_hyphen_value("provider", &metadata.provider)?;
     validate_safe_hyphen_value("model", &metadata.model)?;
     validate_safe_status("status", &metadata.status)?;
+    if let Some(planning_status) = metadata.planning_status.as_deref() {
+        validate_safe_status("planning_status", planning_status)?;
+    }
 
     for agent in &metadata.agents {
         validate_safe_hyphen_value("agent role", &agent.role)?;
         validate_safe_hyphen_value("agent id", &agent.agent_id)?;
         validate_safe_status("agent status", &agent.status)?;
+        if let Some(planning_status) = agent.planning_status.as_deref() {
+            validate_safe_status("agent planning_status", planning_status)?;
+        }
+        if let Some(provider) = agent.provider.as_deref() {
+            validate_safe_hyphen_value("agent provider", provider)?;
+        }
+        if let Some(model) = agent.model.as_deref() {
+            validate_safe_hyphen_value("agent model", model)?;
+        }
         validate_swarm_branch_value(&agent.branch)?;
         validate_swarm_worktree_path(
             repository_root,
@@ -1035,6 +1088,9 @@ fn validate_swarm_metadata(
             &agent.role,
             &agent.worktree_path,
         )?;
+        if let Some(plan_file_path) = agent.plan_file_path.as_ref() {
+            validate_swarm_plan_file_path(&agent.worktree_path, plan_file_path)?;
+        }
     }
 
     Ok(())
@@ -1116,6 +1172,26 @@ fn validate_swarm_worktree_path(
     Ok(())
 }
 
+fn validate_swarm_plan_file_path(
+    worktree_path: &Path,
+    plan_file_path: &Path,
+) -> Result<(), SwarmStoreError> {
+    let expected_path = worktree_path.join("RAPTOR_PLAN.md");
+
+    if plan_file_path.as_os_str().is_empty()
+        || plan_file_path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        || plan_file_path != expected_path
+    {
+        return Err(SwarmStoreError::UnsafeBasePath(
+            plan_file_path.to_path_buf(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn safe_hyphen_name(value: &str) -> bool {
     !value.is_empty()
         && !value.starts_with('-')
@@ -1168,6 +1244,11 @@ fn render_swarm_metadata(metadata: &SwarmMetadata) -> String {
     push_toml_string(&mut output, "id", Some(&metadata.id));
     push_toml_string(&mut output, "description", Some(&metadata.description));
     push_toml_string(&mut output, "status", Some(&metadata.status));
+    push_toml_string(
+        &mut output,
+        "planning_status",
+        metadata.planning_status.as_deref(),
+    );
     push_toml_string(&mut output, "provider", Some(&metadata.provider));
     push_toml_string(&mut output, "model", Some(&metadata.model));
     push_toml_string(&mut output, "created_at", metadata.created_at.as_deref());
@@ -1181,6 +1262,14 @@ fn render_swarm_metadata(metadata: &SwarmMetadata) -> String {
         push_toml_string(&mut output, "branch", Some(&agent.branch));
         push_toml_path(&mut output, "worktree_path", Some(&agent.worktree_path));
         push_toml_string(&mut output, "status", Some(&agent.status));
+        push_toml_string(
+            &mut output,
+            "planning_status",
+            agent.planning_status.as_deref(),
+        );
+        push_toml_path(&mut output, "plan_file_path", agent.plan_file_path.as_ref());
+        push_toml_string(&mut output, "provider", agent.provider.as_deref());
+        push_toml_string(&mut output, "model", agent.model.as_deref());
     }
 
     output
@@ -1752,6 +1841,32 @@ mod tests {
     }
 
     #[test]
+    fn updates_swarm_planning_metadata() {
+        let test_dir = TestDir::create("swarm-update");
+        let task_id = TaskId::from_description("Swarm update").unwrap();
+        let mut metadata = test_swarm_metadata(&test_dir.path, task_id.clone(), "Swarm update");
+        let metadata_path = persist_swarm_metadata(&test_dir.path, &metadata).unwrap();
+        let plan_file = metadata.agents[0].worktree_path.join("RAPTOR_PLAN.md");
+
+        metadata.status = "planning_completed".to_owned();
+        metadata.planning_status = Some("planning_completed".to_owned());
+        metadata.agents[0].status = "planning_completed".to_owned();
+        metadata.agents[0].planning_status = Some("planning_completed".to_owned());
+        metadata.agents[0].plan_file_path = Some(plan_file.clone());
+        metadata.agents[0].provider = Some("deepseek".to_owned());
+        metadata.agents[0].model = Some("deepseek-chat".to_owned());
+
+        let updated_path = update_swarm_metadata(&test_dir.path, &metadata).unwrap();
+        let content = fs::read_to_string(&updated_path).unwrap();
+
+        assert_eq!(updated_path, metadata_path);
+        assert!(content.contains("planning_status = \"planning_completed\""));
+        assert!(content.contains(&format!("plan_file_path = \"{}\"", plan_file.display())));
+        assert!(content.contains("provider = \"deepseek\""));
+        assert!(content.contains("model = \"deepseek-chat\""));
+    }
+
+    #[test]
     fn swarm_metadata_rejects_unsafe_values() {
         let test_dir = TestDir::create("swarm-unsafe");
         let task_id = TaskId::from_description("Unsafe swarm metadata").unwrap();
@@ -1767,6 +1882,12 @@ mod tests {
         metadata.agents[0].branch = "../main".to_owned();
         let branch_error = persist_swarm_metadata(&test_dir.path, &metadata).unwrap_err();
         assert!(matches!(branch_error, SwarmStoreError::UnsafeValue { .. }));
+
+        let mut metadata =
+            test_swarm_metadata(&test_dir.path, task_id.clone(), "Unsafe swarm metadata");
+        metadata.agents[0].plan_file_path = Some(test_dir.path.join("outside-plan.md"));
+        let plan_error = persist_swarm_metadata(&test_dir.path, &metadata).unwrap_err();
+        assert!(matches!(plan_error, SwarmStoreError::UnsafeBasePath(_)));
     }
 
     #[test]
@@ -1931,6 +2052,10 @@ mod tests {
             agents: vec![SwarmAgentMetadata {
                 agent_id: format!("{}-{role}", task_id.as_str()),
                 branch: format!("raptor/{}/{role}", task_id.as_str()),
+                model: None,
+                plan_file_path: None,
+                planning_status: None,
+                provider: None,
                 role: role.to_owned(),
                 status: SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned(),
                 worktree_path: repository_root
@@ -1943,6 +2068,7 @@ mod tests {
             description: description.to_owned(),
             id: task_id.as_str().to_owned(),
             model: "deepseek-chat".to_owned(),
+            planning_status: None,
             provider: "deepseek".to_owned(),
             status: SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned(),
             updated_at: None,

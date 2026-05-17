@@ -69,6 +69,11 @@ Current provider controls:
 - `raptor chat` sends only a fixed system prompt and the user-provided message to DeepSeek.
 - `raptor chat` does not send repository contents, `.env` files, task metadata, worktree files, or secrets.
 - `raptor chat` does not execute model output, run shell commands, write source files, create worktrees, merge, commit, or push.
+- `raptor swarm` sends only the task description and v0.1 role template to DeepSeek when `DEEPSEEK_API_KEY` is set.
+- `raptor swarm` writes only `RAPTOR_PLAN.md` planning artifacts inside assigned role worktrees.
+- `raptor swarm` records `blocked_missing_deepseek_api_key` without destroying worktrees when `DEEPSEEK_API_KEY` is missing.
+- Swarm plans are AI-generated and must be reviewed before implementation.
+- `raptor swarm` does not execute model output, run shell commands, apply patches, modify application source files, run tests, merge, commit, or push.
 - No streaming connections, provider SDKs, or additional provider executions are implemented before v0.1.
 
 Current agent controls:
@@ -105,6 +110,7 @@ Before v0.1 launch:
 - Never execute commands automatically from model output.
 - Never install dependencies automatically from model output.
 - Never write files outside assigned worktrees.
+- Never write swarm planning artifacts outside `.raptor/worktrees/<task-id>/<role>/RAPTOR_PLAN.md`.
 - Never perform hidden file writes.
 - Never include `.env`, API keys, credentials, or secrets in model context.
 - Never commit or log `DEEPSEEK_API_KEY`.
@@ -141,6 +147,24 @@ Before v0.1 launch:
 - Does not launch autonomous agents, execute task-provided commands, install dependencies, call provider APIs, or push remotes.
 
 Known gap: if metadata persistence fails before a task record exists, manual cleanup may still be required because cleanup is task-metadata driven.
+
+## Implemented Swarm Planning Controls
+
+`raptor swarm "description"` currently applies these planning controls:
+
+- Requires a non-empty task description.
+- Generates a deterministic safe task id from the description.
+- Creates only the four v0.1 role worktrees under `.raptor/worktrees/<task-id>/`.
+- Uses fixed role templates from `templates/`.
+- Calls only DeepSeek before v0.1.
+- Sends only the task description and role template to DeepSeek.
+- Does not include `.env` files, repository contents, secrets, task metadata, or worktree files in the prompt context.
+- Writes only `RAPTOR_PLAN.md` inside each assigned role worktree.
+- Uses create-new writes for plan files to avoid silently overwriting existing files.
+- Records per-agent planning status and plan file paths in `.raptor/swarms/<task-id>.toml`.
+- Continues to preserve worktrees and metadata if planning is blocked by a missing API key.
+- Treats generated plans as untrusted text for developer review.
+- Does not execute model output, run shell commands, apply patches, modify application source files, run tests, commit, merge, or push.
 
 ## Merge Controls
 
@@ -222,4 +246,4 @@ Auditability requirements:
 
 ## Current Status
 
-The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for provider metadata inspection, persisted read-only agent session metadata, permission policy display, task setup, task inspection, lifecycle updates, cleanup, and merge execution. They remain design requirements for future model execution, autonomous agent, and TUI workflows.
+The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor chat`, `raptor swarm`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for provider metadata inspection, DeepSeek chat, DeepSeek swarm planning artifacts, persisted read-only agent session metadata, permission policy display, task setup, task inspection, lifecycle updates, cleanup, and merge execution. They remain design requirements for future autonomous source modification, test execution, and TUI workflows.

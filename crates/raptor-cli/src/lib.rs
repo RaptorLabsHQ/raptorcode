@@ -1,12 +1,16 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::fs;
 use std::io::BufRead;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
-use raptor_agent::{AgentId, AgentRole, AgentSession, PermissionPolicy};
+use raptor_agent::{
+    build_role_planning_prompt, AgentId, AgentRole, AgentSession, PermissionPolicy,
+};
 use raptor_core::{
     project_description, project_name, version, TaskId, TaskMetadata, TaskStatus,
-    SWARM_PENDING_MODEL_EXECUTION_STATUS,
+    SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS, SWARM_PENDING_MODEL_EXECUTION_STATUS,
+    SWARM_PLANNING_COMPLETED_STATUS, SWARM_PLANNING_FAILED_STATUS,
 };
 use raptor_git::{
     create_swarm_worktrees, create_task_worktree, diff_task_worktree, execute_task_merge,
@@ -17,14 +21,15 @@ use raptor_git::{
 };
 use raptor_providers::{
     CompletionMessage, CompletionRequest, CompletionResponse, DeepSeekProvider, ModelId, Provider,
-    ProviderCatalog, ProviderConfiguration, ProviderId, ProviderSummary, TokenUsage,
+    ProviderCatalog, ProviderConfiguration, ProviderError, ProviderId, ProviderSummary, TokenUsage,
+    DEEPSEEK_API_KEY_URL,
 };
 use raptor_store::{
     init_project_config, list_agent_sessions, list_task_metadata, persist_agent_session,
     persist_swarm_metadata, persist_task_metadata, read_agent_session, read_project_config,
-    read_task_metadata, swarm_metadata_exists, task_metadata_exists, update_task_status,
-    InitConfigOutcome, ProjectConfigError, StoredAgentSession, StoredTaskMetadata,
-    SwarmAgentMetadata, SwarmMetadata, TaskStatusTransition,
+    read_task_metadata, swarm_metadata_exists, task_metadata_exists, update_swarm_metadata,
+    update_task_status, InitConfigOutcome, ProjectConfigError, StoredAgentSession,
+    StoredTaskMetadata, SwarmAgentMetadata, SwarmMetadata, TaskStatusTransition,
 };
 use raptor_tools::command_version;
 
@@ -90,6 +95,8 @@ const SWARM_PROVIDER_ID: &str = "deepseek";
 const SWARM_PROVIDER_DISPLAY: &str = "DeepSeek";
 const SWARM_MODEL_ID: &str = "deepseek-chat";
 const CHAT_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised coding assistant. Answer the developer's message directly. Do not claim to modify files, run commands, install dependencies, commit, merge, or push.";
+const SWARM_PLANNING_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised v0.1 planning assistant for Raptor Labs. Produce role-specific implementation planning only. Do not modify files, execute commands, apply patches, run tests, claim work was completed, or propose Phase 2 features. DeepSeek is the only provider in scope before v0.1.";
+const RAPTOR_PLAN_FILE_NAME: &str = "RAPTOR_PLAN.md";
 
 impl CliError {
     fn new(message: impl Into<String>) -> Self {
@@ -564,6 +571,21 @@ pub fn create_task(current_dir: &Path, description: &str) -> Result<String, CliE
 }
 
 pub fn create_swarm(current_dir: &Path, description: &str) -> Result<String, CliError> {
+    create_swarm_with_planning_source(current_dir, description, SwarmPlanningSource::Environment)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+enum SwarmPlanningSource<'a> {
+    Environment,
+    MissingDeepSeekApiKey,
+    Provider(&'a dyn Provider),
+}
+
+fn create_swarm_with_planning_source(
+    current_dir: &Path,
+    description: &str,
+    planning_source: SwarmPlanningSource<'_>,
+) -> Result<String, CliError> {
     let trimmed_description = description.trim();
     let task_id = TaskId::from_description(trimmed_description)
         .map_err(|error| CliError::new(error.to_string()))?;
@@ -590,11 +612,38 @@ pub fn create_swarm(current_dir: &Path, description: &str) -> Result<String, Cli
 
     let plan = create_swarm_worktrees(&repository_root, &task_id)
         .map_err(|error| CliError::new(error.to_string()))?;
-    let metadata = swarm_metadata_from_plan(&plan, trimmed_description);
+    let mut metadata = swarm_metadata_from_plan(&plan, trimmed_description);
     let metadata_path = persist_swarm_metadata(repository_root.path(), &metadata)
         .map_err(|error| CliError::new(error.to_string()))?;
 
-    Ok(render_swarm_created(&metadata, &plan, &metadata_path))
+    match planning_source {
+        SwarmPlanningSource::Environment => match DeepSeekProvider::from_env() {
+            Ok(provider) => plan_swarm_agents(
+                &repository_root,
+                &task_id,
+                trimmed_description,
+                &mut metadata,
+                &provider,
+            )?,
+            Err(ProviderError::MissingApiKey) => mark_swarm_planning_missing_api_key(&mut metadata),
+            Err(error) => mark_swarm_planning_failed(&mut metadata, Some(error.to_string())),
+        },
+        SwarmPlanningSource::MissingDeepSeekApiKey => {
+            mark_swarm_planning_missing_api_key(&mut metadata)
+        }
+        SwarmPlanningSource::Provider(provider) => plan_swarm_agents(
+            &repository_root,
+            &task_id,
+            trimmed_description,
+            &mut metadata,
+            provider,
+        )?,
+    }
+
+    update_swarm_metadata(repository_root.path(), &metadata)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(render_swarm_created(&metadata, &metadata_path))
 }
 
 fn swarm_metadata_from_plan(plan: &SwarmWorktreePlan, description: &str) -> SwarmMetadata {
@@ -604,6 +653,10 @@ fn swarm_metadata_from_plan(plan: &SwarmWorktreePlan, description: &str) -> Swar
         .map(|agent| SwarmAgentMetadata {
             agent_id: format!("{}-{}", plan.task_id, agent.role),
             branch: agent.branch_name.clone(),
+            model: Some(SWARM_MODEL_ID.to_owned()),
+            plan_file_path: None,
+            planning_status: Some(SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned()),
+            provider: Some(SWARM_PROVIDER_ID.to_owned()),
             role: agent.role.clone(),
             status: SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned(),
             worktree_path: agent.path.clone(),
@@ -616,10 +669,174 @@ fn swarm_metadata_from_plan(plan: &SwarmWorktreePlan, description: &str) -> Swar
         description: description.to_owned(),
         id: plan.task_id.clone(),
         model: SWARM_MODEL_ID.to_owned(),
+        planning_status: Some(SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned()),
         provider: SWARM_PROVIDER_ID.to_owned(),
         status: SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned(),
         updated_at: None,
     }
+}
+
+fn plan_swarm_agents(
+    repository_root: &RepositoryRoot,
+    task_id: &TaskId,
+    task_description: &str,
+    metadata: &mut SwarmMetadata,
+    provider: &dyn Provider,
+) -> Result<(), CliError> {
+    if provider.id().as_str() != SWARM_PROVIDER_ID {
+        return Err(CliError::new(
+            "only the DeepSeek provider is implemented before v0.1",
+        ));
+    }
+
+    let model_id = provider
+        .default_model()
+        .cloned()
+        .ok_or_else(|| CliError::new("DeepSeek provider has no default model configured"))?;
+    let mut failed_roles = Vec::new();
+
+    for agent in &mut metadata.agents {
+        let prompt = build_role_planning_prompt(task_id.as_str(), task_description, &agent.role)
+            .map_err(|error| CliError::new(error.to_string()))?;
+        let request = CompletionRequest::new(
+            provider.id().clone(),
+            model_id.clone(),
+            vec![
+                CompletionMessage::system(SWARM_PLANNING_SYSTEM_PROMPT),
+                CompletionMessage::user(prompt),
+            ],
+        );
+
+        match provider.complete(request) {
+            Ok(response) => {
+                let plan_file_path = plan_file_path_for_agent(
+                    repository_root.path(),
+                    task_id.as_str(),
+                    &agent.role,
+                    &agent.worktree_path,
+                )?;
+                let rendered_plan =
+                    render_raptor_plan(task_id.as_str(), task_description, &agent.role, &response);
+
+                if let Err(error) = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&plan_file_path)
+                    .and_then(|mut file| {
+                        use std::io::Write;
+
+                        file.write_all(rendered_plan.as_bytes())
+                    })
+                {
+                    agent.status = SWARM_PLANNING_FAILED_STATUS.to_owned();
+                    agent.planning_status = Some(SWARM_PLANNING_FAILED_STATUS.to_owned());
+                    agent.plan_file_path = None;
+                    failed_roles.push(format!("{}: {}", agent.role, error));
+                    continue;
+                }
+
+                agent.status = SWARM_PLANNING_COMPLETED_STATUS.to_owned();
+                agent.planning_status = Some(SWARM_PLANNING_COMPLETED_STATUS.to_owned());
+                agent.plan_file_path = Some(plan_file_path);
+                agent.provider = Some(response.provider_id.as_str().to_owned());
+                agent.model = Some(response.model_id.as_str().to_owned());
+            }
+            Err(error) => {
+                agent.status = SWARM_PLANNING_FAILED_STATUS.to_owned();
+                agent.planning_status = Some(SWARM_PLANNING_FAILED_STATUS.to_owned());
+                agent.plan_file_path = None;
+                failed_roles.push(format!("{}: {}", agent.role, error));
+            }
+        }
+    }
+
+    if failed_roles.is_empty() {
+        metadata.status = SWARM_PLANNING_COMPLETED_STATUS.to_owned();
+        metadata.planning_status = Some(SWARM_PLANNING_COMPLETED_STATUS.to_owned());
+    } else {
+        metadata.status = SWARM_PLANNING_FAILED_STATUS.to_owned();
+        metadata.planning_status = Some(SWARM_PLANNING_FAILED_STATUS.to_owned());
+    }
+
+    Ok(())
+}
+
+fn mark_swarm_planning_missing_api_key(metadata: &mut SwarmMetadata) {
+    metadata.status = SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS.to_owned();
+    metadata.planning_status = Some(SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS.to_owned());
+
+    for agent in &mut metadata.agents {
+        agent.status = SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS.to_owned();
+        agent.planning_status = Some(SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS.to_owned());
+        agent.plan_file_path = None;
+        agent.provider = Some(SWARM_PROVIDER_ID.to_owned());
+        agent.model = Some(SWARM_MODEL_ID.to_owned());
+    }
+}
+
+fn mark_swarm_planning_failed(metadata: &mut SwarmMetadata, _detail: Option<String>) {
+    metadata.status = SWARM_PLANNING_FAILED_STATUS.to_owned();
+    metadata.planning_status = Some(SWARM_PLANNING_FAILED_STATUS.to_owned());
+
+    for agent in &mut metadata.agents {
+        agent.status = SWARM_PLANNING_FAILED_STATUS.to_owned();
+        agent.planning_status = Some(SWARM_PLANNING_FAILED_STATUS.to_owned());
+        agent.plan_file_path = None;
+        agent.provider = Some(SWARM_PROVIDER_ID.to_owned());
+        agent.model = Some(SWARM_MODEL_ID.to_owned());
+    }
+}
+
+fn plan_file_path_for_agent(
+    repository_root: &Path,
+    task_id: &str,
+    role: &str,
+    worktree_path: &Path,
+) -> Result<PathBuf, CliError> {
+    let expected_worktree_path = repository_root
+        .join(".raptor")
+        .join("worktrees")
+        .join(task_id)
+        .join(role);
+
+    if worktree_path != expected_worktree_path
+        || worktree_path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(CliError::new(format!(
+            "unsafe swarm worktree path: {}",
+            worktree_path.display()
+        )));
+    }
+
+    let plan_file_path = worktree_path.join(RAPTOR_PLAN_FILE_NAME);
+
+    if plan_file_path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(CliError::new(format!(
+            "unsafe plan file path: {}",
+            plan_file_path.display()
+        )));
+    }
+
+    Ok(plan_file_path)
+}
+
+fn render_raptor_plan(
+    task_id: &str,
+    task_description: &str,
+    role: &str,
+    response: &CompletionResponse,
+) -> String {
+    format!(
+        "# RaptorCode Agent Plan\n\nTask id: {task_id}\nTask description: {task_description}\nAgent role: {role}\nProvider: {}\nModel: {}\n\n## Generated Plan\n\n{}\n\n## Safety Note\n\nThis plan is AI-generated and must be reviewed before implementation. Do not execute model output automatically.\n",
+        SWARM_PROVIDER_DISPLAY,
+        response.model_id.as_str(),
+        response.content.trim()
+    )
 }
 
 pub fn list_tasks(current_dir: &Path) -> Result<String, CliError> {
@@ -1131,40 +1348,54 @@ fn render_token_usage(usage: Option<&TokenUsage>) -> String {
     )
 }
 
-fn render_swarm_created(
-    metadata: &SwarmMetadata,
-    plan: &SwarmWorktreePlan,
-    metadata_path: &Path,
-) -> String {
+fn render_swarm_created(metadata: &SwarmMetadata, metadata_path: &Path) -> String {
     let mut output = format!(
-        "RaptorCode Swarm Created\nTask: {}\nDescription: {}\nProvider: {}\nModel: {}\nStatus: pending model execution\nMetadata: {}\n",
+        "RaptorCode Swarm Created\nTask: {}\nDescription: {}\nProvider: {}\nModel: {}\nStatus: {}\nPlanning status: {}\nMetadata: {}\n",
         metadata.id,
         metadata.description,
         SWARM_PROVIDER_DISPLAY,
         metadata.model,
+        metadata.status,
+        metadata.planning_status.as_deref().unwrap_or("-"),
         metadata_path.display()
     );
 
     output.push_str("Agents:\n");
-    for agent in &plan.agents {
+    for agent in &metadata.agents {
         output.push_str(&format!(
-            "  {} | branch: {} | worktree: {} | status: {}\n",
+            "  {} | branch: {} | worktree: {} | plan: {}",
             agent.role,
-            agent.branch_name,
-            agent.path.display(),
-            SWARM_PENDING_MODEL_EXECUTION_STATUS
+            agent.branch,
+            agent.worktree_path.display(),
+            agent.planning_status.as_deref().unwrap_or(&agent.status)
+        ));
+
+        if let Some(plan_file_path) = agent.plan_file_path.as_ref() {
+            output.push_str(&format!(" | plan file: {}", plan_file_path.display()));
+        }
+
+        output.push('\n');
+    }
+
+    if metadata.planning_status.as_deref() == Some(SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS) {
+        output.push_str(&format!(
+            "DeepSeek API key required: Get a DeepSeek API key at {DEEPSEEK_API_KEY_URL}\n"
         ));
     }
 
     output.push_str("Next commands:\n");
     output.push_str(&format!("  raptor review {}\n", metadata.id));
     output.push_str(&format!("  raptor diff {}\n", metadata.id));
-    output.push_str("  Future: DeepSeek execution is the next v0.1 implementation step.\n");
-    output.push_str("Model calls: not performed\n");
-    output.push_str("Source file writes in worktrees: not performed\n");
+    output.push_str(&format!(
+        "  raptor test {} after test command exists\n",
+        metadata.id
+    ));
+    output.push_str("Model calls: performed only for planning when DEEPSEEK_API_KEY is set\n");
+    output.push_str("Source file writes in worktrees: RAPTOR_PLAN.md only\n");
     output.push_str("Tests: not run\n");
     output.push_str("Merge: not performed\n");
     output.push_str("Remote push: not performed\n");
+    output.push_str("Model output execution: not performed\n");
     output.push_str("Note: review and diff remain single-worktree commands until multi-agent review fan-out is implemented.\n");
 
     output
@@ -1389,6 +1620,7 @@ mod tests {
     use raptor_core::TaskId;
     use raptor_providers::{ProviderCapabilities, ProviderError};
     use raptor_store::{read_task_metadata, CONFIG_FILE_NAME};
+    use std::cell::Cell;
     use std::fs;
     use std::io::Cursor;
     use std::path::PathBuf;
@@ -1401,7 +1633,9 @@ mod tests {
 
     struct FakeDeepSeekProvider {
         capabilities: ProviderCapabilities,
+        call_count: Cell<usize>,
         default_model: ModelId,
+        fail_role: Option<String>,
         provider_id: ProviderId,
         response: CompletionResponse,
     }
@@ -1434,7 +1668,9 @@ mod tests {
 
             Self {
                 capabilities: ProviderCapabilities::network_chat(),
+                call_count: Cell::new(0),
                 default_model: default_model.clone(),
+                fail_role: None,
                 provider_id: provider_id.clone(),
                 response: CompletionResponse {
                     provider_id,
@@ -1448,6 +1684,16 @@ mod tests {
                     }),
                 },
             }
+        }
+
+        fn failing_for_role(content: &str, role: &str) -> Self {
+            let mut provider = Self::new(content);
+            provider.fail_role = Some(role.to_owned());
+            provider
+        }
+
+        fn call_count(&self) -> usize {
+            self.call_count.get()
         }
     }
 
@@ -1476,11 +1722,17 @@ mod tests {
             &self,
             request: CompletionRequest,
         ) -> Result<CompletionResponse, ProviderError> {
+            self.call_count.set(self.call_count.get() + 1);
             assert_eq!(request.provider_id.as_str(), "deepseek");
             assert_eq!(request.model_id.as_str(), "deepseek-chat");
             assert_eq!(request.messages.len(), 2);
             assert_eq!(request.messages[0].role.as_str(), "system");
             assert_eq!(request.messages[1].role.as_str(), "user");
+            if let Some(fail_role) = self.fail_role.as_deref() {
+                if request.messages[1].content.contains(fail_role) {
+                    return Err(ProviderError::RateLimited("test rate limit".to_owned()));
+                }
+            }
             Ok(self.response.clone())
         }
     }
@@ -2274,7 +2526,12 @@ mod tests {
         let description = "Add GitHub OAuth to this Next.js app";
         let task_id = TaskId::from_description(description).unwrap();
 
-        let output = run(["swarm", description], &test_dir.path).unwrap();
+        let output = create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::MissingDeepSeekApiKey,
+        )
+        .unwrap();
         let metadata_path = swarm_metadata_path(&test_dir.path, &task_id);
         let metadata = fs::read_to_string(&metadata_path).unwrap();
         let roles = [
@@ -2287,16 +2544,17 @@ mod tests {
         assert!(output.contains("RaptorCode Swarm Created"));
         assert!(output.contains(task_id.as_str()));
         assert!(output.contains("Provider: DeepSeek"));
-        assert!(output.contains("Status: pending model execution"));
+        assert!(output.contains("Status: blocked_missing_deepseek_api_key"));
+        assert!(output.contains(DEEPSEEK_API_KEY_URL));
         assert!(output.contains(&format!("raptor review {}", task_id.as_str())));
         assert!(output.contains(&format!("raptor diff {}", task_id.as_str())));
-        assert!(output.contains("Model calls: not performed"));
-        assert!(output.contains("Source file writes in worktrees: not performed"));
+        assert!(output.contains("Source file writes in worktrees: RAPTOR_PLAN.md only"));
         assert!(metadata_path.exists());
         assert!(metadata.contains(&format!("id = \"{}\"", task_id.as_str())));
         assert!(metadata.contains("provider = \"deepseek\""));
         assert!(metadata.contains("model = \"deepseek-chat\""));
-        assert!(metadata.contains("status = \"pending_model_execution\""));
+        assert!(metadata.contains("status = \"blocked_missing_deepseek_api_key\""));
+        assert!(metadata.contains("planning_status = \"blocked_missing_deepseek_api_key\""));
 
         for role in roles {
             let worktree_path = swarm_agent_worktree_path(&test_dir.path, &task_id, role);
@@ -2310,6 +2568,7 @@ mod tests {
             assert!(metadata.contains(&format!("role = \"{role}\"")));
             assert!(metadata.contains(&format!("agent_id = \"{}-{role}\"", task_id.as_str())));
             assert!(metadata.contains(&format!("branch = \"{branch_name}\"")));
+            assert!(!worktree_path.join("RAPTOR_PLAN.md").exists());
             run_git(
                 &test_dir.path,
                 &["show-ref", "--verify", "--quiet", &branch_ref],
@@ -2331,6 +2590,177 @@ mod tests {
                 &["status", "--short", "--untracked-files=no"]
             ),
             ""
+        );
+    }
+
+    #[test]
+    fn swarm_deepseek_planning_writes_role_plans_and_metadata() {
+        let test_dir = TestDir::create("swarm-planning");
+        initialize_git_repo(&test_dir.path);
+        fs::create_dir_all(test_dir.path.join("src")).unwrap();
+        commit_file(
+            &test_dir.path,
+            "src/app.tsx",
+            "export default function App() {}\n",
+        );
+        let description = "Add GitHub OAuth to this Next.js app";
+        let task_id = TaskId::from_description(description).unwrap();
+        let provider = FakeDeepSeekProvider::new(
+            "1. Inspect relevant files.\n2. Plan implementation only.\n3. Do not execute output.",
+        );
+
+        let output = create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&provider),
+        )
+        .unwrap();
+        let metadata = fs::read_to_string(swarm_metadata_path(&test_dir.path, &task_id)).unwrap();
+
+        assert_eq!(provider.call_count(), 4);
+        assert!(output.contains("Planning status: planning_completed"));
+        assert!(metadata.contains("status = \"planning_completed\""));
+        assert!(metadata.contains("planning_status = \"planning_completed\""));
+        assert_eq!(
+            fs::read_to_string(test_dir.path.join("src/app.tsx")).unwrap(),
+            "export default function App() {}\n"
+        );
+
+        for role in [
+            "frontend-agent",
+            "backend-agent",
+            "test-agent",
+            "security-agent",
+        ] {
+            let worktree_path = swarm_agent_worktree_path(&test_dir.path, &task_id, role);
+            let plan_path = worktree_path.join(RAPTOR_PLAN_FILE_NAME);
+            let plan = fs::read_to_string(&plan_path).unwrap();
+
+            assert!(plan_path.starts_with(&worktree_path));
+            assert!(plan.contains("# RaptorCode Agent Plan"));
+            assert!(plan.contains(&format!("Task id: {}", task_id.as_str())));
+            assert!(plan.contains(&format!("Agent role: {role}")));
+            assert!(plan.contains("Provider: DeepSeek"));
+            assert!(plan.contains("Model: deepseek-chat"));
+            assert!(plan.contains("This plan is AI-generated"));
+            assert!(metadata.contains(&format!("role = \"{role}\"")));
+            assert!(metadata.contains(&format!("plan_file_path = \"{}\"", plan_path.display())));
+            assert_eq!(
+                git_text(&worktree_path, &["status", "--short"]),
+                "?? RAPTOR_PLAN.md\n"
+            );
+        }
+    }
+
+    #[test]
+    fn swarm_missing_api_key_blocks_planning_without_destroying_worktrees() {
+        let test_dir = TestDir::create("swarm-missing-key");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "source\n");
+        let description = "Plan with missing key";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        let output = create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::MissingDeepSeekApiKey,
+        )
+        .unwrap();
+        let metadata = fs::read_to_string(swarm_metadata_path(&test_dir.path, &task_id)).unwrap();
+
+        assert!(output.contains("blocked_missing_deepseek_api_key"));
+        assert!(output.contains(DEEPSEEK_API_KEY_URL));
+        assert!(metadata.contains("planning_status = \"blocked_missing_deepseek_api_key\""));
+
+        for role in [
+            "frontend-agent",
+            "backend-agent",
+            "test-agent",
+            "security-agent",
+        ] {
+            let worktree_path = swarm_agent_worktree_path(&test_dir.path, &task_id, role);
+
+            assert!(worktree_path.is_dir());
+            assert!(!worktree_path.join(RAPTOR_PLAN_FILE_NAME).exists());
+        }
+    }
+
+    #[test]
+    fn swarm_model_output_is_not_executed_or_applied_to_source() {
+        let test_dir = TestDir::create("swarm-output-safety");
+        initialize_git_repo(&test_dir.path);
+        fs::create_dir_all(test_dir.path.join("src")).unwrap();
+        commit_file(
+            &test_dir.path,
+            "src/app.tsx",
+            "export default function App() {}\n",
+        );
+        let description = "Plan source safety";
+        let task_id = TaskId::from_description(description).unwrap();
+        let provider = FakeDeepSeekProvider::new(
+            "Run `touch SHOULD_NOT_EXIST` and replace src/app.tsx. This must stay text only.",
+        );
+
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&provider),
+        )
+        .unwrap();
+
+        assert!(!test_dir.path.join("SHOULD_NOT_EXIST").exists());
+        assert_eq!(
+            fs::read_to_string(test_dir.path.join("src/app.tsx")).unwrap(),
+            "export default function App() {}\n"
+        );
+
+        for role in [
+            "frontend-agent",
+            "backend-agent",
+            "test-agent",
+            "security-agent",
+        ] {
+            let worktree_path = swarm_agent_worktree_path(&test_dir.path, &task_id, role);
+            let source = fs::read_to_string(worktree_path.join("src/app.tsx")).unwrap();
+
+            assert_eq!(source, "export default function App() {}\n");
+            assert!(worktree_path.join(RAPTOR_PLAN_FILE_NAME).exists());
+            assert!(!worktree_path.join("SHOULD_NOT_EXIST").exists());
+        }
+    }
+
+    #[test]
+    fn swarm_records_per_agent_failure_without_losing_metadata() {
+        let test_dir = TestDir::create("swarm-agent-failure");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "source\n");
+        let description = "Plan with one failed role";
+        let task_id = TaskId::from_description(description).unwrap();
+        let provider = FakeDeepSeekProvider::failing_for_role("plan", "security-agent");
+
+        let output = create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&provider),
+        )
+        .unwrap();
+        let metadata_path = swarm_metadata_path(&test_dir.path, &task_id);
+        let metadata = fs::read_to_string(metadata_path).unwrap();
+
+        assert_eq!(provider.call_count(), 4);
+        assert!(output.contains("Planning status: planning_failed"));
+        assert!(metadata.contains("planning_status = \"planning_failed\""));
+        assert!(metadata.contains("role = \"security-agent\""));
+
+        for role in ["frontend-agent", "backend-agent", "test-agent"] {
+            assert!(swarm_agent_worktree_path(&test_dir.path, &task_id, role)
+                .join(RAPTOR_PLAN_FILE_NAME)
+                .exists());
+        }
+        assert!(
+            !swarm_agent_worktree_path(&test_dir.path, &task_id, "security-agent")
+                .join(RAPTOR_PLAN_FILE_NAME)
+                .exists()
         );
     }
 
@@ -2360,7 +2790,12 @@ mod tests {
         let description = "../../escape branch && rm -rf app";
         let task_id = TaskId::from_description(description).unwrap();
 
-        run(["swarm", description], &test_dir.path).unwrap();
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::MissingDeepSeekApiKey,
+        )
+        .unwrap();
 
         assert!(!task_id.as_str().contains(".."));
         assert!(task_id
@@ -2417,8 +2852,18 @@ mod tests {
         initialize_git_repo(&test_dir.path);
         let description = "Duplicate swarm";
 
-        run(["swarm", description], &test_dir.path).unwrap();
-        let error = run(["swarm", description], &test_dir.path).unwrap_err();
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::MissingDeepSeekApiKey,
+        )
+        .unwrap();
+        let error = create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::MissingDeepSeekApiKey,
+        )
+        .unwrap_err();
 
         assert!(error.to_string().contains("refusing to overwrite"));
     }

@@ -10,7 +10,7 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 
 ## Summary
 
-The first single-worktree workflow is `raptor task "description"`. The v0.1 multi-agent workflow is `raptor swarm "description"`. Both prepare safe local infrastructure only. They do not launch autonomous coding agents.
+The first single-worktree workflow is `raptor task "description"`. The v0.1 multi-agent workflow is `raptor swarm "description"`. The swarm workflow creates role worktrees and can generate role-specific DeepSeek planning artifacts. It does not launch autonomous coding agents or modify application source code.
 
 ## Command
 
@@ -77,9 +77,14 @@ The command:
   - `.raptor/worktrees/<task-id>/test-agent`
   - `.raptor/worktrees/<task-id>/security-agent`
 - Persists swarm metadata under `.raptor/swarms/<task-id>.toml`.
-- Records provider placeholder `deepseek`, model placeholder `deepseek-chat`, and status `pending_model_execution`.
+- Records provider `deepseek`, model `deepseek-chat`, swarm planning status, per-agent planning status, and per-agent plan file paths when generated.
+- Uses role templates from `templates/frontend-agent.md`, `templates/backend-agent.md`, `templates/test-agent.md`, and `templates/security-agent.md`.
+- If `DEEPSEEK_API_KEY` is set, calls DeepSeek once per role and writes `RAPTOR_PLAN.md` inside each assigned role worktree.
+- If `DEEPSEEK_API_KEY` is missing, keeps the worktrees and metadata, records `blocked_missing_deepseek_api_key`, and directs the developer to `https://platform.deepseek.com/api_keys`.
 - Prints role, branch, worktree path, and status for each agent.
-- Does not call AI models, modify source files inside the role worktrees, run tests, merge, push, or execute task-provided commands.
+- Does not execute model output, apply patches, modify application source files, run tests, merge, push, or execute task-provided commands.
+
+Each generated `RAPTOR_PLAN.md` includes the task id, task description, agent role, provider, model, generated plan, and a safety note that the AI-generated plan must be reviewed before implementation.
 
 Existing `raptor review <task-id>` and `raptor diff <task-id>` currently inspect only single-worktree task metadata from `.raptor/tasks/`. Multi-agent review and diff fan-out remain v0.1 follow-up work after swarm DeepSeek planning creates reviewable role worktree changes.
 
@@ -418,9 +423,10 @@ Current layout:
 ## Current Limits
 
 - No autonomous agents are launched.
-- `raptor swarm` creates role worktrees and metadata only.
-- `raptor swarm` records DeepSeek placeholders but does not call DeepSeek yet.
-- `raptor swarm` does not modify source files inside role worktrees.
+- `raptor swarm` creates role worktrees, metadata, and role planning artifacts when `DEEPSEEK_API_KEY` is set.
+- `raptor swarm` calls only DeepSeek before v0.1 and sends only the task description plus role template.
+- `raptor swarm` writes only `RAPTOR_PLAN.md` inside assigned role worktrees.
+- `raptor swarm` does not modify application source files inside role worktrees.
 - Task setup and inspection commands do not create commits.
 - No remote pushes are performed.
 - `raptor merge <task-id>` is preflight dry-run only.
@@ -442,4 +448,4 @@ Persisted agent sessions and permission policy were implemented early but are fr
 
 ## Recommended Next Step
 
-PROMPT 19 - Implement agent role templates and swarm DeepSeek planning
+PROMPT 20 - Implement minimal supervised worktree file modification path

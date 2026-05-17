@@ -48,6 +48,7 @@ Implemented foundation:
 - `raptor merge <task-id>` preflight dry run.
 - `raptor merge <task-id> --execute` supervised local merge execution.
 - `raptor swarm "task description"` multi-agent worktree MVP.
+- `raptor swarm "task description"` DeepSeek planning that writes `RAPTOR_PLAN.md` per role when `DEEPSEEK_API_KEY` is set.
 - DeepSeek provider execution through `DEEPSEEK_API_KEY`.
 - Provider metadata catalog for DeepSeek first, plus future OpenAI/Codex, Claude, Gemini, and local model boundaries.
 - Read-only persisted local agent session model for future multi-agent orchestration.
@@ -92,6 +93,11 @@ Current controls:
 - `raptor chat` sends only the fixed system prompt and user-provided chat message to DeepSeek.
 - `raptor chat` does not send repository contents, `.env` files, secrets, task metadata, or worktree files.
 - `raptor chat` does not execute model output, run shell commands, or write source files.
+- `raptor swarm` sends only the task description and role template to DeepSeek when `DEEPSEEK_API_KEY` is set.
+- `raptor swarm` writes only `RAPTOR_PLAN.md` planning artifacts inside assigned role worktrees.
+- `raptor swarm` blocks planning without failing worktree creation when `DEEPSEEK_API_KEY` is missing.
+- Swarm plans are AI-generated and must be reviewed before implementation.
+- Swarm planning does not execute model output, apply patches, edit application source files, run tests, merge, commit, or push.
 - Agent session creation writes metadata only under `.raptor/agents/`.
 - Agent inspection is read-only and loads only validated `.raptor/agents/<agent-id>.toml` metadata.
 - Agent sessions do not modify source files, execute shell commands, make network requests, or call AI models in this foundation.
@@ -190,10 +196,15 @@ It currently:
   - `.raptor/worktrees/<task-id>/test-agent`
   - `.raptor/worktrees/<task-id>/security-agent`
 - Writes swarm metadata under `.raptor/swarms/<task-id>.toml`.
-- Records provider placeholder `deepseek` and model placeholder `deepseek-chat`.
-- Leaves execution status as `pending_model_execution`.
+- Records provider `deepseek`, model `deepseek-chat`, planning status, per-agent planning status, and plan file paths when generated.
+- With `DEEPSEEK_API_KEY` set, calls DeepSeek once per role and writes:
+  - `.raptor/worktrees/<task-id>/frontend-agent/RAPTOR_PLAN.md`
+  - `.raptor/worktrees/<task-id>/backend-agent/RAPTOR_PLAN.md`
+  - `.raptor/worktrees/<task-id>/test-agent/RAPTOR_PLAN.md`
+  - `.raptor/worktrees/<task-id>/security-agent/RAPTOR_PLAN.md`
+- Without `DEEPSEEK_API_KEY`, preserves worktrees and metadata, marks planning as `blocked_missing_deepseek_api_key`, and prints `https://platform.deepseek.com/api_keys`.
 
-It does not call DeepSeek for swarm agents yet, modify source files inside the role worktrees, run tests, merge, or push. Swarm DeepSeek planning is the next v0.1 implementation step. Existing `raptor review` and `raptor diff` remain single-worktree task commands until multi-agent review fan-out is implemented.
+Swarm planning is planning-only. It does not modify application source files inside the role worktrees, execute model output, run tests, merge, commit, or push. Existing `raptor review` and `raptor diff` remain single-worktree task commands until multi-agent review fan-out is implemented.
 
 Task inspection commands are read-only:
 
