@@ -16,7 +16,7 @@ Only these items are active before v0.1 is complete, tagged, documented, and lau
 - [x] `raptor chat`
 - [x] Agent role templates
 - [x] Swarm DeepSeek planning artifacts
-- [ ] Minimal worktree file modification path
+- [x] Minimal worktree file modification path
 - [ ] `raptor test`
 - [ ] Ratatui dashboard
 - [ ] Premium terminal launch screen shown when user runs `raptor`
@@ -62,10 +62,12 @@ Complete and in-scope:
 - Role templates for `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent`.
 - `raptor swarm "description"` DeepSeek planning that writes `RAPTOR_PLAN.md` per role when `DEEPSEEK_API_KEY` is set.
 - Missing `DEEPSEEK_API_KEY` blocks planning status without failing swarm worktree creation.
+- `raptor swarm implement <task-id> <role>` supervised implementation proposal generation.
+- `RAPTOR_IMPLEMENTATION_PROPOSAL.md` artifacts inside selected role worktrees.
 
 Incomplete but required:
 
-- Minimal model-output-to-worktree file modification path.
+- Role-aware swarm review and diff.
 - `raptor test <task-id>`.
 - Simple Ratatui dashboard.
 - Premium startup screen for plain `raptor`.
@@ -134,6 +136,7 @@ v0.1 is complete when this supervised local workflow works and is documented:
 ```bash
 raptor init
 raptor swarm "Add GitHub OAuth to this Next.js app"
+raptor swarm implement <task-id> frontend-agent
 raptor review <task-id>
 raptor diff <task-id>
 raptor test <task-id>
@@ -144,4 +147,4 @@ The output must be understandable, safe, demo-ready, and aligned with the premiu
 
 ## Next Implementation Prompt
 
-PROMPT 20 - Implement minimal supervised worktree file modification path
+PROMPT 21 - Implement role-aware swarm review and diff

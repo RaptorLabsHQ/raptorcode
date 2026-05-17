@@ -5,12 +5,14 @@ use std::io::BufRead;
 use std::path::{Component, Path, PathBuf};
 
 use raptor_agent::{
-    build_role_planning_prompt, AgentId, AgentRole, AgentSession, PermissionPolicy,
+    build_role_planning_prompt, role_prompt_template, AgentId, AgentRole, AgentSession,
+    PermissionPolicy,
 };
 use raptor_core::{
     project_description, project_name, version, TaskId, TaskMetadata, TaskStatus,
-    SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS, SWARM_PENDING_MODEL_EXECUTION_STATUS,
-    SWARM_PLANNING_COMPLETED_STATUS, SWARM_PLANNING_FAILED_STATUS,
+    SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS, SWARM_IMPLEMENTATION_FAILED_STATUS,
+    SWARM_PENDING_MODEL_EXECUTION_STATUS, SWARM_PLANNING_COMPLETED_STATUS,
+    SWARM_PLANNING_FAILED_STATUS, SWARM_PROPOSAL_GENERATED_STATUS,
 };
 use raptor_git::{
     create_swarm_worktrees, create_task_worktree, diff_task_worktree, execute_task_merge,
@@ -27,9 +29,10 @@ use raptor_providers::{
 use raptor_store::{
     init_project_config, list_agent_sessions, list_task_metadata, persist_agent_session,
     persist_swarm_metadata, persist_task_metadata, read_agent_session, read_project_config,
-    read_task_metadata, swarm_metadata_exists, task_metadata_exists, update_swarm_metadata,
-    update_task_status, InitConfigOutcome, ProjectConfigError, StoredAgentSession,
-    StoredTaskMetadata, SwarmAgentMetadata, SwarmMetadata, TaskStatusTransition,
+    read_swarm_metadata, read_task_metadata, swarm_metadata_exists, task_metadata_exists,
+    update_swarm_metadata, update_task_status, InitConfigOutcome, ProjectConfigError,
+    StoredAgentSession, StoredTaskMetadata, SwarmAgentMetadata, SwarmMetadata,
+    TaskStatusTransition,
 };
 use raptor_tools::command_version;
 
@@ -45,6 +48,7 @@ pub enum CliCommand {
     Provider(ProviderCommand),
     Review { task_id: String },
     Swarm { description: String },
+    SwarmImplement { role: String, task_id: String },
     Task(TaskCommand),
     Test,
     Version,
@@ -96,7 +100,9 @@ const SWARM_PROVIDER_DISPLAY: &str = "DeepSeek";
 const SWARM_MODEL_ID: &str = "deepseek-chat";
 const CHAT_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised coding assistant. Answer the developer's message directly. Do not claim to modify files, run commands, install dependencies, commit, merge, or push.";
 const SWARM_PLANNING_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised v0.1 planning assistant for Raptor Labs. Produce role-specific implementation planning only. Do not modify files, execute commands, apply patches, run tests, claim work was completed, or propose Phase 2 features. DeepSeek is the only provider in scope before v0.1.";
+const SWARM_IMPLEMENTATION_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised v0.1 implementation proposal assistant for Raptor Labs. Produce a safe, reviewable implementation proposal only. Do not claim files were modified. Do not execute commands. Do not apply patches. Do not instruct RaptorCode to modify source files automatically. DeepSeek is the only provider in scope before v0.1.";
 const RAPTOR_PLAN_FILE_NAME: &str = "RAPTOR_PLAN.md";
+const RAPTOR_IMPLEMENTATION_PROPOSAL_FILE_NAME: &str = "RAPTOR_IMPLEMENTATION_PROPOSAL.md";
 
 impl CliError {
     fn new(message: impl Into<String>) -> Self {
@@ -212,6 +218,21 @@ where
             description: description.join(" "),
         })),
         [arg] if arg == "swarm" => Err(CliError::new("swarm task description is required")),
+        [arg, subcommand] if arg == "swarm" && subcommand == "implement" => {
+            Err(CliError::new("swarm implement task id is required"))
+        }
+        [arg, subcommand, _task_id] if arg == "swarm" && subcommand == "implement" => {
+            Err(CliError::new("swarm implement role is required"))
+        }
+        [arg, subcommand, task_id, role] if arg == "swarm" && subcommand == "implement" => {
+            Ok(CliCommand::SwarmImplement {
+                role: role.to_owned(),
+                task_id: task_id.to_owned(),
+            })
+        }
+        [arg, subcommand, ..] if arg == "swarm" && subcommand == "implement" => Err(CliError::new(
+            "swarm implement accepts exactly one task id and one role",
+        )),
         [arg, description @ ..] if arg == "swarm" => Ok(CliCommand::Swarm {
             description: description.join(" "),
         }),
@@ -335,6 +356,9 @@ where
         CliCommand::Provider(ProviderCommand::List) => list_providers(current_dir),
         CliCommand::Review { task_id } => review_task(current_dir, &task_id),
         CliCommand::Swarm { description } => create_swarm(current_dir, &description),
+        CliCommand::SwarmImplement { role, task_id } => {
+            implement_swarm_role(current_dir, &task_id, &role)
+        }
         CliCommand::Task(TaskCommand::Abandon { id }) => abandon_task(current_dir, &id),
         CliCommand::Task(TaskCommand::Cleanup { id }) => {
             cleanup_task(current_dir, &id, confirmation_input)
@@ -355,7 +379,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat \"message\"\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm \"task description\"\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat \"message\"\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm \"task description\"\n  raptor swarm implement <task-id> <role>\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -581,6 +605,13 @@ enum SwarmPlanningSource<'a> {
     Provider(&'a dyn Provider),
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+enum SwarmImplementationSource<'a> {
+    Environment,
+    MissingDeepSeekApiKey,
+    Provider(&'a dyn Provider),
+}
+
 fn create_swarm_with_planning_source(
     current_dir: &Path,
     description: &str,
@@ -653,9 +684,11 @@ fn swarm_metadata_from_plan(plan: &SwarmWorktreePlan, description: &str) -> Swar
         .map(|agent| SwarmAgentMetadata {
             agent_id: format!("{}-{}", plan.task_id, agent.role),
             branch: agent.branch_name.clone(),
+            implementation_status: None,
             model: Some(SWARM_MODEL_ID.to_owned()),
             plan_file_path: None,
             planning_status: Some(SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned()),
+            proposal_file_path: None,
             provider: Some(SWARM_PROVIDER_ID.to_owned()),
             role: agent.role.clone(),
             status: SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned(),
@@ -793,6 +826,52 @@ fn plan_file_path_for_agent(
     role: &str,
     worktree_path: &Path,
 ) -> Result<PathBuf, CliError> {
+    validate_swarm_agent_worktree_path(repository_root, task_id, role, worktree_path)?;
+
+    let plan_file_path = worktree_path.join(RAPTOR_PLAN_FILE_NAME);
+
+    if plan_file_path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(CliError::new(format!(
+            "unsafe plan file path: {}",
+            plan_file_path.display()
+        )));
+    }
+
+    Ok(plan_file_path)
+}
+
+fn proposal_file_path_for_agent(
+    repository_root: &Path,
+    task_id: &str,
+    role: &str,
+    worktree_path: &Path,
+) -> Result<PathBuf, CliError> {
+    validate_swarm_agent_worktree_path(repository_root, task_id, role, worktree_path)?;
+
+    let proposal_file_path = worktree_path.join(RAPTOR_IMPLEMENTATION_PROPOSAL_FILE_NAME);
+
+    if proposal_file_path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(CliError::new(format!(
+            "unsafe proposal file path: {}",
+            proposal_file_path.display()
+        )));
+    }
+
+    Ok(proposal_file_path)
+}
+
+fn validate_swarm_agent_worktree_path(
+    repository_root: &Path,
+    task_id: &str,
+    role: &str,
+    worktree_path: &Path,
+) -> Result<(), CliError> {
     let expected_worktree_path = repository_root
         .join(".raptor")
         .join("worktrees")
@@ -810,19 +889,7 @@ fn plan_file_path_for_agent(
         )));
     }
 
-    let plan_file_path = worktree_path.join(RAPTOR_PLAN_FILE_NAME);
-
-    if plan_file_path
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err(CliError::new(format!(
-            "unsafe plan file path: {}",
-            plan_file_path.display()
-        )));
-    }
-
-    Ok(plan_file_path)
+    Ok(())
 }
 
 fn render_raptor_plan(
@@ -836,6 +903,307 @@ fn render_raptor_plan(
         SWARM_PROVIDER_DISPLAY,
         response.model_id.as_str(),
         response.content.trim()
+    )
+}
+
+pub fn implement_swarm_role(
+    current_dir: &Path,
+    task_id: &str,
+    role: &str,
+) -> Result<String, CliError> {
+    implement_swarm_role_with_source(
+        current_dir,
+        task_id,
+        role,
+        SwarmImplementationSource::Environment,
+    )
+}
+
+fn implement_swarm_role_with_source(
+    current_dir: &Path,
+    task_id: &str,
+    role: &str,
+    implementation_source: SwarmImplementationSource<'_>,
+) -> Result<String, CliError> {
+    role_prompt_template(role).map_err(|error| CliError::new(error.to_string()))?;
+
+    let repository_root =
+        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let mut metadata = read_swarm_metadata(repository_root.path(), task_id)
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let agent_index = metadata
+        .agents
+        .iter()
+        .position(|agent| agent.role == role)
+        .ok_or_else(|| CliError::new(format!("swarm role not found for task {task_id}: {role}")))?;
+    let worktree_path = metadata.agents[agent_index].worktree_path.clone();
+
+    validate_swarm_agent_worktree_path(repository_root.path(), task_id, role, &worktree_path)?;
+    if !worktree_path.is_dir() {
+        return Err(CliError::new(format!(
+            "swarm role worktree not found: {}",
+            worktree_path.display()
+        )));
+    }
+
+    match implementation_source {
+        SwarmImplementationSource::Environment => match DeepSeekProvider::from_env() {
+            Ok(provider) => generate_swarm_implementation_proposal(
+                repository_root.path(),
+                task_id,
+                role,
+                &mut metadata,
+                agent_index,
+                &provider,
+            ),
+            Err(ProviderError::MissingApiKey) => {
+                mark_swarm_role_implementation_missing_api_key(
+                    repository_root.path(),
+                    &mut metadata,
+                    agent_index,
+                )?;
+                Ok(render_swarm_implementation_blocked(
+                    &metadata,
+                    &metadata.agents[agent_index],
+                ))
+            }
+            Err(error) => {
+                mark_swarm_role_implementation_failed(
+                    repository_root.path(),
+                    &mut metadata,
+                    agent_index,
+                )?;
+                Err(CliError::new(error.to_string()))
+            }
+        },
+        SwarmImplementationSource::MissingDeepSeekApiKey => {
+            mark_swarm_role_implementation_missing_api_key(
+                repository_root.path(),
+                &mut metadata,
+                agent_index,
+            )?;
+            Ok(render_swarm_implementation_blocked(
+                &metadata,
+                &metadata.agents[agent_index],
+            ))
+        }
+        SwarmImplementationSource::Provider(provider) => generate_swarm_implementation_proposal(
+            repository_root.path(),
+            task_id,
+            role,
+            &mut metadata,
+            agent_index,
+            provider,
+        ),
+    }
+}
+
+fn generate_swarm_implementation_proposal(
+    repository_root: &Path,
+    task_id: &str,
+    role: &str,
+    metadata: &mut SwarmMetadata,
+    agent_index: usize,
+    provider: &dyn Provider,
+) -> Result<String, CliError> {
+    if provider.id().as_str() != SWARM_PROVIDER_ID {
+        return Err(CliError::new(
+            "only the DeepSeek provider is implemented before v0.1",
+        ));
+    }
+
+    let agent = metadata.agents[agent_index].clone();
+    let plan_file_path = agent
+        .plan_file_path
+        .clone()
+        .unwrap_or_else(|| agent.worktree_path.join(RAPTOR_PLAN_FILE_NAME));
+
+    if agent.planning_status.as_deref() == Some(SWARM_PLANNING_COMPLETED_STATUS)
+        && !plan_file_path.is_file()
+    {
+        return Err(CliError::new(format!(
+            "RAPTOR_PLAN.md is missing for completed planning role {role}: {}",
+            plan_file_path.display()
+        )));
+    }
+    if !plan_file_path.is_file() {
+        return Err(CliError::new(format!(
+            "RAPTOR_PLAN.md is required before implementation proposal generation: {}",
+            plan_file_path.display()
+        )));
+    }
+
+    let plan_content = fs::read_to_string(&plan_file_path)
+        .map_err(|source| CliError::new(format!("{}: {source}", plan_file_path.display())))?;
+    let model_id = provider
+        .default_model()
+        .cloned()
+        .ok_or_else(|| CliError::new("DeepSeek provider has no default model configured"))?;
+    let prompt = build_swarm_implementation_prompt(&metadata.description, role, &plan_content);
+    let request = CompletionRequest::new(
+        provider.id().clone(),
+        model_id,
+        vec![
+            CompletionMessage::system(SWARM_IMPLEMENTATION_SYSTEM_PROMPT),
+            CompletionMessage::user(prompt),
+        ],
+    );
+    let response = match provider.complete(request) {
+        Ok(response) => response,
+        Err(error) => {
+            mark_swarm_role_implementation_failed(repository_root, metadata, agent_index)?;
+            return Err(CliError::new(error.to_string()));
+        }
+    };
+    let proposal_file_path =
+        proposal_file_path_for_agent(repository_root, task_id, role, &agent.worktree_path)?;
+    let proposal = render_swarm_implementation_proposal(task_id, role, &response);
+
+    if let Err(error) = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&proposal_file_path)
+        .and_then(|mut file| {
+            use std::io::Write;
+
+            file.write_all(proposal.as_bytes())
+        })
+    {
+        mark_swarm_role_implementation_failed(repository_root, metadata, agent_index)?;
+        return Err(CliError::new(format!(
+            "{}: {error}",
+            proposal_file_path.display()
+        )));
+    }
+
+    {
+        let agent = &mut metadata.agents[agent_index];
+        agent.implementation_status = Some(SWARM_PROPOSAL_GENERATED_STATUS.to_owned());
+        agent.model = Some(response.model_id.as_str().to_owned());
+        agent.proposal_file_path = Some(proposal_file_path.clone());
+        agent.provider = Some(response.provider_id.as_str().to_owned());
+        agent.status = SWARM_PROPOSAL_GENERATED_STATUS.to_owned();
+    }
+
+    update_swarm_metadata(repository_root, metadata)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(render_swarm_implementation_generated(
+        metadata,
+        &metadata.agents[agent_index],
+    ))
+}
+
+fn mark_swarm_role_implementation_missing_api_key(
+    repository_root: &Path,
+    metadata: &mut SwarmMetadata,
+    agent_index: usize,
+) -> Result<(), CliError> {
+    {
+        let agent = &mut metadata.agents[agent_index];
+        agent.implementation_status =
+            Some(SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS.to_owned());
+        agent.model = Some(SWARM_MODEL_ID.to_owned());
+        agent.proposal_file_path = None;
+        agent.provider = Some(SWARM_PROVIDER_ID.to_owned());
+        agent.status = SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS.to_owned();
+    }
+
+    update_swarm_metadata(repository_root, metadata)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(())
+}
+
+fn mark_swarm_role_implementation_failed(
+    repository_root: &Path,
+    metadata: &mut SwarmMetadata,
+    agent_index: usize,
+) -> Result<(), CliError> {
+    {
+        let agent = &mut metadata.agents[agent_index];
+        agent.implementation_status = Some(SWARM_IMPLEMENTATION_FAILED_STATUS.to_owned());
+        agent.model = Some(SWARM_MODEL_ID.to_owned());
+        agent.proposal_file_path = None;
+        agent.provider = Some(SWARM_PROVIDER_ID.to_owned());
+        agent.status = SWARM_IMPLEMENTATION_FAILED_STATUS.to_owned();
+    }
+
+    update_swarm_metadata(repository_root, metadata)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(())
+}
+
+fn build_swarm_implementation_prompt(
+    task_description: &str,
+    role: &str,
+    plan_content: &str,
+) -> String {
+    format!(
+        "RaptorCode v0.1 supervised implementation proposal request\n\nTask description:\n{}\n\nSelected role: {role}\n\nRole planning artifact:\n{}\n\nReturn a concise Markdown implementation proposal. Include recommended files to inspect or modify, manual next steps, risks, and any patch-like content only as text. Do not ask RaptorCode to apply patches. Do not execute commands. Do not modify files. Do not include repository contents beyond the plan above. Do not propose Phase 2 features.",
+        task_description.trim(),
+        plan_content.trim()
+    )
+}
+
+fn render_swarm_implementation_proposal(
+    task_id: &str,
+    role: &str,
+    response: &CompletionResponse,
+) -> String {
+    format!(
+        "# RaptorCode Implementation Proposal\n\nTask id: {task_id}\nRole: {role}\nProvider: {}\nModel: {}\n\n## Generated Implementation Proposal\n\n{}\n\n## Recommended Files To Inspect Or Modify\n\nReview the generated proposal above and inspect only the files it identifies before making manual source changes.\n\n## Manual Next Steps\n\n1. Review this proposal.\n2. Inspect the referenced files manually.\n3. Apply changes only after developer approval.\n4. Use review, diff, and test workflows before merge.\n\n## Safety Note\n\nThis generated output is untrusted and must be reviewed before applying to source code. RaptorCode did not execute model output, apply patches, run commands, or modify application source files.\n",
+        SWARM_PROVIDER_DISPLAY,
+        response.model_id.as_str(),
+        response.content.trim()
+    )
+}
+
+fn render_swarm_implementation_generated(
+    metadata: &SwarmMetadata,
+    agent: &SwarmAgentMetadata,
+) -> String {
+    let proposal_file_path = agent
+        .proposal_file_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "-".to_owned());
+
+    format!(
+        "RaptorCode Implementation Proposal Generated\nTask: {}\nRole: {}\nWorktree: {}\nProposal file: {}\nProvider: {}\nModel: {}\nStatus: {}\nNext commands:\n  Inspect proposal file: {}\n  raptor diff {} (single-task only; role-aware swarm diff remains a v0.1 task)\n  raptor review {} (single-task only; role-aware swarm review remains a v0.1 task)\n  raptor test {} after test command exists\nSource code auto-editing: not implemented\nModel output execution: not performed\nPolicy enforcement hooks: not implemented\n",
+        metadata.id,
+        agent.role,
+        agent.worktree_path.display(),
+        proposal_file_path,
+        agent.provider.as_deref().unwrap_or(SWARM_PROVIDER_ID),
+        agent.model.as_deref().unwrap_or(SWARM_MODEL_ID),
+        agent
+            .implementation_status
+            .as_deref()
+            .unwrap_or(&agent.status),
+        proposal_file_path,
+        metadata.id,
+        metadata.id,
+        metadata.id
+    )
+}
+
+fn render_swarm_implementation_blocked(
+    metadata: &SwarmMetadata,
+    agent: &SwarmAgentMetadata,
+) -> String {
+    format!(
+        "RaptorCode Implementation Proposal Blocked\nTask: {}\nRole: {}\nWorktree: {}\nProvider: {}\nModel: {}\nStatus: {}\nGet a DeepSeek API key at {DEEPSEEK_API_KEY_URL}\nProposal file: not written\nSource code auto-editing: not implemented\nModel output execution: not performed\n",
+        metadata.id,
+        agent.role,
+        agent.worktree_path.display(),
+        agent.provider.as_deref().unwrap_or(SWARM_PROVIDER_ID),
+        agent.model.as_deref().unwrap_or(SWARM_MODEL_ID),
+        agent
+            .implementation_status
+            .as_deref()
+            .unwrap_or(&agent.status)
     )
 }
 
@@ -1619,7 +1987,7 @@ mod tests {
     use super::*;
     use raptor_core::TaskId;
     use raptor_providers::{ProviderCapabilities, ProviderError};
-    use raptor_store::{read_task_metadata, CONFIG_FILE_NAME};
+    use raptor_store::{read_swarm_metadata, read_task_metadata, CONFIG_FILE_NAME};
     use std::cell::Cell;
     use std::fs;
     use std::io::Cursor;
@@ -1857,6 +2225,23 @@ mod tests {
         fs::write(metadata_path, updated).unwrap();
     }
 
+    fn replace_swarm_worktree_path_in_metadata(
+        repository_root: &Path,
+        task_id: &TaskId,
+        role: &str,
+        replacement_path: &Path,
+    ) {
+        let metadata_path = swarm_metadata_path(repository_root, task_id);
+        let worktree_path = swarm_agent_worktree_path(repository_root, task_id, role);
+        let content = fs::read_to_string(&metadata_path).unwrap();
+        let updated = content.replace(
+            &worktree_path.display().to_string(),
+            &replacement_path.display().to_string(),
+        );
+
+        fs::write(metadata_path, updated).unwrap();
+    }
+
     fn run_merge_execute_with_input(
         task_id: &TaskId,
         current_dir: &Path,
@@ -1953,6 +2338,23 @@ mod tests {
             parse_args(["swarm", "add", "oauth"]).unwrap(),
             CliCommand::Swarm {
                 description: "add oauth".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn parses_swarm_implement_command() {
+        assert_eq!(
+            parse_args([
+                "swarm",
+                "implement",
+                "add-github-oauth-123",
+                "frontend-agent"
+            ])
+            .unwrap(),
+            CliCommand::SwarmImplement {
+                task_id: "add-github-oauth-123".to_owned(),
+                role: "frontend-agent".to_owned()
             }
         );
     }
@@ -2091,6 +2493,20 @@ mod tests {
         let error = parse_args(["swarm"]).unwrap_err();
 
         assert!(error.to_string().contains("description"));
+    }
+
+    #[test]
+    fn rejects_missing_swarm_implement_arguments() {
+        let missing_task = parse_args(["swarm", "implement"]).unwrap_err();
+        let missing_role = parse_args(["swarm", "implement", "task-123"]).unwrap_err();
+        let extra =
+            parse_args(["swarm", "implement", "task-123", "frontend-agent", "extra"]).unwrap_err();
+
+        assert!(missing_task.to_string().contains("task id"));
+        assert!(missing_role.to_string().contains("role"));
+        assert!(extra
+            .to_string()
+            .contains("exactly one task id and one role"));
     }
 
     #[test]
@@ -2762,6 +3178,281 @@ mod tests {
                 .join(RAPTOR_PLAN_FILE_NAME)
                 .exists()
         );
+    }
+
+    #[test]
+    fn swarm_implement_generates_supervised_proposal_for_selected_role() {
+        let test_dir = TestDir::create("swarm-implement");
+        initialize_git_repo(&test_dir.path);
+        fs::create_dir_all(test_dir.path.join("src")).unwrap();
+        commit_file(
+            &test_dir.path,
+            "src/app.tsx",
+            "export default function App() {}\n",
+        );
+        let description = "Add GitHub OAuth to this Next.js app";
+        let task_id = TaskId::from_description(description).unwrap();
+        let planning_provider = FakeDeepSeekProvider::new("Inspect src/app.tsx before changes.");
+        let implementation_provider = FakeDeepSeekProvider::new(
+            "Proposal: update OAuth UI manually. Patch-like content stays in this file.",
+        );
+
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&planning_provider),
+        )
+        .unwrap();
+        let output = implement_swarm_role_with_source(
+            &test_dir.path,
+            task_id.as_str(),
+            "frontend-agent",
+            SwarmImplementationSource::Provider(&implementation_provider),
+        )
+        .unwrap();
+        let worktree_path = swarm_agent_worktree_path(&test_dir.path, &task_id, "frontend-agent");
+        let proposal_path = worktree_path.join(RAPTOR_IMPLEMENTATION_PROPOSAL_FILE_NAME);
+        let proposal = fs::read_to_string(&proposal_path).unwrap();
+        let metadata = read_swarm_metadata(&test_dir.path, task_id.as_str()).unwrap();
+        let agent = metadata
+            .agents
+            .iter()
+            .find(|agent| agent.role == "frontend-agent")
+            .unwrap();
+
+        assert_eq!(implementation_provider.call_count(), 1);
+        assert!(output.contains("RaptorCode Implementation Proposal Generated"));
+        assert!(output.contains(&proposal_path.display().to_string()));
+        assert!(proposal_path.starts_with(&worktree_path));
+        assert!(proposal.contains("# RaptorCode Implementation Proposal"));
+        assert!(proposal.contains(&format!("Task id: {}", task_id.as_str())));
+        assert!(proposal.contains("Role: frontend-agent"));
+        assert!(proposal.contains("Provider: DeepSeek"));
+        assert!(proposal.contains("Model: deepseek-chat"));
+        assert!(proposal.contains("Patch-like content stays in this file"));
+        assert!(proposal.contains("RaptorCode did not execute model output"));
+        assert_eq!(
+            agent.implementation_status.as_deref(),
+            Some(SWARM_PROPOSAL_GENERATED_STATUS)
+        );
+        assert_eq!(agent.proposal_file_path.as_ref(), Some(&proposal_path));
+        assert_eq!(
+            fs::read_to_string(test_dir.path.join("src/app.tsx")).unwrap(),
+            "export default function App() {}\n"
+        );
+    }
+
+    #[test]
+    fn swarm_implement_missing_api_key_does_not_write_proposal() {
+        let test_dir = TestDir::create("swarm-implement-missing-key");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "source\n");
+        let description = "Missing key implementation";
+        let task_id = TaskId::from_description(description).unwrap();
+        let planning_provider = FakeDeepSeekProvider::new("Plan first.");
+
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&planning_provider),
+        )
+        .unwrap();
+        let output = implement_swarm_role_with_source(
+            &test_dir.path,
+            task_id.as_str(),
+            "backend-agent",
+            SwarmImplementationSource::MissingDeepSeekApiKey,
+        )
+        .unwrap();
+        let worktree_path = swarm_agent_worktree_path(&test_dir.path, &task_id, "backend-agent");
+        let metadata = read_swarm_metadata(&test_dir.path, task_id.as_str()).unwrap();
+        let agent = metadata
+            .agents
+            .iter()
+            .find(|agent| agent.role == "backend-agent")
+            .unwrap();
+
+        assert!(output.contains(DEEPSEEK_API_KEY_URL));
+        assert!(!worktree_path
+            .join(RAPTOR_IMPLEMENTATION_PROPOSAL_FILE_NAME)
+            .exists());
+        assert_eq!(
+            agent.implementation_status.as_deref(),
+            Some(SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS)
+        );
+        assert!(agent.proposal_file_path.is_none());
+    }
+
+    #[test]
+    fn swarm_implement_rejects_unsafe_task_ids_roles_and_missing_metadata() {
+        let test_dir = TestDir::create("swarm-implement-validation");
+        initialize_git_repo(&test_dir.path);
+
+        let unsafe_error = implement_swarm_role_with_source(
+            &test_dir.path,
+            "../secret",
+            "frontend-agent",
+            SwarmImplementationSource::MissingDeepSeekApiKey,
+        )
+        .unwrap_err();
+        let traversal_error = implement_swarm_role_with_source(
+            &test_dir.path,
+            "bad..task",
+            "frontend-agent",
+            SwarmImplementationSource::MissingDeepSeekApiKey,
+        )
+        .unwrap_err();
+        let role_error = implement_swarm_role_with_source(
+            &test_dir.path,
+            "missing-task",
+            "../frontend-agent",
+            SwarmImplementationSource::MissingDeepSeekApiKey,
+        )
+        .unwrap_err();
+        let missing_error = implement_swarm_role_with_source(
+            &test_dir.path,
+            "missing-task",
+            "frontend-agent",
+            SwarmImplementationSource::MissingDeepSeekApiKey,
+        )
+        .unwrap_err();
+
+        assert!(unsafe_error.to_string().contains("swarm id"));
+        assert!(traversal_error.to_string().contains("swarm id"));
+        assert!(role_error.to_string().contains("unknown swarm agent role"));
+        assert!(missing_error
+            .to_string()
+            .contains("swarm metadata not found"));
+    }
+
+    #[test]
+    fn swarm_implement_rejects_missing_role_and_worktree() {
+        let test_dir = TestDir::create("swarm-implement-missing-worktree");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "source\n");
+        let description = "Missing role worktree";
+        let task_id = TaskId::from_description(description).unwrap();
+        let planning_provider = FakeDeepSeekProvider::new("Plan first.");
+
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&planning_provider),
+        )
+        .unwrap();
+        let missing_role = implement_swarm_role_with_source(
+            &test_dir.path,
+            task_id.as_str(),
+            "docs-agent",
+            SwarmImplementationSource::MissingDeepSeekApiKey,
+        )
+        .unwrap_err();
+
+        fs::remove_dir_all(swarm_agent_worktree_path(
+            &test_dir.path,
+            &task_id,
+            "test-agent",
+        ))
+        .unwrap();
+
+        let missing_worktree = implement_swarm_role_with_source(
+            &test_dir.path,
+            task_id.as_str(),
+            "test-agent",
+            SwarmImplementationSource::MissingDeepSeekApiKey,
+        )
+        .unwrap_err();
+
+        assert!(missing_role
+            .to_string()
+            .contains("unknown swarm agent role"));
+        assert!(missing_worktree.to_string().contains("worktree not found"));
+    }
+
+    #[test]
+    fn swarm_implement_rejects_worktree_path_outside_assigned_role() {
+        let test_dir = TestDir::create("swarm-implement-unsafe-path");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "source\n");
+        let description = "Unsafe proposal path";
+        let task_id = TaskId::from_description(description).unwrap();
+        let planning_provider = FakeDeepSeekProvider::new("Plan first.");
+
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&planning_provider),
+        )
+        .unwrap();
+        replace_swarm_worktree_path_in_metadata(
+            &test_dir.path,
+            &task_id,
+            "security-agent",
+            &test_dir.path.join("outside-security-agent"),
+        );
+
+        let error = implement_swarm_role_with_source(
+            &test_dir.path,
+            task_id.as_str(),
+            "security-agent",
+            SwarmImplementationSource::MissingDeepSeekApiKey,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("safe project path"));
+        assert!(!test_dir
+            .path
+            .join("outside-security-agent")
+            .join(RAPTOR_IMPLEMENTATION_PROPOSAL_FILE_NAME)
+            .exists());
+    }
+
+    #[test]
+    fn swarm_implement_model_output_is_not_executed_or_applied_to_source() {
+        let test_dir = TestDir::create("swarm-implement-output-safety");
+        initialize_git_repo(&test_dir.path);
+        fs::create_dir_all(test_dir.path.join("src")).unwrap();
+        commit_file(
+            &test_dir.path,
+            "src/app.tsx",
+            "export default function App() {}\n",
+        );
+        let description = "Implementation output safety";
+        let task_id = TaskId::from_description(description).unwrap();
+        let planning_provider = FakeDeepSeekProvider::new("Plan source safety.");
+        let implementation_provider = FakeDeepSeekProvider::new(
+            "Run `touch SHOULD_NOT_EXIST` and replace src/app.tsx. Keep this as text only.",
+        );
+
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&planning_provider),
+        )
+        .unwrap();
+        implement_swarm_role_with_source(
+            &test_dir.path,
+            task_id.as_str(),
+            "frontend-agent",
+            SwarmImplementationSource::Provider(&implementation_provider),
+        )
+        .unwrap();
+
+        let worktree_path = swarm_agent_worktree_path(&test_dir.path, &task_id, "frontend-agent");
+
+        assert!(!test_dir.path.join("SHOULD_NOT_EXIST").exists());
+        assert!(!worktree_path.join("SHOULD_NOT_EXIST").exists());
+        assert_eq!(
+            fs::read_to_string(test_dir.path.join("src/app.tsx")).unwrap(),
+            "export default function App() {}\n"
+        );
+        assert_eq!(
+            fs::read_to_string(worktree_path.join("src/app.tsx")).unwrap(),
+            "export default function App() {}\n"
+        );
+        assert!(worktree_path
+            .join(RAPTOR_IMPLEMENTATION_PROPOSAL_FILE_NAME)
+            .exists());
     }
 
     #[test]

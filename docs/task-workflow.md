@@ -1,6 +1,6 @@
 # Task Workflow
 
-Date: 2026-05-16
+Date: 2026-05-17
 Author: Tim
 Company: RaptorLabs.dev
 
@@ -10,7 +10,7 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 
 ## Summary
 
-The first single-worktree workflow is `raptor task "description"`. The v0.1 multi-agent workflow is `raptor swarm "description"`. The swarm workflow creates role worktrees and can generate role-specific DeepSeek planning artifacts. It does not launch autonomous coding agents or modify application source code.
+The first single-worktree workflow is `raptor task "description"`. The v0.1 multi-agent workflow is `raptor swarm "description"`. The swarm workflow creates role worktrees, can generate role-specific DeepSeek planning artifacts, and can generate one supervised implementation proposal for a selected role. It does not launch autonomous coding agents or modify application source code.
 
 ## Command
 
@@ -19,6 +19,7 @@ Create task infrastructure:
 ```bash
 cargo run -p raptor-cli -- task "describe the supervised task"
 cargo run -p raptor-cli -- swarm "Add GitHub OAuth to this Next.js app"
+cargo run -p raptor-cli -- swarm implement <task-id> frontend-agent
 ```
 
 Inspect persisted task metadata:
@@ -39,6 +40,7 @@ Installed binary forms:
 ```bash
 raptor task "describe the supervised task"
 raptor swarm "Add GitHub OAuth to this Next.js app"
+raptor swarm implement <task-id> frontend-agent
 raptor task list
 raptor task show <id>
 raptor task abandon <id>
@@ -85,6 +87,22 @@ The command:
 - Does not execute model output, apply patches, modify application source files, run tests, merge, push, or execute task-provided commands.
 
 Each generated `RAPTOR_PLAN.md` includes the task id, task description, agent role, provider, model, generated plan, and a safety note that the AI-generated plan must be reviewed before implementation.
+
+`raptor swarm implement <task-id> <role>`:
+
+- Treats the task id and role as untrusted input.
+- Allows only `frontend-agent`, `backend-agent`, `test-agent`, or `security-agent`.
+- Loads existing swarm metadata from `.raptor/swarms/<task-id>.toml`.
+- Validates that the selected role exists in the swarm.
+- Validates that the selected role worktree is under `.raptor/worktrees/<task-id>/<role>/`.
+- Requires `DEEPSEEK_API_KEY`; if it is missing, no proposal is written and the command prints `https://platform.deepseek.com/api_keys`.
+- Reads only the selected role's `RAPTOR_PLAN.md`.
+- Calls DeepSeek once for the selected role.
+- Writes only `.raptor/worktrees/<task-id>/<role>/RAPTOR_IMPLEMENTATION_PROPOSAL.md`.
+- Records per-agent `implementation_status`, `proposal_file_path`, provider, model, and `updated_at` in swarm metadata.
+- Does not execute model output, apply patches, modify application source files, run tests, merge, push, or execute task-provided commands.
+
+The generated implementation proposal preserves patch-like model output as reviewable Markdown text only. Applying source changes remains manual and supervised.
 
 Existing `raptor review <task-id>` and `raptor diff <task-id>` currently inspect only single-worktree task metadata from `.raptor/tasks/`. Multi-agent review and diff fan-out remain v0.1 follow-up work after swarm DeepSeek planning creates reviewable role worktree changes.
 
@@ -399,6 +417,8 @@ Current layout:
     <single-task-id>/
     <swarm-task-id>/
       frontend-agent/
+        RAPTOR_PLAN.md
+        RAPTOR_IMPLEMENTATION_PROPOSAL.md
       backend-agent/
       test-agent/
       security-agent/
@@ -426,7 +446,8 @@ Current layout:
 - `raptor swarm` creates role worktrees, metadata, and role planning artifacts when `DEEPSEEK_API_KEY` is set.
 - `raptor swarm` calls only DeepSeek before v0.1 and sends only the task description plus role template.
 - `raptor swarm` writes only `RAPTOR_PLAN.md` inside assigned role worktrees.
-- `raptor swarm` does not modify application source files inside role worktrees.
+- `raptor swarm implement` writes only `RAPTOR_IMPLEMENTATION_PROPOSAL.md` inside the selected role worktree.
+- `raptor swarm` and `raptor swarm implement` do not modify application source files inside role worktrees.
 - Task setup and inspection commands do not create commits.
 - No remote pushes are performed.
 - `raptor merge <task-id>` is preflight dry-run only.
@@ -448,4 +469,4 @@ Persisted agent sessions and permission policy were implemented early but are fr
 
 ## Recommended Next Step
 
-PROMPT 20 - Implement minimal supervised worktree file modification path
+PROMPT 21 - Implement role-aware swarm review and diff

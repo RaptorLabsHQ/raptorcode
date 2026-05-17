@@ -64,9 +64,11 @@ pub enum TaskStoreError {
 pub enum SwarmStoreError {
     AlreadyExists(PathBuf),
     Io { path: PathBuf, source: io::Error },
+    NotFound(String),
     UnsafeBasePath(PathBuf),
     UnsafeSwarmId(String),
     UnsafeValue { field: &'static str, value: String },
+    Parse { path: PathBuf, message: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,9 +130,11 @@ pub struct SwarmMetadata {
 pub struct SwarmAgentMetadata {
     pub agent_id: String,
     pub branch: String,
+    pub implementation_status: Option<String>,
     pub model: Option<String>,
     pub plan_file_path: Option<PathBuf>,
     pub planning_status: Option<String>,
+    pub proposal_file_path: Option<PathBuf>,
     pub provider: Option<String>,
     pub role: String,
     pub status: String,
@@ -311,6 +315,12 @@ impl Display for SwarmStoreError {
             Self::Io { path, source } => {
                 write!(formatter, "{}: {source}", path.display())
             }
+            Self::NotFound(swarm_id) => {
+                write!(formatter, "swarm metadata not found: {swarm_id}")
+            }
+            Self::Parse { path, message } => {
+                write!(formatter, "{}: {message}", path.display())
+            }
             Self::UnsafeBasePath(path) => {
                 write!(formatter, "{} is not a safe project path", path.display())
             }
@@ -329,6 +339,8 @@ impl Error for SwarmStoreError {
         match self {
             Self::Io { source, .. } => Some(source),
             Self::AlreadyExists(_)
+            | Self::NotFound(_)
+            | Self::Parse { .. }
             | Self::UnsafeBasePath(_)
             | Self::UnsafeSwarmId(_)
             | Self::UnsafeValue { .. } => None,
@@ -712,6 +724,55 @@ pub fn update_swarm_metadata(
     Ok(metadata_path)
 }
 
+pub fn read_swarm_metadata(
+    repository_root: &Path,
+    swarm_id: &str,
+) -> Result<SwarmMetadata, SwarmStoreError> {
+    let metadata_path = swarm_metadata_path_for_id(repository_root, swarm_id)?;
+    let file_metadata = match fs::symlink_metadata(&metadata_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(SwarmStoreError::NotFound(swarm_id.to_owned()));
+        }
+        Err(source) => {
+            return Err(SwarmStoreError::Io {
+                path: metadata_path,
+                source,
+            });
+        }
+    };
+
+    if !file_metadata.file_type().is_file() {
+        return Err(SwarmStoreError::UnsafeBasePath(metadata_path));
+    }
+
+    let swarm_dir = swarm_directory_path(repository_root)?;
+    let canonical_swarm_dir = swarm_dir
+        .canonicalize()
+        .map_err(|source| SwarmStoreError::Io {
+            path: swarm_dir.clone(),
+            source,
+        })?;
+    let canonical_metadata_path =
+        metadata_path
+            .canonicalize()
+            .map_err(|source| SwarmStoreError::Io {
+                path: metadata_path.clone(),
+                source,
+            })?;
+
+    if !canonical_metadata_path.starts_with(canonical_swarm_dir) {
+        return Err(SwarmStoreError::UnsafeBasePath(metadata_path));
+    }
+
+    let content = fs::read_to_string(&metadata_path).map_err(|source| SwarmStoreError::Io {
+        path: metadata_path.clone(),
+        source,
+    })?;
+
+    parse_swarm_metadata(repository_root, &metadata_path, swarm_id, &content)
+}
+
 pub fn swarm_metadata_exists(
     repository_root: &Path,
     task_id: &TaskId,
@@ -1072,6 +1133,9 @@ fn validate_swarm_metadata(
         validate_safe_hyphen_value("agent role", &agent.role)?;
         validate_safe_hyphen_value("agent id", &agent.agent_id)?;
         validate_safe_status("agent status", &agent.status)?;
+        if let Some(implementation_status) = agent.implementation_status.as_deref() {
+            validate_safe_status("agent implementation_status", implementation_status)?;
+        }
         if let Some(planning_status) = agent.planning_status.as_deref() {
             validate_safe_status("agent planning_status", planning_status)?;
         }
@@ -1090,6 +1154,9 @@ fn validate_swarm_metadata(
         )?;
         if let Some(plan_file_path) = agent.plan_file_path.as_ref() {
             validate_swarm_plan_file_path(&agent.worktree_path, plan_file_path)?;
+        }
+        if let Some(proposal_file_path) = agent.proposal_file_path.as_ref() {
+            validate_swarm_proposal_file_path(&agent.worktree_path, proposal_file_path)?;
         }
     }
 
@@ -1192,6 +1259,26 @@ fn validate_swarm_plan_file_path(
     Ok(())
 }
 
+fn validate_swarm_proposal_file_path(
+    worktree_path: &Path,
+    proposal_file_path: &Path,
+) -> Result<(), SwarmStoreError> {
+    let expected_path = worktree_path.join("RAPTOR_IMPLEMENTATION_PROPOSAL.md");
+
+    if proposal_file_path.as_os_str().is_empty()
+        || proposal_file_path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        || proposal_file_path != expected_path
+    {
+        return Err(SwarmStoreError::UnsafeBasePath(
+            proposal_file_path.to_path_buf(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn safe_hyphen_name(value: &str) -> bool {
     !value.is_empty()
         && !value.starts_with('-')
@@ -1264,10 +1351,20 @@ fn render_swarm_metadata(metadata: &SwarmMetadata) -> String {
         push_toml_string(&mut output, "status", Some(&agent.status));
         push_toml_string(
             &mut output,
+            "implementation_status",
+            agent.implementation_status.as_deref(),
+        );
+        push_toml_string(
+            &mut output,
             "planning_status",
             agent.planning_status.as_deref(),
         );
         push_toml_path(&mut output, "plan_file_path", agent.plan_file_path.as_ref());
+        push_toml_path(
+            &mut output,
+            "proposal_file_path",
+            agent.proposal_file_path.as_ref(),
+        );
         push_toml_string(&mut output, "provider", agent.provider.as_deref());
         push_toml_string(&mut output, "model", agent.model.as_deref());
     }
@@ -1487,6 +1584,169 @@ fn parse_task_metadata(
     Ok(parsed)
 }
 
+#[derive(Default)]
+struct ParsedSwarmAgent {
+    agent_id: Option<String>,
+    branch: Option<String>,
+    implementation_status: Option<String>,
+    model: Option<String>,
+    plan_file_path: Option<PathBuf>,
+    planning_status: Option<String>,
+    proposal_file_path: Option<PathBuf>,
+    provider: Option<String>,
+    role: Option<String>,
+    status: Option<String>,
+    worktree_path: Option<PathBuf>,
+}
+
+fn parse_swarm_metadata(
+    repository_root: &Path,
+    metadata_path: &Path,
+    fallback_swarm_id: &str,
+    content: &str,
+) -> Result<SwarmMetadata, SwarmStoreError> {
+    let mut parsed = SwarmMetadata {
+        agents: Vec::new(),
+        created_at: None,
+        description: String::new(),
+        id: fallback_swarm_id.to_owned(),
+        model: String::new(),
+        planning_status: None,
+        provider: String::new(),
+        status: String::new(),
+        updated_at: None,
+    };
+    let mut current_agent: Option<ParsedSwarmAgent> = None;
+
+    for (line_index, line) in content.lines().enumerate() {
+        let line_number = line_index + 1;
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if trimmed == "[[agents]]" {
+            if let Some(agent) = current_agent.take() {
+                parsed
+                    .agents
+                    .push(parsed_swarm_agent(metadata_path, line_number, agent)?);
+            }
+            current_agent = Some(ParsedSwarmAgent::default());
+            continue;
+        }
+
+        if trimmed.starts_with('[') || trimmed.ends_with(']') {
+            return Err(SwarmStoreError::Parse {
+                path: metadata_path.to_path_buf(),
+                message: format!("line {line_number} has an invalid section header"),
+            });
+        }
+
+        let (key, value) = trimmed
+            .split_once('=')
+            .ok_or_else(|| SwarmStoreError::Parse {
+                path: metadata_path.to_path_buf(),
+                message: format!("line {line_number} is not a key/value pair"),
+            })?;
+        let key = key.trim();
+        let value = parse_swarm_quoted_value(metadata_path, line_number, value.trim())?;
+
+        if let Some(agent) = current_agent.as_mut() {
+            match key {
+                "role" => agent.role = Some(value),
+                "agent_id" => agent.agent_id = Some(value),
+                "branch" => agent.branch = Some(value),
+                "worktree_path" => agent.worktree_path = Some(PathBuf::from(value)),
+                "status" => agent.status = Some(value),
+                "implementation_status" => agent.implementation_status = Some(value),
+                "planning_status" => agent.planning_status = Some(value),
+                "plan_file_path" => agent.plan_file_path = Some(PathBuf::from(value)),
+                "proposal_file_path" => agent.proposal_file_path = Some(PathBuf::from(value)),
+                "provider" => agent.provider = Some(value),
+                "model" => agent.model = Some(value),
+                _ => {}
+            }
+            continue;
+        }
+
+        match key {
+            "id" => {
+                validate_swarm_id(&value)?;
+
+                if value != fallback_swarm_id {
+                    return Err(SwarmStoreError::Parse {
+                        path: metadata_path.to_path_buf(),
+                        message: "metadata id does not match file name".to_owned(),
+                    });
+                }
+
+                parsed.id = value;
+            }
+            "description" => parsed.description = value,
+            "status" => parsed.status = value,
+            "planning_status" => parsed.planning_status = Some(value),
+            "provider" => parsed.provider = value,
+            "model" => parsed.model = value,
+            "created_at" => parsed.created_at = Some(value),
+            "updated_at" => parsed.updated_at = Some(value),
+            _ => {}
+        }
+    }
+
+    if let Some(agent) = current_agent.take() {
+        parsed.agents.push(parsed_swarm_agent(
+            metadata_path,
+            content.lines().count(),
+            agent,
+        )?);
+    }
+
+    validate_swarm_metadata(repository_root, &parsed)?;
+
+    Ok(parsed)
+}
+
+fn parsed_swarm_agent(
+    metadata_path: &Path,
+    line_number: usize,
+    agent: ParsedSwarmAgent,
+) -> Result<SwarmAgentMetadata, SwarmStoreError> {
+    Ok(SwarmAgentMetadata {
+        agent_id: required_swarm_agent_field(
+            metadata_path,
+            line_number,
+            "agent_id",
+            agent.agent_id,
+        )?,
+        branch: required_swarm_agent_field(metadata_path, line_number, "branch", agent.branch)?,
+        implementation_status: agent.implementation_status,
+        model: agent.model,
+        plan_file_path: agent.plan_file_path,
+        planning_status: agent.planning_status,
+        proposal_file_path: agent.proposal_file_path,
+        provider: agent.provider,
+        role: required_swarm_agent_field(metadata_path, line_number, "role", agent.role)?,
+        status: required_swarm_agent_field(metadata_path, line_number, "status", agent.status)?,
+        worktree_path: agent.worktree_path.ok_or_else(|| SwarmStoreError::Parse {
+            path: metadata_path.to_path_buf(),
+            message: format!("line {line_number} is missing agent field worktree_path"),
+        })?,
+    })
+}
+
+fn required_swarm_agent_field(
+    metadata_path: &Path,
+    line_number: usize,
+    field: &'static str,
+    value: Option<String>,
+) -> Result<String, SwarmStoreError> {
+    value.ok_or_else(|| SwarmStoreError::Parse {
+        path: metadata_path.to_path_buf(),
+        message: format!("line {line_number} is missing agent field {field}"),
+    })
+}
+
 fn write_stored_task_metadata(task: &StoredTaskMetadata) -> Result<(), TaskStoreError> {
     fs::write(&task.metadata_path, render_stored_task_metadata(task)).map_err(|source| {
         TaskStoreError::Io {
@@ -1552,6 +1812,21 @@ fn parse_quoted_value(
     unescape_toml_string(metadata_path, line_number, &value[1..value.len() - 1])
 }
 
+fn parse_swarm_quoted_value(
+    metadata_path: &Path,
+    line_number: usize,
+    value: &str,
+) -> Result<String, SwarmStoreError> {
+    if !value.starts_with('"') || !value.ends_with('"') || value.len() < 2 {
+        return Err(SwarmStoreError::Parse {
+            path: metadata_path.to_path_buf(),
+            message: format!("line {line_number} value is not a quoted string"),
+        });
+    }
+
+    unescape_swarm_toml_string(metadata_path, line_number, &value[1..value.len() - 1])
+}
+
 fn unescape_toml_string(
     metadata_path: &Path,
     line_number: usize,
@@ -1581,6 +1856,45 @@ fn unescape_toml_string(
             't' => unescaped.push('\t'),
             _ => {
                 return Err(TaskStoreError::Parse {
+                    path: metadata_path.to_path_buf(),
+                    message: format!("line {line_number} has an unsupported escape sequence"),
+                });
+            }
+        }
+    }
+
+    Ok(unescaped)
+}
+
+fn unescape_swarm_toml_string(
+    metadata_path: &Path,
+    line_number: usize,
+    value: &str,
+) -> Result<String, SwarmStoreError> {
+    let mut unescaped = String::new();
+    let mut characters = value.chars();
+
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            unescaped.push(character);
+            continue;
+        }
+
+        let Some(escaped) = characters.next() else {
+            return Err(SwarmStoreError::Parse {
+                path: metadata_path.to_path_buf(),
+                message: format!("line {line_number} has an incomplete escape sequence"),
+            });
+        };
+
+        match escaped {
+            '\\' => unescaped.push('\\'),
+            '"' => unescaped.push('"'),
+            'n' => unescaped.push('\n'),
+            'r' => unescaped.push('\r'),
+            't' => unescaped.push('\t'),
+            _ => {
+                return Err(SwarmStoreError::Parse {
                     path: metadata_path.to_path_buf(),
                     message: format!("line {line_number} has an unsupported escape sequence"),
                 });
@@ -1847,12 +2161,17 @@ mod tests {
         let mut metadata = test_swarm_metadata(&test_dir.path, task_id.clone(), "Swarm update");
         let metadata_path = persist_swarm_metadata(&test_dir.path, &metadata).unwrap();
         let plan_file = metadata.agents[0].worktree_path.join("RAPTOR_PLAN.md");
+        let proposal_file = metadata.agents[0]
+            .worktree_path
+            .join("RAPTOR_IMPLEMENTATION_PROPOSAL.md");
 
         metadata.status = "planning_completed".to_owned();
         metadata.planning_status = Some("planning_completed".to_owned());
         metadata.agents[0].status = "planning_completed".to_owned();
+        metadata.agents[0].implementation_status = Some("proposal_generated".to_owned());
         metadata.agents[0].planning_status = Some("planning_completed".to_owned());
         metadata.agents[0].plan_file_path = Some(plan_file.clone());
+        metadata.agents[0].proposal_file_path = Some(proposal_file.clone());
         metadata.agents[0].provider = Some("deepseek".to_owned());
         metadata.agents[0].model = Some("deepseek-chat".to_owned());
 
@@ -1862,8 +2181,52 @@ mod tests {
         assert_eq!(updated_path, metadata_path);
         assert!(content.contains("planning_status = \"planning_completed\""));
         assert!(content.contains(&format!("plan_file_path = \"{}\"", plan_file.display())));
+        assert!(content.contains("implementation_status = \"proposal_generated\""));
+        assert!(content.contains(&format!(
+            "proposal_file_path = \"{}\"",
+            proposal_file.display()
+        )));
         assert!(content.contains("provider = \"deepseek\""));
         assert!(content.contains("model = \"deepseek-chat\""));
+    }
+
+    #[test]
+    fn reads_swarm_metadata_with_planning_and_proposal_fields() {
+        let test_dir = TestDir::create("swarm-read");
+        let task_id = TaskId::from_description("Read swarm").unwrap();
+        let mut metadata = test_swarm_metadata(&test_dir.path, task_id.clone(), "Read swarm");
+        let plan_file = metadata.agents[0].worktree_path.join("RAPTOR_PLAN.md");
+        let proposal_file = metadata.agents[0]
+            .worktree_path
+            .join("RAPTOR_IMPLEMENTATION_PROPOSAL.md");
+
+        metadata.planning_status = Some("planning_completed".to_owned());
+        metadata.agents[0].implementation_status = Some("proposal_generated".to_owned());
+        metadata.agents[0].planning_status = Some("planning_completed".to_owned());
+        metadata.agents[0].plan_file_path = Some(plan_file.clone());
+        metadata.agents[0].proposal_file_path = Some(proposal_file.clone());
+        metadata.agents[0].provider = Some("deepseek".to_owned());
+        metadata.agents[0].model = Some("deepseek-chat".to_owned());
+        persist_swarm_metadata(&test_dir.path, &metadata).unwrap();
+
+        let stored = read_swarm_metadata(&test_dir.path, task_id.as_str()).unwrap();
+
+        assert_eq!(stored.id, task_id.as_str());
+        assert_eq!(stored.description, "Read swarm");
+        assert_eq!(
+            stored.planning_status.as_deref(),
+            Some("planning_completed")
+        );
+        assert_eq!(stored.agents.len(), 1);
+        assert_eq!(
+            stored.agents[0].implementation_status.as_deref(),
+            Some("proposal_generated")
+        );
+        assert_eq!(stored.agents[0].plan_file_path.as_ref(), Some(&plan_file));
+        assert_eq!(
+            stored.agents[0].proposal_file_path.as_ref(),
+            Some(&proposal_file)
+        );
     }
 
     #[test]
@@ -1888,6 +2251,12 @@ mod tests {
         metadata.agents[0].plan_file_path = Some(test_dir.path.join("outside-plan.md"));
         let plan_error = persist_swarm_metadata(&test_dir.path, &metadata).unwrap_err();
         assert!(matches!(plan_error, SwarmStoreError::UnsafeBasePath(_)));
+
+        let mut metadata =
+            test_swarm_metadata(&test_dir.path, task_id.clone(), "Unsafe swarm metadata");
+        metadata.agents[0].proposal_file_path = Some(test_dir.path.join("outside-proposal.md"));
+        let proposal_error = persist_swarm_metadata(&test_dir.path, &metadata).unwrap_err();
+        assert!(matches!(proposal_error, SwarmStoreError::UnsafeBasePath(_)));
     }
 
     #[test]
@@ -2052,9 +2421,11 @@ mod tests {
             agents: vec![SwarmAgentMetadata {
                 agent_id: format!("{}-{role}", task_id.as_str()),
                 branch: format!("raptor/{}/{role}", task_id.as_str()),
+                implementation_status: None,
                 model: None,
                 plan_file_path: None,
                 planning_status: None,
+                proposal_file_path: None,
                 provider: None,
                 role: role.to_owned(),
                 status: SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned(),

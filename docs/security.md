@@ -74,6 +74,10 @@ Current provider controls:
 - `raptor swarm` records `blocked_missing_deepseek_api_key` without destroying worktrees when `DEEPSEEK_API_KEY` is missing.
 - Swarm plans are AI-generated and must be reviewed before implementation.
 - `raptor swarm` does not execute model output, run shell commands, apply patches, modify application source files, run tests, merge, commit, or push.
+- `raptor swarm implement <task-id> <role>` sends only the task description, selected role, and selected role `RAPTOR_PLAN.md` to DeepSeek.
+- `raptor swarm implement <task-id> <role>` writes only `RAPTOR_IMPLEMENTATION_PROPOSAL.md` inside the selected role worktree.
+- Implementation proposals are AI-generated and must be reviewed before source changes are applied manually.
+- `raptor swarm implement <task-id> <role>` does not execute model output, run shell commands, apply patches, modify application source files, run tests, merge, commit, or push.
 - No streaming connections, provider SDKs, or additional provider executions are implemented before v0.1.
 
 Current agent controls:
@@ -111,6 +115,7 @@ Before v0.1 launch:
 - Never install dependencies automatically from model output.
 - Never write files outside assigned worktrees.
 - Never write swarm planning artifacts outside `.raptor/worktrees/<task-id>/<role>/RAPTOR_PLAN.md`.
+- Never write swarm implementation proposal artifacts outside `.raptor/worktrees/<task-id>/<role>/RAPTOR_IMPLEMENTATION_PROPOSAL.md`.
 - Never perform hidden file writes.
 - Never include `.env`, API keys, credentials, or secrets in model context.
 - Never commit or log `DEEPSEEK_API_KEY`.
@@ -164,6 +169,25 @@ Known gap: if metadata persistence fails before a task record exists, manual cle
 - Records per-agent planning status and plan file paths in `.raptor/swarms/<task-id>.toml`.
 - Continues to preserve worktrees and metadata if planning is blocked by a missing API key.
 - Treats generated plans as untrusted text for developer review.
+- Does not execute model output, run shell commands, apply patches, modify application source files, run tests, commit, merge, or push.
+
+## Implemented Swarm Proposal Controls
+
+`raptor swarm implement <task-id> <role>` currently applies these proposal controls:
+
+- Treats task id and role as untrusted input.
+- Allows only `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent`.
+- Loads only validated `.raptor/swarms/<task-id>.toml` metadata.
+- Validates the selected role exists in the swarm metadata.
+- Validates the selected role worktree path under `.raptor/worktrees/<task-id>/<role>/`.
+- Requires `DEEPSEEK_API_KEY`; if missing, it records blocked status and does not write a proposal.
+- Reads only the selected role's `RAPTOR_PLAN.md`.
+- Calls only DeepSeek before v0.1.
+- Sends only the task description, selected role, and selected role plan to DeepSeek.
+- Writes only `RAPTOR_IMPLEMENTATION_PROPOSAL.md` inside the selected role worktree.
+- Uses create-new writes for proposal files to avoid silently overwriting existing files.
+- Records per-agent implementation status and proposal file path in `.raptor/swarms/<task-id>.toml`.
+- Treats generated proposals and patch-like content as untrusted Markdown text for developer review.
 - Does not execute model output, run shell commands, apply patches, modify application source files, run tests, commit, merge, or push.
 
 ## Merge Controls

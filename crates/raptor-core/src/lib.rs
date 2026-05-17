@@ -5,9 +5,11 @@ use std::path::PathBuf;
 pub const PROJECT_DESCRIPTION: &str = "An open-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.";
 pub const PROJECT_NAME: &str = "RaptorCode";
 pub const SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS: &str = "blocked_missing_deepseek_api_key";
+pub const SWARM_IMPLEMENTATION_FAILED_STATUS: &str = "failed";
 pub const SWARM_PENDING_MODEL_EXECUTION_STATUS: &str = "pending_model_execution";
 pub const SWARM_PLANNING_COMPLETED_STATUS: &str = "planning_completed";
 pub const SWARM_PLANNING_FAILED_STATUS: &str = "planning_failed";
+pub const SWARM_PROPOSAL_GENERATED_STATUS: &str = "proposal_generated";
 pub const V1_SCOPE: &str = "CLI + TUI + multi-agent orchestrator";
 
 pub fn project_description() -> &'static str {
@@ -235,6 +237,8 @@ mod tests {
         );
         assert_eq!(SWARM_PLANNING_COMPLETED_STATUS, "planning_completed");
         assert_eq!(SWARM_PLANNING_FAILED_STATUS, "planning_failed");
+        assert_eq!(SWARM_PROPOSAL_GENERATED_STATUS, "proposal_generated");
+        assert_eq!(SWARM_IMPLEMENTATION_FAILED_STATUS, "failed");
     }
 
     #[test]

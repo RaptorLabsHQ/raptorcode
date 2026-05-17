@@ -49,6 +49,7 @@ Implemented foundation:
 - `raptor merge <task-id> --execute` supervised local merge execution.
 - `raptor swarm "task description"` multi-agent worktree MVP.
 - `raptor swarm "task description"` DeepSeek planning that writes `RAPTOR_PLAN.md` per role when `DEEPSEEK_API_KEY` is set.
+- `raptor swarm implement <task-id> <role>` supervised implementation proposal generation.
 - DeepSeek provider execution through `DEEPSEEK_API_KEY`.
 - Provider metadata catalog for DeepSeek first, plus future OpenAI/Codex, Claude, Gemini, and local model boundaries.
 - Read-only persisted local agent session model for future multi-agent orchestration.
@@ -98,6 +99,10 @@ Current controls:
 - `raptor swarm` blocks planning without failing worktree creation when `DEEPSEEK_API_KEY` is missing.
 - Swarm plans are AI-generated and must be reviewed before implementation.
 - Swarm planning does not execute model output, apply patches, edit application source files, run tests, merge, commit, or push.
+- `raptor swarm implement <task-id> <role>` sends only the task description, selected role, and that role's `RAPTOR_PLAN.md` to DeepSeek.
+- `raptor swarm implement <task-id> <role>` writes only `RAPTOR_IMPLEMENTATION_PROPOSAL.md` inside the selected role worktree.
+- Implementation proposals are AI-generated and must be reviewed before source changes are applied manually.
+- Implementation proposal generation does not execute model output, apply patches, edit application source files, run tests, merge, commit, or push.
 - Agent session creation writes metadata only under `.raptor/agents/`.
 - Agent inspection is read-only and loads only validated `.raptor/agents/<agent-id>.toml` metadata.
 - Agent sessions do not modify source files, execute shell commands, make network requests, or call AI models in this foundation.
@@ -137,6 +142,7 @@ cargo run -p raptor-cli -- diff <task-id>
 cargo run -p raptor-cli -- merge <task-id>
 cargo run -p raptor-cli -- merge <task-id> --execute
 cargo run -p raptor-cli -- swarm "Add GitHub OAuth to this Next.js app"
+cargo run -p raptor-cli -- swarm implement <task-id> frontend-agent
 ```
 
 Expected installed binary form:
@@ -161,6 +167,7 @@ raptor diff <task-id>
 raptor merge <task-id>
 raptor merge <task-id> --execute
 raptor swarm "Add GitHub OAuth to this Next.js app"
+raptor swarm implement <task-id> frontend-agent
 ```
 
 ## Task Workflow
@@ -205,6 +212,19 @@ It currently:
 - Without `DEEPSEEK_API_KEY`, preserves worktrees and metadata, marks planning as `blocked_missing_deepseek_api_key`, and prints `https://platform.deepseek.com/api_keys`.
 
 Swarm planning is planning-only. It does not modify application source files inside the role worktrees, execute model output, run tests, merge, commit, or push. Existing `raptor review` and `raptor diff` remain single-worktree task commands until multi-agent review fan-out is implemented.
+
+`raptor swarm implement <task-id> <role>` is the minimal supervised worktree file modification path for v0.1. It:
+
+- Accepts only `frontend-agent`, `backend-agent`, `test-agent`, or `security-agent`.
+- Loads `.raptor/swarms/<task-id>.toml`.
+- Validates the selected role worktree under `.raptor/worktrees/<task-id>/<role>/`.
+- Requires `DEEPSEEK_API_KEY`.
+- Reads that role's `RAPTOR_PLAN.md`.
+- Calls DeepSeek once for the selected role.
+- Writes `.raptor/worktrees/<task-id>/<role>/RAPTOR_IMPLEMENTATION_PROPOSAL.md`.
+- Records per-role implementation status and proposal file path in swarm metadata.
+
+The proposal file preserves any patch-like model output as text only. RaptorCode does not apply patches, modify application source code, execute model output, run tests, merge, commit, or push in this command. Role-aware swarm review and diff are still a v0.1 follow-up.
 
 Task inspection commands are read-only:
 
