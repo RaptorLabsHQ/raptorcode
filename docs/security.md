@@ -64,8 +64,12 @@ Current provider controls:
 - `raptor.toml` supports provider enablement metadata only.
 - No API keys, tokens, secrets, endpoints, or credentials are stored in `raptor.toml`.
 - DeepSeek API keys must never be committed, stored in repository files, or logged.
-- No external requests, model calls, streaming connections, or provider SDKs are implemented.
-- Completion execution returns an explicit disabled/not-implemented error.
+- `raptor chat "message"` reads `DEEPSEEK_API_KEY` from the environment only.
+- If `DEEPSEEK_API_KEY` is missing, `raptor chat` prints `https://platform.deepseek.com/api_keys`.
+- `raptor chat` sends only a fixed system prompt and the user-provided message to DeepSeek.
+- `raptor chat` does not send repository contents, `.env` files, task metadata, worktree files, or secrets.
+- `raptor chat` does not execute model output, run shell commands, write source files, create worktrees, merge, commit, or push.
+- No streaming connections, provider SDKs, or additional provider executions are implemented before v0.1.
 
 Current agent controls:
 
@@ -104,6 +108,7 @@ Before v0.1 launch:
 - Never perform hidden file writes.
 - Never include `.env`, API keys, credentials, or secrets in model context.
 - Never commit or log `DEEPSEEK_API_KEY`.
+- Never store `DEEPSEEK_API_KEY` in `raptor.toml` or `.raptor/`.
 - Show diffs before merge.
 - Keep merge supervised.
 - Keep generated code reviewable by the developer.

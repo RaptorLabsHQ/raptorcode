@@ -32,6 +32,7 @@ Use the stable Rust toolchain.
 - Version command: `cargo run -p raptor-cli -- --version`
 - Init command: `cargo run -p raptor-cli -- init`
 - Provider list command: `cargo run -p raptor-cli -- provider list`
+- Chat command: `DEEPSEEK_API_KEY=<key> cargo run -p raptor-cli -- chat "Explain this repository"`
 - Agent list command: `cargo run -p raptor-cli -- agent list`
 - Agent show command: `cargo run -p raptor-cli -- agent show <id>`
 - Agent create command: `cargo run -p raptor-cli -- agent create --role worker`
@@ -50,7 +51,7 @@ Use the stable Rust toolchain.
 
 ## Task Workflow Notes
 
-`raptor provider list` reads `raptor.toml` when present and lists provider metadata without network calls or model execution. `raptor agent create` writes read-only local agent session metadata under `.raptor/agents/` only. `raptor agent list` and `raptor agent show <id>` inspect persisted agent session metadata. `raptor agent policy` displays the current deny-by-default permission model. Persisted agent sessions and permission policy were implemented early but are frozen until after v0.1. No autonomous coding loop, shell execution, network request, model call, policy enforcement hook, or agent source-file modification exists yet.
+`raptor provider list` reads `raptor.toml` when present and lists provider metadata without network calls or model execution. `raptor chat "message"` calls DeepSeek when `DEEPSEEK_API_KEY` is set and prints the assistant response without executing it or writing files. If the key is missing, it directs the developer to `https://platform.deepseek.com/api_keys`. `raptor agent create` writes read-only local agent session metadata under `.raptor/agents/` only. `raptor agent list` and `raptor agent show <id>` inspect persisted agent session metadata. `raptor agent policy` displays the current deny-by-default permission model. Persisted agent sessions and permission policy were implemented early but are frozen until after v0.1. No autonomous coding loop, shell execution, policy enforcement hook, or agent source-file modification exists yet.
 
 `raptor task "description"` must be run inside a git repository. It creates an isolated git worktree under `.raptor/worktrees/` and writes metadata under `.raptor/tasks/`. It does not start autonomous agents or modify the main worktree.
 
@@ -60,6 +61,6 @@ Use the stable Rust toolchain.
 
 ## Current Contributor Task
 
-The `task` workflow creates isolated single-task worktree infrastructure and local task metadata without launching autonomous agents. The `swarm` workflow now creates the v0.1 multi-agent worktree structure and metadata without model execution. Provider metadata, persisted read-only agent session metadata, and a deny-by-default permission policy foundation are in place, but only DeepSeek execution and the v0.1 launch path may move forward before release. Existing task metadata and single-task worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`. Multi-agent review fan-out is not implemented yet. Merge preflight, typed confirmation, supervised local merge execution, lifecycle status updates, abandonment, and safe worktree cleanup are in place for single-task metadata.
+The `task` workflow creates isolated single-task worktree infrastructure and local task metadata without launching autonomous agents. The `swarm` workflow creates the v0.1 multi-agent worktree structure and metadata. Provider execution exists only for DeepSeek chat completion through `raptor chat`; swarm DeepSeek planning is not implemented yet. Persisted read-only agent session metadata and a deny-by-default permission policy foundation are in place, but they remain frozen until after v0.1. Existing task metadata and single-task worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`. Multi-agent review fan-out is not implemented yet. Merge preflight, typed confirmation, supervised local merge execution, lifecycle status updates, abandonment, and safe worktree cleanup are in place for single-task metadata.
 
-The next implementation step is `PROMPT 18 - Implement DeepSeek provider execution`.
+The next implementation step is `PROMPT 19 - Implement agent role templates and swarm DeepSeek planning`.

@@ -16,7 +16,8 @@ use raptor_git::{
     WorktreeCleanupPlan, WorktreeDiff, WorktreeReview,
 };
 use raptor_providers::{
-    ModelId, ProviderCatalog, ProviderConfiguration, ProviderId, ProviderSummary,
+    CompletionMessage, CompletionRequest, CompletionResponse, DeepSeekProvider, ModelId, Provider,
+    ProviderCatalog, ProviderConfiguration, ProviderId, ProviderSummary, TokenUsage,
 };
 use raptor_store::{
     init_project_config, list_agent_sessions, list_task_metadata, persist_agent_session,
@@ -30,7 +31,7 @@ use raptor_tools::command_version;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
     Agent(AgentCommand),
-    Chat,
+    Chat { message: String },
     Diff { task_id: String },
     Doctor,
     Help,
@@ -88,6 +89,7 @@ pub struct CliError {
 const SWARM_PROVIDER_ID: &str = "deepseek";
 const SWARM_PROVIDER_DISPLAY: &str = "DeepSeek";
 const SWARM_MODEL_ID: &str = "deepseek-chat";
+const CHAT_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised coding assistant. Answer the developer's message directly. Do not claim to modify files, run commands, install dependencies, commit, merge, or push.";
 
 impl CliError {
     fn new(message: impl Into<String>) -> Self {
@@ -154,7 +156,10 @@ where
         [arg, subcommand, ..] if arg == "agent" && subcommand == "show" => {
             Err(CliError::new("agent show accepts exactly one agent id"))
         }
-        [arg] if arg == "chat" => Ok(CliCommand::Chat),
+        [arg] if arg == "chat" => Err(CliError::new("chat message is required")),
+        [arg, message @ ..] if arg == "chat" => Ok(CliCommand::Chat {
+            message: message.join(" "),
+        }),
         [arg] if arg == "provider" => Err(CliError::new("provider command is required")),
         [arg, subcommand] if arg == "provider" && subcommand == "list" => {
             Ok(CliCommand::Provider(ProviderCommand::List))
@@ -311,7 +316,7 @@ where
             &PermissionPolicy::deny_by_default(),
         )),
         CliCommand::Agent(AgentCommand::Show { id }) => show_agent(current_dir, &id),
-        CliCommand::Chat => Ok(render_stub("chat")),
+        CliCommand::Chat { message } => chat(&message),
         CliCommand::Diff { task_id } => diff_task(current_dir, &task_id),
         CliCommand::Doctor => Ok(render_doctor(current_dir)),
         CliCommand::Help => Ok(render_help()),
@@ -343,7 +348,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm \"task description\"\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat \"message\"\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm \"task description\"\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -392,6 +397,45 @@ pub fn list_providers(current_dir: &Path) -> Result<String, CliError> {
     let summaries = catalog.summaries(&configurations);
 
     Ok(render_provider_list(&config_status, &summaries))
+}
+
+pub fn chat(message: &str) -> Result<String, CliError> {
+    let provider =
+        DeepSeekProvider::from_env().map_err(|error| CliError::new(error.to_string()))?;
+
+    chat_with_provider(message, &provider)
+}
+
+pub fn chat_with_provider(message: &str, provider: &dyn Provider) -> Result<String, CliError> {
+    let message = message.trim();
+
+    if message.is_empty() {
+        return Err(CliError::new("chat message is required"));
+    }
+
+    if provider.id().as_str() != "deepseek" {
+        return Err(CliError::new(
+            "only the DeepSeek provider is implemented before v0.1",
+        ));
+    }
+
+    let model_id = provider
+        .default_model()
+        .cloned()
+        .ok_or_else(|| CliError::new("DeepSeek provider has no default model configured"))?;
+    let request = CompletionRequest::new(
+        provider.id().clone(),
+        model_id,
+        vec![
+            CompletionMessage::system(CHAT_SYSTEM_PROMPT),
+            CompletionMessage::user(message),
+        ],
+    );
+    let response = provider
+        .complete(request)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(render_chat_response(&response))
 }
 
 pub fn create_agent(
@@ -1058,6 +1102,35 @@ fn render_stub(command: &str) -> String {
     format!("raptor {command}: not implemented yet\n")
 }
 
+fn render_chat_response(response: &CompletionResponse) -> String {
+    let mut output = format!(
+        "DeepSeek response\nProvider: {}\nModel: {}\nFinish reason: {}\nUsage: {}\n\n{}\n",
+        response.provider_id.as_str(),
+        response.model_id.as_str(),
+        display_optional(response.finish_reason.as_deref()),
+        render_token_usage(response.usage.as_ref()),
+        response.content
+    );
+
+    output.push_str("Model output execution: not performed\n");
+    output.push_str("Source file writes: not performed\n");
+    output.push_str("Shell execution: not performed\n");
+    output
+}
+
+fn render_token_usage(usage: Option<&TokenUsage>) -> String {
+    let Some(usage) = usage else {
+        return "-".to_owned();
+    };
+
+    format!(
+        "prompt={} completion={} total={}",
+        display_number_optional(usage.prompt_tokens),
+        display_number_optional(usage.completion_tokens),
+        display_number_optional(usage.total_tokens)
+    )
+}
+
 fn render_swarm_created(
     metadata: &SwarmMetadata,
     plan: &SwarmWorktreePlan,
@@ -1293,6 +1366,12 @@ fn display_path_optional(value: Option<&std::path::PathBuf>) -> String {
         .unwrap_or_else(|| "-".to_owned())
 }
 
+fn display_number_optional(value: Option<u32>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned())
+}
+
 fn task_status_allows_cleanup(status: &str) -> bool {
     matches!(status, "merged" | "completed" | "abandoned")
 }
@@ -1308,6 +1387,7 @@ fn strip_line_ending(value: &str) -> &str {
 mod tests {
     use super::*;
     use raptor_core::TaskId;
+    use raptor_providers::{ProviderCapabilities, ProviderError};
     use raptor_store::{read_task_metadata, CONFIG_FILE_NAME};
     use std::fs;
     use std::io::Cursor;
@@ -1317,6 +1397,13 @@ mod tests {
 
     struct TestDir {
         path: PathBuf,
+    }
+
+    struct FakeDeepSeekProvider {
+        capabilities: ProviderCapabilities,
+        default_model: ModelId,
+        provider_id: ProviderId,
+        response: CompletionResponse,
     }
 
     impl TestDir {
@@ -1337,6 +1424,64 @@ mod tests {
     impl Drop for TestDir {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    impl FakeDeepSeekProvider {
+        fn new(content: &str) -> Self {
+            let provider_id = ProviderId::new("deepseek").unwrap();
+            let default_model = ModelId::new("deepseek-chat").unwrap();
+
+            Self {
+                capabilities: ProviderCapabilities::network_chat(),
+                default_model: default_model.clone(),
+                provider_id: provider_id.clone(),
+                response: CompletionResponse {
+                    provider_id,
+                    model_id: default_model,
+                    content: content.to_owned(),
+                    finish_reason: Some("stop".to_owned()),
+                    usage: Some(TokenUsage {
+                        completion_tokens: Some(2),
+                        prompt_tokens: Some(3),
+                        total_tokens: Some(5),
+                    }),
+                },
+            }
+        }
+    }
+
+    impl Provider for FakeDeepSeekProvider {
+        fn id(&self) -> &ProviderId {
+            &self.provider_id
+        }
+
+        fn display_name(&self) -> &str {
+            "DeepSeek"
+        }
+
+        fn capabilities(&self) -> &ProviderCapabilities {
+            &self.capabilities
+        }
+
+        fn default_model(&self) -> Option<&ModelId> {
+            Some(&self.default_model)
+        }
+
+        fn models(&self) -> &[ModelId] {
+            std::slice::from_ref(&self.default_model)
+        }
+
+        fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError> {
+            assert_eq!(request.provider_id.as_str(), "deepseek");
+            assert_eq!(request.model_id.as_str(), "deepseek-chat");
+            assert_eq!(request.messages.len(), 2);
+            assert_eq!(request.messages[0].role.as_str(), "system");
+            assert_eq!(request.messages[1].role.as_str(), "user");
+            Ok(self.response.clone())
         }
     }
 
@@ -1531,7 +1676,6 @@ mod tests {
     fn parses_router_commands() {
         let commands = [
             ("init", CliCommand::Init),
-            ("chat", CliCommand::Chat),
             ("test", CliCommand::Test),
             ("doctor", CliCommand::Doctor),
         ];
@@ -1539,6 +1683,16 @@ mod tests {
         for (arg, expected) in commands {
             assert_eq!(parse_args([arg]).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn parses_chat_message() {
+        assert_eq!(
+            parse_args(["chat", "hello", "deepseek"]).unwrap(),
+            CliCommand::Chat {
+                message: "hello deepseek".to_owned()
+            }
+        );
     }
 
     #[test]
@@ -1674,6 +1828,13 @@ mod tests {
     }
 
     #[test]
+    fn rejects_missing_chat_message() {
+        let error = parse_args(["chat"]).unwrap_err();
+
+        assert!(error.to_string().contains("chat message"));
+    }
+
+    #[test]
     fn rejects_missing_swarm_description() {
         let error = parse_args(["swarm"]).unwrap_err();
 
@@ -1805,6 +1966,48 @@ mod tests {
         assert!(output.contains("enabled"));
         assert!(output.contains("deepseek-chat"));
         assert!(output.contains("network-required"));
+    }
+
+    #[test]
+    fn chat_rejects_empty_message() {
+        let provider = FakeDeepSeekProvider::new("unused");
+        let error = chat_with_provider("   ", &provider).unwrap_err();
+
+        assert!(error.to_string().contains("chat message"));
+    }
+
+    #[test]
+    fn chat_renders_deepseek_completion_without_side_effects() {
+        let test_dir = TestDir::create("chat-no-side-effects");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "source\n");
+        let before_head = git_text(&test_dir.path, &["rev-parse", "HEAD"]);
+        let provider = FakeDeepSeekProvider::new("Use OAuth callback validation.");
+
+        let output = chat_with_provider("How should I add OAuth?", &provider).unwrap();
+
+        assert!(output.contains("DeepSeek response"));
+        assert!(output.contains("Provider: deepseek"));
+        assert!(output.contains("Model: deepseek-chat"));
+        assert!(output.contains("Use OAuth callback validation."));
+        assert!(output.contains("Model output execution: not performed"));
+        assert!(output.contains("Source file writes: not performed"));
+        assert!(output.contains("Shell execution: not performed"));
+        assert_eq!(
+            fs::read_to_string(test_dir.path.join("tracked.txt")).unwrap(),
+            "source\n"
+        );
+        assert_eq!(
+            git_text(&test_dir.path, &["rev-parse", "HEAD"]),
+            before_head
+        );
+        assert_eq!(
+            git_text(
+                &test_dir.path,
+                &["status", "--short", "--untracked-files=no"]
+            ),
+            ""
+        );
     }
 
     #[test]
@@ -3154,8 +3357,8 @@ mod tests {
 
     #[test]
     fn stub_commands_are_clear() {
-        let output = run(["chat"], Path::new(".")).unwrap();
+        let output = run(["test"], Path::new(".")).unwrap();
 
-        assert_eq!(output, "raptor chat: not implemented yet\n");
+        assert_eq!(output, "raptor test: not implemented yet\n");
     }
 }

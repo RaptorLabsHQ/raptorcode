@@ -33,6 +33,7 @@ Implemented foundation:
 - `raptor init`.
 - `raptor doctor`.
 - `raptor provider list`.
+- `raptor chat "message"` DeepSeek completion smoke test.
 - `raptor agent list`.
 - `raptor agent show <id>`.
 - `raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]`.
@@ -47,6 +48,7 @@ Implemented foundation:
 - `raptor merge <task-id>` preflight dry run.
 - `raptor merge <task-id> --execute` supervised local merge execution.
 - `raptor swarm "task description"` multi-agent worktree MVP.
+- DeepSeek provider execution through `DEEPSEEK_API_KEY`.
 - Provider metadata catalog for DeepSeek first, plus future OpenAI/Codex, Claude, Gemini, and local model boundaries.
 - Read-only persisted local agent session model for future multi-agent orchestration.
 - Deny-by-default permission policy foundation for future agent tools.
@@ -54,7 +56,6 @@ Implemented foundation:
 
 Stubbed commands:
 
-- `raptor chat`
 - `raptor test`
 
 ## v0.1 Scope Lock
@@ -88,6 +89,9 @@ Current controls:
 - Git commands are executed through structured process arguments.
 - No autonomous agents are launched by the current task workflow.
 - Provider inspection performs no external requests and no model calls.
+- `raptor chat` sends only the fixed system prompt and user-provided chat message to DeepSeek.
+- `raptor chat` does not send repository contents, `.env` files, secrets, task metadata, or worktree files.
+- `raptor chat` does not execute model output, run shell commands, or write source files.
 - Agent session creation writes metadata only under `.raptor/agents/`.
 - Agent inspection is read-only and loads only validated `.raptor/agents/<agent-id>.toml` metadata.
 - Agent sessions do not modify source files, execute shell commands, make network requests, or call AI models in this foundation.
@@ -112,6 +116,7 @@ cargo run -p raptor-cli -- --version
 cargo run -p raptor-cli -- doctor
 cargo run -p raptor-cli -- init
 cargo run -p raptor-cli -- provider list
+cargo run -p raptor-cli -- chat "Explain the next implementation step"
 cargo run -p raptor-cli -- agent list
 cargo run -p raptor-cli -- agent show <id>
 cargo run -p raptor-cli -- agent create --role worker
@@ -135,6 +140,7 @@ raptor --version
 raptor doctor
 raptor init
 raptor provider list
+raptor chat "Explain the next implementation step"
 raptor agent list
 raptor agent show <id>
 raptor agent create --role worker
@@ -187,7 +193,7 @@ It currently:
 - Records provider placeholder `deepseek` and model placeholder `deepseek-chat`.
 - Leaves execution status as `pending_model_execution`.
 
-It does not call DeepSeek yet, modify source files inside the role worktrees, run tests, merge, or push. DeepSeek execution is the next v0.1 implementation step. Existing `raptor review` and `raptor diff` remain single-worktree task commands until multi-agent review fan-out is implemented.
+It does not call DeepSeek for swarm agents yet, modify source files inside the role worktrees, run tests, merge, or push. Swarm DeepSeek planning is the next v0.1 implementation step. Existing `raptor review` and `raptor diff` remain single-worktree task commands until multi-agent review fan-out is implemented.
 
 Task inspection commands are read-only:
 
@@ -210,7 +216,15 @@ Task inspection commands are read-only:
 enabled = true
 ```
 
-Provider support is metadata-only in this iteration. No API keys, secrets, network calls, or model execution are implemented.
+DeepSeek is the only provider with execution before v0.1. `raptor chat "message"` reads the API key from `DEEPSEEK_API_KEY`, sends a non-streaming chat completion request to DeepSeek, and prints the assistant response.
+
+If `DEEPSEEK_API_KEY` is missing, the command reports that the key is required and directs the developer to:
+
+```text
+https://platform.deepseek.com/api_keys
+```
+
+API keys must not be stored in `raptor.toml`, committed to the repository, printed, or logged. Other provider integrations remain Phase 2 and must not be implemented before v0.1.
 
 `raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]` creates local session metadata only under `.raptor/agents/`. Roles currently include `architect`, `reviewer`, and `worker`. Task, provider, model, and agent ids are validated before persistence, and duplicate deterministic session ids are refused.
 
@@ -272,7 +286,7 @@ cargo clippy --all-targets --all-features
 cargo test
 ```
 
-The workspace currently uses only internal crate dependencies.
+The workspace uses internal crates plus `reqwest`, `serde`, and `serde_json` for the DeepSeek HTTPS chat completion path and its no-live-network tests.
 
 ## Documentation
 

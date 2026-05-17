@@ -33,9 +33,9 @@ Rust is the default implementation language for RaptorCode because the project n
 
 ## Current Status
 
-The repository contains a Cargo workspace with internal crate dependencies only. The implemented CLI surface includes `raptor --version`, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>`, and `raptor merge <task-id> --execute`.
+The repository contains a Cargo workspace with internal crate dependencies plus the minimal HTTP and serialization crates needed for DeepSeek execution. The implemented CLI surface includes `raptor --version`, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor chat "message"`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor swarm "description"`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>`, and `raptor merge <task-id> --execute`.
 
-Provider and agent foundations are synchronous, metadata-only, and dependency-free. Persisted agent sessions use the existing local store boundary and a minimal text format under `.raptor/agents/`. The permission policy foundation uses Rust enums and explicit allow/deny helpers. These components were implemented early and are frozen until after v0.1.
+Provider execution is synchronous and uses `reqwest` for HTTPS, `serde` for explicit request/response structs, and `serde_json` for response parsing tests and error handling. DeepSeek is the only implemented provider before v0.1. Persisted agent sessions use the existing local store boundary and a minimal text format under `.raptor/agents/`. The permission policy foundation uses Rust enums and explicit allow/deny helpers. These components were implemented early and are frozen until after v0.1.
 
 Before v0.1, the tech stack may grow only to support the launch path:
 
@@ -46,6 +46,6 @@ Before v0.1, the tech stack may grow only to support the launch path:
 - Simple Ratatui dashboard.
 - Premium terminal launch screen and DeepSeek API key onboarding.
 
-Do not add HTTP clients, async runtimes, provider SDKs, serialization crates, or secret-management dependencies unless they are directly required for DeepSeek execution or the v0.1 demo path. Do not implement additional providers before v0.1.
+Do not add provider SDKs, async runtimes, secret-management dependencies, or additional provider implementations before v0.1. `reqwest`, `serde`, and `serde_json` are present only for the DeepSeek chat completion path and tests.
 
-The `chat`, `swarm`, and `test` commands are routed but intentionally stubbed until their supervised workflows are implemented.
+The `test` command is still routed but intentionally stubbed until its supervised workflow is implemented.

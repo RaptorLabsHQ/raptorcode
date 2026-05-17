@@ -81,7 +81,7 @@ The command:
 - Prints role, branch, worktree path, and status for each agent.
 - Does not call AI models, modify source files inside the role worktrees, run tests, merge, push, or execute task-provided commands.
 
-Existing `raptor review <task-id>` and `raptor diff <task-id>` currently inspect only single-worktree task metadata from `.raptor/tasks/`. Multi-agent review and diff fan-out remain v0.1 follow-up work after DeepSeek execution creates reviewable role worktree changes.
+Existing `raptor review <task-id>` and `raptor diff <task-id>` currently inspect only single-worktree task metadata from `.raptor/tasks/`. Multi-agent review and diff fan-out remain v0.1 follow-up work after swarm DeepSeek planning creates reviewable role worktree changes.
 
 `raptor task list`:
 
@@ -442,4 +442,4 @@ Persisted agent sessions and permission policy were implemented early but are fr
 
 ## Recommended Next Step
 
-PROMPT 18 - Implement DeepSeek provider execution
+PROMPT 19 - Implement agent role templates and swarm DeepSeek planning

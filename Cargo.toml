@@ -30,3 +30,6 @@ raptor-sandbox = { path = "crates/raptor-sandbox" }
 raptor-store = { path = "crates/raptor-store" }
 raptor-tools = { path = "crates/raptor-tools" }
 raptor-tui = { path = "crates/raptor-tui" }
+reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

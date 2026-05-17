@@ -7,6 +7,11 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
 [lib]
 name = "raptor_providers"
 path = "src/lib.rs"

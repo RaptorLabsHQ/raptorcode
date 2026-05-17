@@ -64,12 +64,12 @@ Complete and in-scope for v0.1:
 - Task metadata list/show.
 - Read-only review and diff inspection.
 - Supervised merge preflight and local merge execution.
+- `raptor swarm` MVP.
+- DeepSeek provider execution through `DEEPSEEK_API_KEY`.
+- `raptor chat "message"`.
 
 Incomplete but required for v0.1:
 
-- `raptor swarm` MVP.
-- DeepSeek provider execution.
-- `raptor chat`.
 - Agent role templates.
 - Minimal worktree file modification path.
 - `raptor test`.
@@ -95,11 +95,11 @@ Code or docs that were pointing toward Phase 2 before v0.1:
 
 Direct blockers for v0.1 launch:
 
-- `raptor swarm`, `raptor chat`, and `raptor test` are still stubs.
-- DeepSeek execution is not implemented.
+- `raptor test` is still a stub.
+- Swarm DeepSeek planning and agent role prompts are not implemented.
 - Worktree file modification from model output is not implemented.
 - Ratatui dashboard is not implemented.
-- Premium launch screen and DeepSeek API key onboarding are not implemented.
+- Premium launch screen and interactive DeepSeek API key onboarding are not implemented.
 
 ## Definition Of Done
 
@@ -113,12 +113,11 @@ An increment is complete when:
 
 ## Current Status
 
-The repository has project documentation, governance files, a minimal Rust workspace, a CLI command router, `raptor init`, `raptor doctor`, provider metadata inspection, persisted read-only agent session metadata, a deny-by-default permission policy display, and a first safe task workflow. The task workflow validates input, creates an isolated worktree, persists local task metadata, supports read-only metadata and worktree inspection through `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`, includes merge dry-run plus supervised local merge execution, records lifecycle status updates, and supports safe cleanup for merged, completed, or abandoned task worktrees without launching autonomous agents.
+The repository has project documentation, governance files, a minimal Rust workspace, a CLI command router, `raptor init`, `raptor doctor`, provider metadata inspection, DeepSeek chat completion through `raptor chat "message"`, persisted read-only agent session metadata, a deny-by-default permission policy display, a safe single-task workflow, and a v0.1 swarm worktree MVP. The task workflow validates input, creates an isolated worktree, persists local task metadata, supports read-only metadata and worktree inspection through `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`, includes merge dry-run plus supervised local merge execution, records lifecycle status updates, and supports safe cleanup for merged, completed, or abandoned task worktrees without launching autonomous agents.
 
-Provider and agent foundations are metadata-only. `raptor agent create` creates `.raptor/agents/<agent-id>.toml` records without model calls, shell execution, source file writes, or network requests. Persisted agent sessions and permission policy are frozen until after v0.1. V1 TUI and full multi-agent orchestration are not complete.
+DeepSeek is the only provider execution path before v0.1. `raptor chat` does not execute model output, modify source files, run shell commands, create worktrees, merge, commit, or push. `raptor agent create` creates `.raptor/agents/<agent-id>.toml` records without model calls, shell execution, source file writes, or network requests. Persisted agent sessions and permission policy are frozen until after v0.1. V1 TUI and full multi-agent orchestration are not complete.
 
 ## Near-Term Backlog
 
-- PROMPT 17 - Implement `raptor swarm` MVP.
-- Implement DeepSeek provider execution after swarm orchestration is shaped.
+- PROMPT 19 - Implement agent role templates and swarm DeepSeek planning.
 - Implement minimal file modification, test, diff, TUI, and release polish only as required for v0.1.

@@ -1,7 +1,15 @@
+use std::env;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
 
 pub const CRATE_PURPOSE: &str = "Provider integration boundaries for RaptorCode.";
+pub const DEEPSEEK_API_KEY_ENV: &str = "DEEPSEEK_API_KEY";
+pub const DEEPSEEK_API_KEY_URL: &str = "https://platform.deepseek.com/api_keys";
+pub const DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT: &str = "https://api.deepseek.com/chat/completions";
+pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-chat";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProviderId(String);
@@ -45,6 +53,15 @@ pub struct CompletionResponse {
     pub provider_id: ProviderId,
     pub model_id: ModelId,
     pub content: String,
+    pub finish_reason: Option<String>,
+    pub usage: Option<TokenUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub completion_tokens: Option<u32>,
+    pub prompt_tokens: Option<u32>,
+    pub total_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,9 +97,71 @@ pub struct ProviderCatalog {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderError {
+    AuthenticationFailed(String),
     ExecutionDisabled(String),
+    HttpStatus { detail: String, status: u16 },
+    HttpTransport(String),
     InvalidModelId(String),
     InvalidProviderId(String),
+    MalformedResponse(String),
+    MissingApiKey,
+    RateLimited(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DeepSeekChatRequest {
+    pub model: String,
+    pub messages: Vec<DeepSeekChatMessage>,
+    pub stream: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeepSeekChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepSeekChatResponse {
+    choices: Vec<DeepSeekChoice>,
+    model: Option<String>,
+    usage: Option<DeepSeekUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepSeekChoice {
+    finish_reason: Option<String>,
+    message: DeepSeekResponseMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepSeekResponseMessage {
+    content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepSeekUsage {
+    completion_tokens: Option<u32>,
+    prompt_tokens: Option<u32>,
+    total_tokens: Option<u32>,
+}
+
+pub struct DeepSeekProvider {
+    api_key: String,
+    client: reqwest::blocking::Client,
+    definition: ProviderDefinition,
+    endpoint: String,
+}
+
+impl std::fmt::Debug for DeepSeekProvider {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeepSeekProvider")
+            .field("api_key", &"[redacted]")
+            .field("definition", &self.definition)
+            .field("endpoint", &self.endpoint)
+            .finish()
+    }
 }
 
 pub trait Provider {
@@ -202,10 +281,28 @@ impl ProviderCapabilities {
 }
 
 impl CompletionMessage {
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: CompletionMessageRole::System,
+            content: content.into(),
+        }
+    }
+
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: CompletionMessageRole::User,
             content: content.into(),
+        }
+    }
+}
+
+impl CompletionMessageRole {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Assistant => "assistant",
+            Self::System => "system",
+            Self::Tool => "tool",
+            Self::User => "user",
         }
     }
 }
@@ -240,6 +337,148 @@ impl ProviderDefinition {
             capabilities,
         }
     }
+}
+
+impl DeepSeekProvider {
+    pub fn from_env() -> Result<Self, ProviderError> {
+        let api_key = env::var(DEEPSEEK_API_KEY_ENV).map_err(|_| ProviderError::MissingApiKey)?;
+
+        Self::new(api_key)
+    }
+
+    pub fn new(api_key: impl Into<String>) -> Result<Self, ProviderError> {
+        Self::with_endpoint(api_key, DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT)
+    }
+
+    pub fn with_endpoint(
+        api_key: impl Into<String>,
+        endpoint: impl Into<String>,
+    ) -> Result<Self, ProviderError> {
+        let api_key = api_key.into();
+
+        if api_key.trim().is_empty() {
+            return Err(ProviderError::MissingApiKey);
+        }
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+
+        Ok(Self {
+            api_key,
+            client,
+            definition: deepseek_definition(),
+            endpoint: endpoint.into(),
+        })
+    }
+}
+
+impl Provider for DeepSeekProvider {
+    fn id(&self) -> &ProviderId {
+        self.definition.id()
+    }
+
+    fn display_name(&self) -> &str {
+        self.definition.display_name()
+    }
+
+    fn capabilities(&self) -> &ProviderCapabilities {
+        self.definition.capabilities()
+    }
+
+    fn default_model(&self) -> Option<&ModelId> {
+        self.definition.default_model()
+    }
+
+    fn models(&self) -> &[ModelId] {
+        self.definition.models()
+    }
+
+    fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
+        if request.provider_id.as_str() != "deepseek" {
+            return Err(ProviderError::InvalidProviderId(
+                request.provider_id.as_str().to_owned(),
+            ));
+        }
+
+        let request_body = deepseek_chat_request_from_completion(&request)?;
+        let response = self
+            .client
+            .post(&self.endpoint)
+            .bearer_auth(&self.api_key)
+            .json(&request_body)
+            .send()
+            .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+        let status = response.status().as_u16();
+        let body = response
+            .text()
+            .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+
+        parse_deepseek_chat_response(status, &body, &request.provider_id, &request.model_id)
+    }
+}
+
+pub fn deepseek_chat_request_from_completion(
+    request: &CompletionRequest,
+) -> Result<DeepSeekChatRequest, ProviderError> {
+    if request.provider_id.as_str() != "deepseek" {
+        return Err(ProviderError::InvalidProviderId(
+            request.provider_id.as_str().to_owned(),
+        ));
+    }
+
+    Ok(DeepSeekChatRequest {
+        model: request.model_id.as_str().to_owned(),
+        messages: request
+            .messages
+            .iter()
+            .map(|message| DeepSeekChatMessage {
+                role: message.role.as_str().to_owned(),
+                content: message.content.clone(),
+            })
+            .collect(),
+        stream: false,
+    })
+}
+
+pub fn parse_deepseek_chat_response(
+    status: u16,
+    body: &str,
+    provider_id: &ProviderId,
+    fallback_model_id: &ModelId,
+) -> Result<CompletionResponse, ProviderError> {
+    if status != 200 {
+        return Err(map_deepseek_error_status(status, body));
+    }
+
+    let parsed: DeepSeekChatResponse = serde_json::from_str(body).map_err(|error| {
+        ProviderError::MalformedResponse(format!("failed to parse DeepSeek response JSON: {error}"))
+    })?;
+    let choice = parsed
+        .choices
+        .into_iter()
+        .next()
+        .ok_or_else(|| ProviderError::MalformedResponse("missing choices[0]".to_owned()))?;
+    let content = choice.message.content.ok_or_else(|| {
+        ProviderError::MalformedResponse("missing choices[0].message.content".to_owned())
+    })?;
+    let model_id = match parsed.model {
+        Some(model) if !model.trim().is_empty() => ModelId::new(model)?,
+        _ => fallback_model_id.clone(),
+    };
+
+    Ok(CompletionResponse {
+        provider_id: provider_id.clone(),
+        model_id,
+        content,
+        finish_reason: choice.finish_reason,
+        usage: parsed.usage.map(|usage| TokenUsage {
+            completion_tokens: usage.completion_tokens,
+            prompt_tokens: usage.prompt_tokens,
+            total_tokens: usage.total_tokens,
+        }),
+    })
 }
 
 impl Provider for ProviderDefinition {
@@ -282,16 +521,7 @@ impl ProviderConfiguration {
 impl ProviderCatalog {
     pub fn built_in() -> Self {
         let providers = vec![
-            ProviderDefinition::new(
-                ProviderId::new("deepseek").expect("built-in provider id is valid"),
-                "DeepSeek",
-                Some(ModelId::new("deepseek-chat").expect("built-in model id is valid")),
-                vec![
-                    ModelId::new("deepseek-chat").expect("built-in model id is valid"),
-                    ModelId::new("deepseek-reasoner").expect("built-in model id is valid"),
-                ],
-                ProviderCapabilities::network_chat(),
-            ),
+            deepseek_definition(),
             ProviderDefinition::new(
                 ProviderId::new("openai").expect("built-in provider id is valid"),
                 "OpenAI / Codex",
@@ -380,18 +610,90 @@ impl ProviderCatalog {
     }
 }
 
+fn deepseek_definition() -> ProviderDefinition {
+    ProviderDefinition::new(
+        ProviderId::new("deepseek").expect("built-in provider id is valid"),
+        "DeepSeek",
+        Some(ModelId::new(DEEPSEEK_DEFAULT_MODEL).expect("built-in model id is valid")),
+        vec![
+            ModelId::new(DEEPSEEK_DEFAULT_MODEL).expect("built-in model id is valid"),
+            ModelId::new("deepseek-reasoner").expect("built-in model id is valid"),
+        ],
+        ProviderCapabilities::network_chat(),
+    )
+}
+
+fn map_deepseek_error_status(status: u16, body: &str) -> ProviderError {
+    let detail = response_error_detail(body);
+
+    match status {
+        401 | 403 => ProviderError::AuthenticationFailed(detail),
+        429 => ProviderError::RateLimited(detail),
+        _ => ProviderError::HttpStatus { detail, status },
+    }
+}
+
+fn response_error_detail(body: &str) -> String {
+    let trimmed = body.trim();
+
+    if trimmed.is_empty() {
+        return "empty response body".to_owned();
+    }
+
+    let parsed = serde_json::from_str::<serde_json::Value>(trimmed)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(|message| message.as_str())
+                .or_else(|| value.get("message").and_then(|message| message.as_str()))
+                .map(ToOwned::to_owned)
+        });
+    let detail = parsed.unwrap_or_else(|| trimmed.to_owned());
+
+    let truncated = detail.chars().take(300).collect::<String>();
+
+    if truncated.len() < detail.len() {
+        format!("{truncated}...")
+    } else {
+        detail
+    }
+}
+
 impl Display for ProviderError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AuthenticationFailed(detail) => {
+                write!(formatter, "DeepSeek authentication failed: {detail}")
+            }
             Self::ExecutionDisabled(provider_id) => {
                 write!(
                     formatter,
                     "provider execution is not implemented for {provider_id}"
                 )
             }
+            Self::HttpStatus { detail, status } => {
+                write!(formatter, "DeepSeek API returned HTTP {status}: {detail}")
+            }
+            Self::HttpTransport(detail) => {
+                write!(formatter, "DeepSeek API request failed: {detail}")
+            }
             Self::InvalidModelId(model_id) => write!(formatter, "model id is not safe: {model_id}"),
             Self::InvalidProviderId(provider_id) => {
                 write!(formatter, "provider id is not safe: {provider_id}")
+            }
+            Self::MalformedResponse(detail) => {
+                write!(formatter, "DeepSeek API response was malformed: {detail}")
+            }
+            Self::MissingApiKey => {
+                write!(
+                    formatter,
+                    "{DEEPSEEK_API_KEY_ENV} is required for DeepSeek execution. Get a DeepSeek API key at {DEEPSEEK_API_KEY_URL}"
+                )
+            }
+            Self::RateLimited(detail) => {
+                write!(formatter, "DeepSeek API rate limit reached: {detail}")
             }
         }
     }
@@ -460,6 +762,132 @@ mod tests {
         assert!(deepseek.capabilities.labels().contains(&"network-required"));
         assert!(!openai.configured);
         assert!(!openai.enabled);
+    }
+
+    #[test]
+    fn deepseek_provider_exposes_v0_1_defaults() {
+        let provider = DeepSeekProvider::with_endpoint("test-key", "https://example.invalid")
+            .expect("test key should build provider");
+
+        assert_eq!(provider.id().as_str(), "deepseek");
+        assert_eq!(provider.display_name(), "DeepSeek");
+        assert_eq!(
+            provider.default_model().unwrap().as_str(),
+            DEEPSEEK_DEFAULT_MODEL
+        );
+        assert!(provider
+            .models()
+            .iter()
+            .any(|model| model.as_str() == "deepseek-chat"));
+        assert!(provider.capabilities().network_required);
+    }
+
+    #[test]
+    fn missing_deepseek_api_key_is_clear_and_does_not_leak_values() {
+        let error = DeepSeekProvider::with_endpoint("   ", "https://example.invalid").unwrap_err();
+        let message = error.to_string();
+
+        assert!(matches!(error, ProviderError::MissingApiKey));
+        assert!(message.contains(DEEPSEEK_API_KEY_ENV));
+        assert!(message.contains(DEEPSEEK_API_KEY_URL));
+        assert!(!message.contains("secret"));
+    }
+
+    #[test]
+    fn deepseek_request_serialization_matches_chat_completion_shape() {
+        let request = CompletionRequest::new(
+            ProviderId::new("deepseek").unwrap(),
+            ModelId::new("deepseek-chat").unwrap(),
+            vec![
+                CompletionMessage::system("You are RaptorCode."),
+                CompletionMessage::user("Hello"),
+            ],
+        );
+        let deepseek_request = deepseek_chat_request_from_completion(&request).unwrap();
+        let json = serde_json::to_value(deepseek_request).unwrap();
+
+        assert_eq!(json["model"], "deepseek-chat");
+        assert_eq!(json["stream"], false);
+        assert_eq!(json["messages"][0]["role"], "system");
+        assert_eq!(json["messages"][0]["content"], "You are RaptorCode.");
+        assert_eq!(json["messages"][1]["role"], "user");
+        assert_eq!(json["messages"][1]["content"], "Hello");
+    }
+
+    #[test]
+    fn deepseek_response_parsing_succeeds() {
+        let provider_id = ProviderId::new("deepseek").unwrap();
+        let model_id = ModelId::new("deepseek-chat").unwrap();
+        let body = r#"{
+            "id": "abc",
+            "object": "chat.completion",
+            "model": "deepseek-chat",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hello from DeepSeek"},
+                    "finish_reason": "stop"
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 3,
+                "completion_tokens": 4,
+                "total_tokens": 7
+            }
+        }"#;
+
+        let response = parse_deepseek_chat_response(200, body, &provider_id, &model_id).unwrap();
+
+        assert_eq!(response.provider_id.as_str(), "deepseek");
+        assert_eq!(response.model_id.as_str(), "deepseek-chat");
+        assert_eq!(response.content, "Hello from DeepSeek");
+        assert_eq!(response.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(response.usage.unwrap().total_tokens, Some(7));
+    }
+
+    #[test]
+    fn deepseek_response_parsing_rejects_malformed_response() {
+        let provider_id = ProviderId::new("deepseek").unwrap();
+        let model_id = ModelId::new("deepseek-chat").unwrap();
+        let body = r#"{"choices":[{"message":{},"finish_reason":"stop"}]}"#;
+
+        let error = parse_deepseek_chat_response(200, body, &provider_id, &model_id).unwrap_err();
+
+        assert!(matches!(error, ProviderError::MalformedResponse(_)));
+        assert!(error.to_string().contains("message.content"));
+    }
+
+    #[test]
+    fn deepseek_non_200_responses_are_explicit() {
+        let provider_id = ProviderId::new("deepseek").unwrap();
+        let model_id = ModelId::new("deepseek-chat").unwrap();
+
+        let auth = parse_deepseek_chat_response(
+            401,
+            r#"{"error":{"message":"invalid auth"}}"#,
+            &provider_id,
+            &model_id,
+        )
+        .unwrap_err();
+        let rate = parse_deepseek_chat_response(
+            429,
+            r#"{"error":{"message":"slow down"}}"#,
+            &provider_id,
+            &model_id,
+        )
+        .unwrap_err();
+        let generic =
+            parse_deepseek_chat_response(500, "server error", &provider_id, &model_id).unwrap_err();
+
+        assert!(matches!(auth, ProviderError::AuthenticationFailed(_)));
+        assert!(auth.to_string().contains("authentication failed"));
+        assert!(matches!(rate, ProviderError::RateLimited(_)));
+        assert!(rate.to_string().contains("rate limit"));
+        assert!(matches!(
+            generic,
+            ProviderError::HttpStatus { status: 500, .. }
+        ));
+        assert!(generic.to_string().contains("HTTP 500"));
     }
 
     #[test]

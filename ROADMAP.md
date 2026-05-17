@@ -12,8 +12,8 @@ Only these items are active before v0.1 is complete, tagged, documented, and lau
 
 - [x] Scope audit complete
 - [x] `raptor swarm` MVP
-- [ ] DeepSeek provider execution
-- [ ] `raptor chat`
+- [x] DeepSeek provider execution
+- [x] `raptor chat`
 - [ ] Agent role templates
 - [ ] Minimal worktree file modification path
 - [ ] `raptor test`
@@ -56,11 +56,11 @@ Complete and in-scope:
 - Supervised merge preflight and local merge execution.
 - Basic local safety checks for task ids, worktree paths, and merge confirmation.
 - `raptor swarm` role-based worktree MVP with `.raptor/swarms/<task-id>.toml` metadata.
+- DeepSeek provider execution through `DEEPSEEK_API_KEY`.
+- `raptor chat "message"` smoke-test command for DeepSeek completion.
 
 Incomplete but required:
 
-- DeepSeek execution using `DEEPSEEK_API_KEY`.
-- `raptor chat`.
 - Role templates for `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent`.
 - Minimal model-output-to-worktree file modification path.
 - `raptor test <task-id>`.
@@ -104,6 +104,8 @@ After the launch screen, v0.1 must onboard the developer to DeepSeek:
 - Do not commit or log API keys.
 - If the developer does not have a key, show this URL: `https://platform.deepseek.com/api_keys`.
 
+The non-interactive `raptor chat "message"` path already requires `DEEPSEEK_API_KEY` and prints the same key URL when it is missing. The premium launch-screen interactive prompt remains incomplete.
+
 ## Non-Goals Before v0.1
 
 - Full terminal emulator replacement.
@@ -139,4 +141,4 @@ The output must be understandable, safe, demo-ready, and aligned with the premiu
 
 ## Next Implementation Prompt
 
-PROMPT 18 - Implement DeepSeek provider execution
+PROMPT 19 - Implement agent role templates and swarm DeepSeek planning
