@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use raptor_core::{TaskId, WorktreeInfo};
+use raptor_core::{SwarmAgentRole, TaskId, WorktreeInfo};
 
 const RAPTOR_STATE_DIR: &str = ".raptor";
 const WORKTREES_DIR: &str = "worktrees";
@@ -27,6 +27,20 @@ pub struct WorktreePlan {
     pub branch_name: String,
     pub path: PathBuf,
     pub repository_root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwarmWorktreePlan {
+    pub agents: Vec<SwarmAgentWorktreePlan>,
+    pub repository_root: PathBuf,
+    pub task_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwarmAgentWorktreePlan {
+    pub branch_name: String,
+    pub path: PathBuf,
+    pub role: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,6 +207,60 @@ pub fn create_task_worktree(
     })
 }
 
+pub fn create_swarm_worktrees(
+    repository_root: &RepositoryRoot,
+    task_id: &TaskId,
+) -> Result<SwarmWorktreePlan, GitError> {
+    let plan = plan_swarm_worktrees(repository_root, task_id)?;
+
+    for agent in &plan.agents {
+        if branch_exists(repository_root.path(), &agent.branch_name)? {
+            return Err(GitError::BranchExists(agent.branch_name.clone()));
+        }
+    }
+
+    let swarm_root = repository_root
+        .path()
+        .join(RAPTOR_STATE_DIR)
+        .join(WORKTREES_DIR)
+        .join(task_id.as_str());
+
+    fs::create_dir_all(&swarm_root).map_err(|source| GitError::Io {
+        path: swarm_root.clone(),
+        source,
+    })?;
+
+    for agent in &plan.agents {
+        let output = Command::new("git")
+            .arg("worktree")
+            .arg("add")
+            .arg("-b")
+            .arg(&agent.branch_name)
+            .arg(&agent.path)
+            .current_dir(repository_root.path())
+            .output()
+            .map_err(|source| GitError::Io {
+                path: repository_root.path().to_path_buf(),
+                source,
+            })?;
+
+        if !output.status.success() {
+            return Err(GitError::CommandFailed {
+                args: vec![
+                    "worktree".to_owned(),
+                    "add".to_owned(),
+                    "-b".to_owned(),
+                    agent.branch_name.clone(),
+                    agent.path.display().to_string(),
+                ],
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            });
+        }
+    }
+
+    Ok(plan)
+}
+
 pub fn plan_task_worktree(
     repository_root: &RepositoryRoot,
     task_id: &TaskId,
@@ -218,6 +286,54 @@ pub fn plan_task_worktree(
         branch_name,
         path,
         repository_root: repository_root.path().to_path_buf(),
+    })
+}
+
+pub fn plan_swarm_worktrees(
+    repository_root: &RepositoryRoot,
+    task_id: &TaskId,
+) -> Result<SwarmWorktreePlan, GitError> {
+    validate_worktree_name(task_id.as_str())?;
+
+    let swarm_root = repository_root
+        .path()
+        .join(RAPTOR_STATE_DIR)
+        .join(WORKTREES_DIR)
+        .join(task_id.as_str());
+
+    validate_path_inside(repository_root.path(), &swarm_root)?;
+
+    if swarm_root.exists() {
+        return Err(GitError::WorktreeExists(swarm_root));
+    }
+
+    let mut agents = Vec::new();
+
+    for role in SwarmAgentRole::ALL {
+        let role_name = role.as_str();
+        validate_worktree_name(role_name)?;
+
+        let branch_name = format!("raptor/{}/{}", task_id.as_str(), role_name);
+        validate_swarm_branch_name(repository_root.path(), &branch_name)?;
+
+        let path = swarm_root.join(role_name);
+        validate_path_inside(repository_root.path(), &path)?;
+
+        if path.exists() {
+            return Err(GitError::WorktreeExists(path));
+        }
+
+        agents.push(SwarmAgentWorktreePlan {
+            branch_name,
+            path,
+            role: role_name.to_owned(),
+        });
+    }
+
+    Ok(SwarmWorktreePlan {
+        agents,
+        repository_root: repository_root.path().to_path_buf(),
+        task_id: task_id.as_str().to_owned(),
     })
 }
 
@@ -691,6 +807,24 @@ fn validate_detected_branch_name(
     }
 }
 
+fn validate_swarm_branch_name(repository_root: &Path, branch_name: &str) -> Result<(), GitError> {
+    let valid = !branch_name.is_empty()
+        && !branch_name.starts_with('-')
+        && !branch_name.starts_with('/')
+        && !branch_name.ends_with('/')
+        && !branch_name.contains('\0')
+        && !branch_name.contains("..")
+        && branch_name
+            .split('/')
+            .all(|segment| validate_safe_name(segment).is_ok());
+
+    if !valid {
+        return Err(GitError::UnsafeName(branch_name.to_owned()));
+    }
+
+    validate_detected_branch_name(repository_root, branch_name)
+}
+
 fn status_lines(path: &Path) -> Result<Vec<String>, GitError> {
     let status = git_output_text(path, &["status", "--short"])?;
 
@@ -926,6 +1060,60 @@ mod tests {
             first.branch_name,
             format!("raptor-task-{}", task_id.as_str())
         );
+    }
+
+    #[test]
+    fn plans_swarm_role_worktrees_under_task_directory() {
+        let test_dir = TestDir::create("swarm-plan");
+        let root = RepositoryRoot {
+            path: test_dir.path.clone(),
+        };
+        let task_id = TaskId::from_description("Plan swarm worktrees").unwrap();
+
+        let plan = plan_swarm_worktrees(&root, &task_id).unwrap();
+
+        assert_eq!(plan.task_id, task_id.as_str());
+        assert_eq!(plan.agents.len(), 4);
+
+        for agent in plan.agents {
+            assert!(agent
+                .path
+                .starts_with(test_dir.path.join(".raptor").join("worktrees")));
+            assert_eq!(
+                agent.path,
+                test_dir
+                    .path
+                    .join(".raptor")
+                    .join("worktrees")
+                    .join(task_id.as_str())
+                    .join(&agent.role)
+            );
+            assert_eq!(
+                agent.branch_name,
+                format!("raptor/{}/{}", task_id.as_str(), agent.role)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_existing_swarm_worktree_root() {
+        let test_dir = TestDir::create("swarm-exists");
+        let root = RepositoryRoot {
+            path: test_dir.path.clone(),
+        };
+        let task_id = TaskId::from_description("Existing swarm").unwrap();
+        fs::create_dir_all(
+            test_dir
+                .path
+                .join(".raptor")
+                .join("worktrees")
+                .join(task_id.as_str()),
+        )
+        .unwrap();
+
+        let error = plan_swarm_worktrees(&root, &task_id).unwrap_err();
+
+        assert!(matches!(error, GitError::WorktreeExists(_)));
     }
 
     #[test]

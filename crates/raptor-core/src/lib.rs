@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 pub const PROJECT_DESCRIPTION: &str = "An open-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.";
 pub const PROJECT_NAME: &str = "RaptorCode";
+pub const SWARM_PENDING_MODEL_EXECUTION_STATUS: &str = "pending_model_execution";
 pub const V1_SCOPE: &str = "CLI + TUI + multi-agent orchestrator";
 
 pub fn project_description() -> &'static str {
@@ -31,6 +32,14 @@ pub enum TaskStatus {
     MergeConflict,
     Merged,
     Planned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwarmAgentRole {
+    Frontend,
+    Backend,
+    Test,
+    Security,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +89,19 @@ impl TaskStatus {
             Self::MergeConflict => "merge_conflict",
             Self::Merged => "merged",
             Self::Planned => "planned",
+        }
+    }
+}
+
+impl SwarmAgentRole {
+    pub const ALL: [Self; 4] = [Self::Frontend, Self::Backend, Self::Test, Self::Security];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Frontend => "frontend-agent",
+            Self::Backend => "backend-agent",
+            Self::Test => "test-agent",
+            Self::Security => "security-agent",
         }
     }
 }
@@ -185,6 +207,25 @@ mod tests {
         assert_eq!(TaskStatus::Merged.as_str(), "merged");
         assert_eq!(TaskStatus::MergeConflict.as_str(), "merge_conflict");
         assert_eq!(TaskStatus::Abandoned.as_str(), "abandoned");
+    }
+
+    #[test]
+    fn exposes_v1_swarm_roles() {
+        let roles = SwarmAgentRole::ALL.map(|role| role.as_str());
+
+        assert_eq!(
+            roles,
+            [
+                "frontend-agent",
+                "backend-agent",
+                "test-agent",
+                "security-agent"
+            ]
+        );
+        assert_eq!(
+            SWARM_PENDING_MODEL_EXECUTION_STATUS,
+            "pending_model_execution"
+        );
     }
 
     #[test]

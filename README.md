@@ -46,6 +46,7 @@ Implemented foundation:
 - `raptor diff <task-id>`.
 - `raptor merge <task-id>` preflight dry run.
 - `raptor merge <task-id> --execute` supervised local merge execution.
+- `raptor swarm "task description"` multi-agent worktree MVP.
 - Provider metadata catalog for DeepSeek first, plus future OpenAI/Codex, Claude, Gemini, and local model boundaries.
 - Read-only persisted local agent session model for future multi-agent orchestration.
 - Deny-by-default permission policy foundation for future agent tools.
@@ -54,7 +55,6 @@ Implemented foundation:
 Stubbed commands:
 
 - `raptor chat`
-- `raptor swarm`
 - `raptor test`
 
 ## v0.1 Scope Lock
@@ -81,6 +81,7 @@ Current controls:
 - Task ids are deterministic and path-safe.
 - Git worktrees are isolated under `.raptor/worktrees/`.
 - Task metadata is stored under `.raptor/tasks/`.
+- Swarm metadata is stored under `.raptor/swarms/`.
 - Existing worktree paths and task metadata are not overwritten.
 - Branch and worktree names are validated before git operations.
 - Path traversal is rejected.
@@ -124,6 +125,7 @@ cargo run -p raptor-cli -- review <task-id>
 cargo run -p raptor-cli -- diff <task-id>
 cargo run -p raptor-cli -- merge <task-id>
 cargo run -p raptor-cli -- merge <task-id> --execute
+cargo run -p raptor-cli -- swarm "Add GitHub OAuth to this Next.js app"
 ```
 
 Expected installed binary form:
@@ -146,6 +148,7 @@ raptor review <task-id>
 raptor diff <task-id>
 raptor merge <task-id>
 raptor merge <task-id> --execute
+raptor swarm "Add GitHub OAuth to this Next.js app"
 ```
 
 ## Task Workflow
@@ -162,6 +165,29 @@ It currently:
 - Reports task id, status, branch, worktree path, and metadata path.
 
 It does not launch coding agents yet.
+
+## Swarm Workflow
+
+`raptor swarm "task description"` is the v0.1 multi-agent worktree MVP. It must be run inside a git repository.
+
+It currently:
+
+- Creates one deterministic task id from the description.
+- Creates four role branches:
+  - `raptor/<task-id>/frontend-agent`
+  - `raptor/<task-id>/backend-agent`
+  - `raptor/<task-id>/test-agent`
+  - `raptor/<task-id>/security-agent`
+- Creates four isolated role worktrees:
+  - `.raptor/worktrees/<task-id>/frontend-agent`
+  - `.raptor/worktrees/<task-id>/backend-agent`
+  - `.raptor/worktrees/<task-id>/test-agent`
+  - `.raptor/worktrees/<task-id>/security-agent`
+- Writes swarm metadata under `.raptor/swarms/<task-id>.toml`.
+- Records provider placeholder `deepseek` and model placeholder `deepseek-chat`.
+- Leaves execution status as `pending_model_execution`.
+
+It does not call DeepSeek yet, modify source files inside the role worktrees, run tests, merge, or push. DeepSeek execution is the next v0.1 implementation step. Existing `raptor review` and `raptor diff` remain single-worktree task commands until multi-agent review fan-out is implemented.
 
 Task inspection commands are read-only:
 
@@ -215,7 +241,7 @@ https://platform.deepseek.com/api_keys
 |   |-- raptor-git/        # Git repository and worktree operations
 |   |-- raptor-providers/  # Future provider integration boundary
 |   |-- raptor-sandbox/    # Future execution isolation boundary
-|   |-- raptor-store/      # Local config, task metadata, and agent metadata persistence
+|   |-- raptor-store/      # Local config, task metadata, swarm metadata, and agent metadata persistence
 |   |-- raptor-tools/      # Local tooling diagnostics
 |   `-- raptor-tui/        # Future terminal UI boundary
 |-- docs/
@@ -233,7 +259,7 @@ https://platform.deepseek.com/api_keys
 `-- Cargo.toml
 ```
 
-`.raptor/` is ignored by git and reserved for local runtime state, including task metadata, agent metadata, and task worktrees.
+`.raptor/` is ignored by git and reserved for local runtime state, including task metadata, swarm metadata, agent metadata, and worktrees.
 
 ## Development
 

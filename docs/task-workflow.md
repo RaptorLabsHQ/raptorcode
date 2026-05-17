@@ -10,7 +10,7 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 
 ## Summary
 
-The first real workflow is `raptor task "description"`. It prepares safe local task infrastructure only. It does not launch autonomous coding agents.
+The first single-worktree workflow is `raptor task "description"`. The v0.1 multi-agent workflow is `raptor swarm "description"`. Both prepare safe local infrastructure only. They do not launch autonomous coding agents.
 
 ## Command
 
@@ -18,6 +18,7 @@ Create task infrastructure:
 
 ```bash
 cargo run -p raptor-cli -- task "describe the supervised task"
+cargo run -p raptor-cli -- swarm "Add GitHub OAuth to this Next.js app"
 ```
 
 Inspect persisted task metadata:
@@ -37,6 +38,7 @@ Installed binary forms:
 
 ```bash
 raptor task "describe the supervised task"
+raptor swarm "Add GitHub OAuth to this Next.js app"
 raptor task list
 raptor task show <id>
 raptor task abandon <id>
@@ -58,6 +60,28 @@ The command:
 - Creates an isolated git worktree under `.raptor/worktrees/<task-id>`.
 - Persists task metadata under `.raptor/tasks/<task-id>.toml`.
 - Reports task id, status, branch, worktree path, and metadata path.
+
+`raptor swarm "description"`:
+
+- Requires a non-empty task description.
+- Creates a deterministic task id from the description.
+- Detects the git repository root.
+- Creates four role branches:
+  - `raptor/<task-id>/frontend-agent`
+  - `raptor/<task-id>/backend-agent`
+  - `raptor/<task-id>/test-agent`
+  - `raptor/<task-id>/security-agent`
+- Creates four isolated role worktrees:
+  - `.raptor/worktrees/<task-id>/frontend-agent`
+  - `.raptor/worktrees/<task-id>/backend-agent`
+  - `.raptor/worktrees/<task-id>/test-agent`
+  - `.raptor/worktrees/<task-id>/security-agent`
+- Persists swarm metadata under `.raptor/swarms/<task-id>.toml`.
+- Records provider placeholder `deepseek`, model placeholder `deepseek-chat`, and status `pending_model_execution`.
+- Prints role, branch, worktree path, and status for each agent.
+- Does not call AI models, modify source files inside the role worktrees, run tests, merge, push, or execute task-provided commands.
+
+Existing `raptor review <task-id>` and `raptor diff <task-id>` currently inspect only single-worktree task metadata from `.raptor/tasks/`. Multi-agent review and diff fan-out remain v0.1 follow-up work after DeepSeek execution creates reviewable role worktree changes.
 
 `raptor task list`:
 
@@ -362,20 +386,29 @@ Current layout:
 
 ```text
 .raptor/
+  swarms/
+    <task-id>.toml
   tasks/
     <task-id>.toml
   worktrees/
-    <task-id>/
+    <single-task-id>/
+    <swarm-task-id>/
+      frontend-agent/
+      backend-agent/
+      test-agent/
+      security-agent/
 ```
 
 ## Safety Rules
 
 - Task descriptions are validated before task ids are created.
 - Branch and worktree names must use safe lowercase ASCII, digits, and hyphens.
+- Swarm branch names use safe slash-separated branch components: `raptor/<task-id>/<role>`.
 - Parent-directory traversal is rejected.
 - Worktree paths must stay inside the repository root.
 - Existing worktree paths are not overwritten.
 - Existing task metadata is not overwritten.
+- Existing swarm metadata is not overwritten.
 - Git commands are invoked through structured process arguments.
 - Task inspection commands reject unsafe ids and avoid arbitrary file reads.
 - Review and diff commands verify stored worktree paths before invoking read-only git inspection.
@@ -385,6 +418,9 @@ Current layout:
 ## Current Limits
 
 - No autonomous agents are launched.
+- `raptor swarm` creates role worktrees and metadata only.
+- `raptor swarm` records DeepSeek placeholders but does not call DeepSeek yet.
+- `raptor swarm` does not modify source files inside role worktrees.
 - Task setup and inspection commands do not create commits.
 - No remote pushes are performed.
 - `raptor merge <task-id>` is preflight dry-run only.
@@ -406,4 +442,4 @@ Persisted agent sessions and permission policy were implemented early but are fr
 
 ## Recommended Next Step
 
-PROMPT 17 - Implement `raptor swarm` MVP
+PROMPT 18 - Implement DeepSeek provider execution

@@ -53,7 +53,22 @@ The launch UX is part of v0.1. Running plain `raptor` must show a premium Raptor
 
 The repository contains a minimal Cargo workspace with crate boundaries for core metadata, task metadata, CLI, git diagnostics, tooling diagnostics, agent orchestration, providers, TUI, sandboxing, and local storage. The implemented CLI router supports `raptor init`, `raptor provider list`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor chat`, `raptor task`, `raptor swarm`, `raptor review`, `raptor diff`, `raptor test`, `raptor merge`, and `raptor doctor`.
 
-`raptor provider list` reads safe project configuration and reports registered provider metadata without external requests or model calls. `raptor agent create` persists local read-only agent session metadata under `.raptor/agents/`; `raptor agent list` and `raptor agent show <id>` inspect that persisted state; `raptor agent policy` displays the deny-by-default permission model. There is no autonomous coding loop, shell execution, network execution, model execution, or source file modification path. `raptor task "description"` validates task input, creates a deterministic isolated git worktree under `.raptor/worktrees/`, and persists task metadata under `.raptor/tasks/`. `raptor task list` and `raptor task show <id>` read that persisted metadata without modifying files. `raptor task abandon <id>` records abandoned lifecycle state without deleting metadata or worktrees. `raptor task cleanup <id>` validates the stored worktree path and removes only the associated worktree directory after exact typed confirmation. `raptor review <task-id>` and `raptor diff <task-id>` validate stored worktree paths and inspect task worktree status or diffs without modifying files. `raptor merge <task-id>` performs preflight dry-run checks only. `raptor merge <task-id> --execute` requires typed confirmation, performs supervised local merge execution for committed task branch changes, and records lifecycle state as `merged` or `merge_conflict`. The task workflow does not launch autonomous coding agents. `raptor init` and `raptor doctor` also perform meaningful work today. Other routed commands are explicit stubs until the corresponding V1 workflows are implemented.
+`raptor provider list` reads safe project configuration and reports registered provider metadata without external requests or model calls. `raptor agent create` persists local read-only agent session metadata under `.raptor/agents/`; `raptor agent list` and `raptor agent show <id>` inspect that persisted state; `raptor agent policy` displays the deny-by-default permission model. There is no autonomous coding loop, shell execution, network execution, model execution, or source file modification path. `raptor task "description"` validates task input, creates a deterministic isolated git worktree under `.raptor/worktrees/`, and persists task metadata under `.raptor/tasks/`. `raptor swarm "description"` validates task input, creates four role branches and four isolated role worktrees under `.raptor/worktrees/<task-id>/`, and persists swarm metadata under `.raptor/swarms/<task-id>.toml` with DeepSeek placeholders and `pending_model_execution` status. `raptor task list` and `raptor task show <id>` read persisted single-task metadata without modifying files. `raptor task abandon <id>` records abandoned lifecycle state without deleting metadata or worktrees. `raptor task cleanup <id>` validates the stored worktree path and removes only the associated worktree directory after exact typed confirmation. `raptor review <task-id>` and `raptor diff <task-id>` validate stored single-task worktree paths and inspect task worktree status or diffs without modifying files. `raptor merge <task-id>` performs preflight dry-run checks only. `raptor merge <task-id> --execute` requires typed confirmation, performs supervised local merge execution for committed task branch changes, and records lifecycle state as `merged` or `merge_conflict`. The task and swarm workflows do not launch autonomous coding agents. `raptor init` and `raptor doctor` also perform meaningful work today. Other routed commands are explicit stubs until the corresponding V1 workflows are implemented.
+
+## Swarm MVP Boundary
+
+The v0.1 swarm MVP is deliberately metadata and worktree orchestration only.
+
+- `raptor swarm "description"` creates one deterministic task id.
+- Role constants are `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent`.
+- Branches use `raptor/<task-id>/<role>`.
+- Worktrees use `.raptor/worktrees/<task-id>/<role>`.
+- Swarm metadata uses `.raptor/swarms/<task-id>.toml`.
+- Metadata records task description, status, provider placeholder `deepseek`, model placeholder `deepseek-chat`, role ids, branches, worktree paths, and per-role execution status.
+- DeepSeek execution is not implemented in this step.
+- Source file modifications inside role worktrees are not implemented in this step.
+- Existing `raptor review` and `raptor diff` remain single-worktree task commands until multi-agent review fan-out is implemented.
+- Persisted agent sessions and permission policy remain frozen and are not expanded by the swarm MVP.
 
 ## Provider Boundary
 
@@ -92,14 +107,14 @@ Persisted agent sessions and permission policy were implemented early in commit 
 
 ## Task Workflow Boundaries
 
-- `raptor-core`: owns task identifiers, task status, task metadata, and worktree information models.
-- `raptor-cli`: routes CLI commands and coordinates task setup, inspection, lifecycle, merge, and cleanup workflows.
-- `raptor-git`: inspects repository roots, validates worktree and branch names, creates git worktrees, performs read-only worktree review and diff inspection, executes supervised local merges, and removes validated task worktree directories.
-- `raptor-store`: persists local RaptorCode config, reads provider configuration, reads or writes task metadata, records lifecycle status transitions using the existing `.raptor/tasks/*.toml` format, and persists agent session metadata under `.raptor/agents/*.toml`.
+- `raptor-core`: owns task identifiers, task status, swarm role constants, task metadata, and worktree information models.
+- `raptor-cli`: routes CLI commands and coordinates task setup, swarm setup, inspection, lifecycle, merge, and cleanup workflows.
+- `raptor-git`: inspects repository roots, validates worktree and branch names, creates single-task and swarm role git worktrees, performs read-only worktree review and diff inspection, executes supervised local merges, and removes validated task worktree directories.
+- `raptor-store`: persists local RaptorCode config, reads provider configuration, reads or writes task metadata, writes swarm metadata, records lifecycle status transitions using the existing `.raptor/tasks/*.toml` format, and persists agent session metadata under `.raptor/agents/*.toml`.
 - `raptor-providers`: owns provider ids, model ids, capability metadata, completion request/response shapes, and the disabled provider trait boundary.
 - `raptor-agent`: owns read-only local session state, lifecycle models, task binding metadata, messages, events, audit entry structures, and the permission policy foundation.
 
-The current task workflow is intentionally local and supervised. Task creation and inspection prepare isolated work but do not call model providers, start background agents, commit changes, or push to remotes. The current provider foundation is inspection-only until DeepSeek execution is implemented for v0.1, and the current agent foundation is persistence plus frozen policy modeling only. Merge execution is available only through the explicit `--execute` path after preflight and exact typed confirmation.
+The current task and swarm workflows are intentionally local and supervised. Task creation, swarm creation, and inspection prepare isolated work but do not call model providers, start background agents, modify source files, commit changes, or push to remotes. The current provider foundation is inspection-only until DeepSeek execution is implemented for v0.1, and the current agent foundation is persistence plus frozen policy modeling only. Merge execution is available only through the explicit `--execute` path after preflight and exact typed confirmation.
 
 ## Merge Boundary
 

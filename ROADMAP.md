@@ -11,7 +11,7 @@ RaptorCode is an open-source Rust-native multi-agent coding terminal that runs A
 Only these items are active before v0.1 is complete, tagged, documented, and launch-ready:
 
 - [x] Scope audit complete
-- [ ] `raptor swarm` MVP
+- [x] `raptor swarm` MVP
 - [ ] DeepSeek provider execution
 - [ ] `raptor chat`
 - [ ] Agent role templates
@@ -55,10 +55,10 @@ Complete and in-scope:
 - Read-only worktree review and diff commands.
 - Supervised merge preflight and local merge execution.
 - Basic local safety checks for task ids, worktree paths, and merge confirmation.
+- `raptor swarm` role-based worktree MVP with `.raptor/swarms/<task-id>.toml` metadata.
 
 Incomplete but required:
 
-- `raptor swarm` role-based MVP.
 - DeepSeek execution using `DEEPSEEK_API_KEY`.
 - `raptor chat`.
 - Role templates for `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent`.
@@ -139,4 +139,4 @@ The output must be understandable, safe, demo-ready, and aligned with the premiu
 
 ## Next Implementation Prompt
 
-PROMPT 17 - Implement `raptor swarm` MVP
+PROMPT 18 - Implement DeepSeek provider execution

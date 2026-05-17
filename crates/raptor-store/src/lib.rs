@@ -12,6 +12,7 @@ pub const AGENTS_DIR: &str = "agents";
 pub const CONFIG_FILE_NAME: &str = "raptor.toml";
 pub const CRATE_PURPOSE: &str = "Local state storage boundaries for RaptorCode.";
 pub const RAPTOR_STATE_DIR: &str = ".raptor";
+pub const SWARMS_DIR: &str = "swarms";
 pub const TASKS_DIR: &str = "tasks";
 
 const DEFAULT_CONFIG: &str =
@@ -59,6 +60,15 @@ pub enum TaskStoreError {
     UnsafeTaskId(String),
 }
 
+#[derive(Debug)]
+pub enum SwarmStoreError {
+    AlreadyExists(PathBuf),
+    Io { path: PathBuf, source: io::Error },
+    UnsafeBasePath(PathBuf),
+    UnsafeSwarmId(String),
+    UnsafeValue { field: &'static str, value: String },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatusTransition {
     Abandoned,
@@ -99,6 +109,27 @@ pub struct ProjectProviderConfig {
 pub struct StoredAgentSession {
     pub metadata_path: PathBuf,
     pub session: AgentSession,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwarmMetadata {
+    pub agents: Vec<SwarmAgentMetadata>,
+    pub created_at: Option<String>,
+    pub description: String,
+    pub id: String,
+    pub model: String,
+    pub provider: String,
+    pub status: String,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwarmAgentMetadata {
+    pub agent_id: String,
+    pub branch: String,
+    pub role: String,
+    pub status: String,
+    pub worktree_path: PathBuf,
 }
 
 impl TaskStatusTransition {
@@ -258,6 +289,44 @@ impl Error for TaskStoreError {
             | Self::Parse { .. }
             | Self::UnsafeBasePath(_)
             | Self::UnsafeTaskId(_) => None,
+        }
+    }
+}
+
+impl Display for SwarmStoreError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyExists(path) => {
+                write!(
+                    formatter,
+                    "swarm metadata already exists: {}",
+                    path.display()
+                )
+            }
+            Self::Io { path, source } => {
+                write!(formatter, "{}: {source}", path.display())
+            }
+            Self::UnsafeBasePath(path) => {
+                write!(formatter, "{} is not a safe project path", path.display())
+            }
+            Self::UnsafeSwarmId(swarm_id) => {
+                write!(formatter, "swarm id is not safe: {swarm_id}")
+            }
+            Self::UnsafeValue { field, value } => {
+                write!(formatter, "swarm metadata {field} is not safe: {value}")
+            }
+        }
+    }
+}
+
+impl Error for SwarmStoreError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Io { source, .. } => Some(source),
+            Self::AlreadyExists(_)
+            | Self::UnsafeBasePath(_)
+            | Self::UnsafeSwarmId(_)
+            | Self::UnsafeValue { .. } => None,
         }
     }
 }
@@ -552,6 +621,70 @@ pub fn task_metadata_exists(
     Ok(task_metadata_path(repository_root, task_id)?.exists())
 }
 
+pub fn persist_swarm_metadata(
+    repository_root: &Path,
+    metadata: &SwarmMetadata,
+) -> Result<PathBuf, SwarmStoreError> {
+    validate_swarm_base_dir(repository_root)?;
+    validate_swarm_metadata(repository_root, metadata)?;
+
+    let swarm_dir = swarm_directory_path(repository_root)?;
+    validate_swarm_child_path(repository_root, &swarm_dir)?;
+
+    fs::create_dir_all(&swarm_dir).map_err(|source| SwarmStoreError::Io {
+        path: swarm_dir.clone(),
+        source,
+    })?;
+
+    let metadata_path = swarm_metadata_path_for_id(repository_root, &metadata.id)?;
+    let mut stored_metadata = metadata.clone();
+    let timestamp = current_unix_timestamp();
+
+    if stored_metadata.created_at.is_none() {
+        stored_metadata.created_at = Some(timestamp.clone());
+    }
+    stored_metadata.updated_at = Some(timestamp);
+
+    let mut file = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&metadata_path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(SwarmStoreError::AlreadyExists(metadata_path));
+        }
+        Err(source) => {
+            return Err(SwarmStoreError::Io {
+                path: metadata_path,
+                source,
+            });
+        }
+    };
+
+    file.write_all(render_swarm_metadata(&stored_metadata).as_bytes())
+        .map_err(|source| SwarmStoreError::Io {
+            path: metadata_path.clone(),
+            source,
+        })?;
+
+    Ok(metadata_path)
+}
+
+pub fn swarm_metadata_exists(
+    repository_root: &Path,
+    task_id: &TaskId,
+) -> Result<bool, SwarmStoreError> {
+    Ok(swarm_metadata_path(repository_root, task_id)?.exists())
+}
+
+pub fn swarm_metadata_path(
+    repository_root: &Path,
+    task_id: &TaskId,
+) -> Result<PathBuf, SwarmStoreError> {
+    swarm_metadata_path_for_id(repository_root, task_id.as_str())
+}
+
 pub fn task_metadata_path(
     repository_root: &Path,
     task_id: &TaskId,
@@ -693,6 +826,19 @@ fn task_metadata_path_for_id(
     Ok(metadata_path)
 }
 
+fn swarm_metadata_path_for_id(
+    repository_root: &Path,
+    swarm_id: &str,
+) -> Result<PathBuf, SwarmStoreError> {
+    validate_swarm_base_dir(repository_root)?;
+    validate_swarm_id(swarm_id)?;
+
+    let metadata_path = swarm_directory_path(repository_root)?.join(format!("{swarm_id}.toml"));
+    validate_swarm_child_path(repository_root, &metadata_path)?;
+
+    Ok(metadata_path)
+}
+
 fn agent_metadata_path(
     repository_root: &Path,
     agent_id: &AgentId,
@@ -729,6 +875,15 @@ fn task_directory_path(repository_root: &Path) -> Result<PathBuf, TaskStoreError
     validate_child_path(repository_root, &task_dir)?;
 
     Ok(task_dir)
+}
+
+fn swarm_directory_path(repository_root: &Path) -> Result<PathBuf, SwarmStoreError> {
+    validate_swarm_base_dir(repository_root)?;
+
+    let swarm_dir = repository_root.join(RAPTOR_STATE_DIR).join(SWARMS_DIR);
+    validate_swarm_child_path(repository_root, &swarm_dir)?;
+
+    Ok(swarm_dir)
 }
 
 fn validate_base_dir(base_dir: &Path) -> Result<(), InitConfigError> {
@@ -782,6 +937,18 @@ fn validate_task_base_dir(base_dir: &Path) -> Result<(), TaskStoreError> {
     Ok(())
 }
 
+fn validate_swarm_base_dir(base_dir: &Path) -> Result<(), SwarmStoreError> {
+    if base_dir.as_os_str().is_empty()
+        || base_dir
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(SwarmStoreError::UnsafeBasePath(base_dir.to_path_buf()));
+    }
+
+    Ok(())
+}
+
 fn validate_agent_child_path(base_dir: &Path, child_path: &Path) -> Result<(), AgentStoreError> {
     if child_path
         .components()
@@ -801,6 +968,18 @@ fn validate_child_path(base_dir: &Path, child_path: &Path) -> Result<(), TaskSto
         || !child_path.starts_with(base_dir)
     {
         return Err(TaskStoreError::UnsafeBasePath(child_path.to_path_buf()));
+    }
+
+    Ok(())
+}
+
+fn validate_swarm_child_path(base_dir: &Path, child_path: &Path) -> Result<(), SwarmStoreError> {
+    if child_path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+        || !child_path.starts_with(base_dir)
+    {
+        return Err(SwarmStoreError::UnsafeBasePath(child_path.to_path_buf()));
     }
 
     Ok(())
@@ -826,6 +1005,125 @@ fn validate_task_id(task_id: &str) -> Result<(), TaskStoreError> {
     } else {
         Err(TaskStoreError::UnsafeTaskId(task_id.to_owned()))
     }
+}
+
+fn validate_swarm_id(swarm_id: &str) -> Result<(), SwarmStoreError> {
+    if safe_hyphen_name(swarm_id) {
+        Ok(())
+    } else {
+        Err(SwarmStoreError::UnsafeSwarmId(swarm_id.to_owned()))
+    }
+}
+
+fn validate_swarm_metadata(
+    repository_root: &Path,
+    metadata: &SwarmMetadata,
+) -> Result<(), SwarmStoreError> {
+    validate_swarm_id(&metadata.id)?;
+    validate_safe_hyphen_value("provider", &metadata.provider)?;
+    validate_safe_hyphen_value("model", &metadata.model)?;
+    validate_safe_status("status", &metadata.status)?;
+
+    for agent in &metadata.agents {
+        validate_safe_hyphen_value("agent role", &agent.role)?;
+        validate_safe_hyphen_value("agent id", &agent.agent_id)?;
+        validate_safe_status("agent status", &agent.status)?;
+        validate_swarm_branch_value(&agent.branch)?;
+        validate_swarm_worktree_path(
+            repository_root,
+            &metadata.id,
+            &agent.role,
+            &agent.worktree_path,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn validate_safe_hyphen_value(field: &'static str, value: &str) -> Result<(), SwarmStoreError> {
+    if safe_hyphen_name(value) {
+        Ok(())
+    } else {
+        Err(SwarmStoreError::UnsafeValue {
+            field,
+            value: value.to_owned(),
+        })
+    }
+}
+
+fn validate_safe_status(field: &'static str, value: &str) -> Result<(), SwarmStoreError> {
+    let valid = !value.is_empty()
+        && !value.starts_with('_')
+        && !value.ends_with('_')
+        && !value.contains("..")
+        && value.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || character == '-'
+                || character == '_'
+        });
+
+    if valid {
+        Ok(())
+    } else {
+        Err(SwarmStoreError::UnsafeValue {
+            field,
+            value: value.to_owned(),
+        })
+    }
+}
+
+fn validate_swarm_branch_value(branch: &str) -> Result<(), SwarmStoreError> {
+    let valid = !branch.is_empty()
+        && !branch.starts_with('-')
+        && !branch.starts_with('/')
+        && !branch.ends_with('/')
+        && !branch.contains('\0')
+        && !branch.contains("..")
+        && branch.split('/').all(safe_hyphen_name);
+
+    if valid {
+        Ok(())
+    } else {
+        Err(SwarmStoreError::UnsafeValue {
+            field: "branch",
+            value: branch.to_owned(),
+        })
+    }
+}
+
+fn validate_swarm_worktree_path(
+    repository_root: &Path,
+    swarm_id: &str,
+    role: &str,
+    worktree_path: &Path,
+) -> Result<(), SwarmStoreError> {
+    let expected_path = repository_root
+        .join(RAPTOR_STATE_DIR)
+        .join("worktrees")
+        .join(swarm_id)
+        .join(role);
+
+    if worktree_path.as_os_str().is_empty()
+        || worktree_path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        || worktree_path != expected_path
+    {
+        return Err(SwarmStoreError::UnsafeBasePath(worktree_path.to_path_buf()));
+    }
+
+    Ok(())
+}
+
+fn safe_hyphen_name(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && !value.contains("..")
+        && value.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
 }
 
 fn validate_provider_id(provider_id: &str) -> Result<(), ProjectConfigError> {
@@ -862,6 +1160,30 @@ fn render_task_metadata(metadata: &TaskMetadata) -> String {
     };
 
     render_stored_task_metadata(&task)
+}
+
+fn render_swarm_metadata(metadata: &SwarmMetadata) -> String {
+    let mut output = String::new();
+
+    push_toml_string(&mut output, "id", Some(&metadata.id));
+    push_toml_string(&mut output, "description", Some(&metadata.description));
+    push_toml_string(&mut output, "status", Some(&metadata.status));
+    push_toml_string(&mut output, "provider", Some(&metadata.provider));
+    push_toml_string(&mut output, "model", Some(&metadata.model));
+    push_toml_string(&mut output, "created_at", metadata.created_at.as_deref());
+    push_toml_string(&mut output, "updated_at", metadata.updated_at.as_deref());
+
+    for agent in &metadata.agents {
+        output.push('\n');
+        output.push_str("[[agents]]\n");
+        push_toml_string(&mut output, "role", Some(&agent.role));
+        push_toml_string(&mut output, "agent_id", Some(&agent.agent_id));
+        push_toml_string(&mut output, "branch", Some(&agent.branch));
+        push_toml_path(&mut output, "worktree_path", Some(&agent.worktree_path));
+        push_toml_string(&mut output, "status", Some(&agent.status));
+    }
+
+    output
 }
 
 fn escape_toml_string(value: &str) -> String {
@@ -1184,7 +1506,9 @@ fn unescape_toml_string(
 mod tests {
     use super::*;
     use raptor_agent::{AgentId, AgentRole, AgentSession};
-    use raptor_core::{TaskMetadata, TaskStatus, WorktreeInfo};
+    use raptor_core::{
+        TaskMetadata, TaskStatus, WorktreeInfo, SWARM_PENDING_MODEL_EXECUTION_STATUS,
+    };
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TestDir {
@@ -1406,6 +1730,46 @@ mod tests {
     }
 
     #[test]
+    fn persists_swarm_metadata_without_overwrite() {
+        let test_dir = TestDir::create("swarm");
+        let task_id = TaskId::from_description("Swarm metadata").unwrap();
+        let metadata = test_swarm_metadata(&test_dir.path, task_id.clone(), "Swarm metadata");
+
+        let metadata_path = persist_swarm_metadata(&test_dir.path, &metadata).unwrap();
+        let content = fs::read_to_string(&metadata_path).unwrap();
+
+        assert!(metadata_path.exists());
+        assert!(swarm_metadata_exists(&test_dir.path, &task_id).unwrap());
+        assert!(content.contains(&format!("id = \"{}\"", task_id.as_str())));
+        assert!(content.contains("provider = \"deepseek\""));
+        assert!(content.contains("model = \"deepseek-chat\""));
+        assert!(content.contains("[[agents]]"));
+        assert!(content.contains("role = \"frontend-agent\""));
+        assert!(matches!(
+            persist_swarm_metadata(&test_dir.path, &metadata).unwrap_err(),
+            SwarmStoreError::AlreadyExists(_)
+        ));
+    }
+
+    #[test]
+    fn swarm_metadata_rejects_unsafe_values() {
+        let test_dir = TestDir::create("swarm-unsafe");
+        let task_id = TaskId::from_description("Unsafe swarm metadata").unwrap();
+        let mut metadata =
+            test_swarm_metadata(&test_dir.path, task_id.clone(), "Unsafe swarm metadata");
+
+        metadata.agents[0].worktree_path = test_dir.path.join("..").join("outside");
+        let path_error = persist_swarm_metadata(&test_dir.path, &metadata).unwrap_err();
+        assert!(matches!(path_error, SwarmStoreError::UnsafeBasePath(_)));
+
+        let mut metadata =
+            test_swarm_metadata(&test_dir.path, task_id.clone(), "Unsafe swarm metadata");
+        metadata.agents[0].branch = "../main".to_owned();
+        let branch_error = persist_swarm_metadata(&test_dir.path, &metadata).unwrap_err();
+        assert!(matches!(branch_error, SwarmStoreError::UnsafeValue { .. }));
+    }
+
+    #[test]
     fn list_returns_empty_when_no_tasks_exist() {
         let test_dir = TestDir::create("list-empty");
 
@@ -1554,5 +1918,34 @@ mod tests {
                 repository_root: repository_root.to_path_buf(),
             },
         )
+    }
+
+    fn test_swarm_metadata(
+        repository_root: &Path,
+        task_id: TaskId,
+        description: &str,
+    ) -> SwarmMetadata {
+        let role = "frontend-agent";
+
+        SwarmMetadata {
+            agents: vec![SwarmAgentMetadata {
+                agent_id: format!("{}-{role}", task_id.as_str()),
+                branch: format!("raptor/{}/{role}", task_id.as_str()),
+                role: role.to_owned(),
+                status: SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned(),
+                worktree_path: repository_root
+                    .join(RAPTOR_STATE_DIR)
+                    .join("worktrees")
+                    .join(task_id.as_str())
+                    .join(role),
+            }],
+            created_at: None,
+            description: description.to_owned(),
+            id: task_id.as_str().to_owned(),
+            model: "deepseek-chat".to_owned(),
+            provider: "deepseek".to_owned(),
+            status: SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned(),
+            updated_at: None,
+        }
     }
 }

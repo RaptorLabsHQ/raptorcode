@@ -4,21 +4,26 @@ use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use raptor_agent::{AgentId, AgentRole, AgentSession, PermissionPolicy};
-use raptor_core::{project_description, project_name, version, TaskId, TaskMetadata, TaskStatus};
+use raptor_core::{
+    project_description, project_name, version, TaskId, TaskMetadata, TaskStatus,
+    SWARM_PENDING_MODEL_EXECUTION_STATUS,
+};
 use raptor_git::{
-    create_task_worktree, diff_task_worktree, execute_task_merge, execute_task_worktree_cleanup,
-    inspect_repository, inspect_repository_root, inspect_task_worktree, plan_task_worktree,
-    plan_task_worktree_cleanup, preflight_task_merge, GitError, MergeExecution, MergePreflight,
-    RepositoryRoot, WorktreeCleanupPlan, WorktreeDiff, WorktreeReview,
+    create_swarm_worktrees, create_task_worktree, diff_task_worktree, execute_task_merge,
+    execute_task_worktree_cleanup, inspect_repository, inspect_repository_root,
+    inspect_task_worktree, plan_task_worktree, plan_task_worktree_cleanup, preflight_task_merge,
+    GitError, MergeExecution, MergePreflight, RepositoryRoot, SwarmWorktreePlan,
+    WorktreeCleanupPlan, WorktreeDiff, WorktreeReview,
 };
 use raptor_providers::{
     ModelId, ProviderCatalog, ProviderConfiguration, ProviderId, ProviderSummary,
 };
 use raptor_store::{
     init_project_config, list_agent_sessions, list_task_metadata, persist_agent_session,
-    persist_task_metadata, read_agent_session, read_project_config, read_task_metadata,
-    task_metadata_exists, update_task_status, InitConfigOutcome, ProjectConfigError,
-    StoredAgentSession, StoredTaskMetadata, TaskStatusTransition,
+    persist_swarm_metadata, persist_task_metadata, read_agent_session, read_project_config,
+    read_task_metadata, swarm_metadata_exists, task_metadata_exists, update_task_status,
+    InitConfigOutcome, ProjectConfigError, StoredAgentSession, StoredTaskMetadata,
+    SwarmAgentMetadata, SwarmMetadata, TaskStatusTransition,
 };
 use raptor_tools::command_version;
 
@@ -33,7 +38,7 @@ pub enum CliCommand {
     Merge(MergeCommand),
     Provider(ProviderCommand),
     Review { task_id: String },
-    Swarm,
+    Swarm { description: String },
     Task(TaskCommand),
     Test,
     Version,
@@ -79,6 +84,10 @@ pub struct CliError {
     message: String,
     output: Option<String>,
 }
+
+const SWARM_PROVIDER_ID: &str = "deepseek";
+const SWARM_PROVIDER_DISPLAY: &str = "DeepSeek";
+const SWARM_MODEL_ID: &str = "deepseek-chat";
 
 impl CliError {
     fn new(message: impl Into<String>) -> Self {
@@ -190,7 +199,10 @@ where
         [arg, description @ ..] if arg == "task" => Ok(CliCommand::Task(TaskCommand::Create {
             description: description.join(" "),
         })),
-        [arg] if arg == "swarm" => Ok(CliCommand::Swarm),
+        [arg] if arg == "swarm" => Err(CliError::new("swarm task description is required")),
+        [arg, description @ ..] if arg == "swarm" => Ok(CliCommand::Swarm {
+            description: description.join(" "),
+        }),
         [arg] if arg == "review" => Err(CliError::new("review task id is required")),
         [arg, task_id] if arg == "review" => Ok(CliCommand::Review {
             task_id: task_id.to_owned(),
@@ -310,7 +322,7 @@ where
         }
         CliCommand::Provider(ProviderCommand::List) => list_providers(current_dir),
         CliCommand::Review { task_id } => review_task(current_dir, &task_id),
-        CliCommand::Swarm => Ok(render_stub("swarm")),
+        CliCommand::Swarm { description } => create_swarm(current_dir, &description),
         CliCommand::Task(TaskCommand::Abandon { id }) => abandon_task(current_dir, &id),
         CliCommand::Task(TaskCommand::Cleanup { id }) => {
             cleanup_task(current_dir, &id, confirmation_input)
@@ -331,7 +343,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm \"task description\"\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -505,6 +517,65 @@ pub fn create_task(current_dir: &Path, description: &str) -> Result<String, CliE
         plan.path.display(),
         metadata_path.display()
     ))
+}
+
+pub fn create_swarm(current_dir: &Path, description: &str) -> Result<String, CliError> {
+    let trimmed_description = description.trim();
+    let task_id = TaskId::from_description(trimmed_description)
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let repository_root =
+        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+
+    if task_metadata_exists(repository_root.path(), &task_id)
+        .map_err(|error| CliError::new(error.to_string()))?
+    {
+        return Err(CliError::new(format!(
+            "task metadata already exists for {}; refusing to overwrite",
+            task_id.as_str()
+        )));
+    }
+
+    if swarm_metadata_exists(repository_root.path(), &task_id)
+        .map_err(|error| CliError::new(error.to_string()))?
+    {
+        return Err(CliError::new(format!(
+            "swarm metadata already exists for {}; refusing to overwrite",
+            task_id.as_str()
+        )));
+    }
+
+    let plan = create_swarm_worktrees(&repository_root, &task_id)
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let metadata = swarm_metadata_from_plan(&plan, trimmed_description);
+    let metadata_path = persist_swarm_metadata(repository_root.path(), &metadata)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(render_swarm_created(&metadata, &plan, &metadata_path))
+}
+
+fn swarm_metadata_from_plan(plan: &SwarmWorktreePlan, description: &str) -> SwarmMetadata {
+    let agents = plan
+        .agents
+        .iter()
+        .map(|agent| SwarmAgentMetadata {
+            agent_id: format!("{}-{}", plan.task_id, agent.role),
+            branch: agent.branch_name.clone(),
+            role: agent.role.clone(),
+            status: SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned(),
+            worktree_path: agent.path.clone(),
+        })
+        .collect();
+
+    SwarmMetadata {
+        agents,
+        created_at: None,
+        description: description.to_owned(),
+        id: plan.task_id.clone(),
+        model: SWARM_MODEL_ID.to_owned(),
+        provider: SWARM_PROVIDER_ID.to_owned(),
+        status: SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned(),
+        updated_at: None,
+    }
 }
 
 pub fn list_tasks(current_dir: &Path) -> Result<String, CliError> {
@@ -987,6 +1058,45 @@ fn render_stub(command: &str) -> String {
     format!("raptor {command}: not implemented yet\n")
 }
 
+fn render_swarm_created(
+    metadata: &SwarmMetadata,
+    plan: &SwarmWorktreePlan,
+    metadata_path: &Path,
+) -> String {
+    let mut output = format!(
+        "RaptorCode Swarm Created\nTask: {}\nDescription: {}\nProvider: {}\nModel: {}\nStatus: pending model execution\nMetadata: {}\n",
+        metadata.id,
+        metadata.description,
+        SWARM_PROVIDER_DISPLAY,
+        metadata.model,
+        metadata_path.display()
+    );
+
+    output.push_str("Agents:\n");
+    for agent in &plan.agents {
+        output.push_str(&format!(
+            "  {} | branch: {} | worktree: {} | status: {}\n",
+            agent.role,
+            agent.branch_name,
+            agent.path.display(),
+            SWARM_PENDING_MODEL_EXECUTION_STATUS
+        ));
+    }
+
+    output.push_str("Next commands:\n");
+    output.push_str(&format!("  raptor review {}\n", metadata.id));
+    output.push_str(&format!("  raptor diff {}\n", metadata.id));
+    output.push_str("  Future: DeepSeek execution is the next v0.1 implementation step.\n");
+    output.push_str("Model calls: not performed\n");
+    output.push_str("Source file writes in worktrees: not performed\n");
+    output.push_str("Tests: not run\n");
+    output.push_str("Merge: not performed\n");
+    output.push_str("Remote push: not performed\n");
+    output.push_str("Note: review and diff remain single-worktree commands until multi-agent review fan-out is implemented.\n");
+
+    output
+}
+
 fn render_task_details(task: &StoredTaskMetadata) -> String {
     format!(
         "Task: {}\nStatus: {}\nDescription: {}\nCreated: {}\nUpdated: {}\nMerged: {}\nConflict: {}\nAbandoned: {}\nBranch: {}\nRepository root: {}\nWorktree: {}\nMetadata: {}\n",
@@ -1312,6 +1422,21 @@ mod tests {
             .join(format!("{}.toml", task_id.as_str()))
     }
 
+    fn swarm_metadata_path(repository_root: &Path, task_id: &TaskId) -> PathBuf {
+        repository_root
+            .join(".raptor")
+            .join("swarms")
+            .join(format!("{}.toml", task_id.as_str()))
+    }
+
+    fn swarm_agent_worktree_path(repository_root: &Path, task_id: &TaskId, role: &str) -> PathBuf {
+        repository_root
+            .join(".raptor")
+            .join("worktrees")
+            .join(task_id.as_str())
+            .join(role)
+    }
+
     fn agent_metadata_path(repository_root: &Path, agent_id: &AgentId) -> PathBuf {
         repository_root
             .join(".raptor")
@@ -1407,7 +1532,6 @@ mod tests {
         let commands = [
             ("init", CliCommand::Init),
             ("chat", CliCommand::Chat),
-            ("swarm", CliCommand::Swarm),
             ("test", CliCommand::Test),
             ("doctor", CliCommand::Doctor),
         ];
@@ -1415,6 +1539,16 @@ mod tests {
         for (arg, expected) in commands {
             assert_eq!(parse_args([arg]).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn parses_swarm_description() {
+        assert_eq!(
+            parse_args(["swarm", "add", "oauth"]).unwrap(),
+            CliCommand::Swarm {
+                description: "add oauth".to_owned()
+            }
+        );
     }
 
     #[test]
@@ -1537,6 +1671,13 @@ mod tests {
         let error = parse_args(["task"]).unwrap_err();
 
         assert!(error.to_string().contains("task command"));
+    }
+
+    #[test]
+    fn rejects_missing_swarm_description() {
+        let error = parse_args(["swarm"]).unwrap_err();
+
+        assert!(error.to_string().contains("description"));
     }
 
     #[test]
@@ -1918,6 +2059,163 @@ mod tests {
 
         run(["task", description], &test_dir.path).unwrap();
         let error = run(["task", description], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("refusing to overwrite"));
+    }
+
+    #[test]
+    fn swarm_creates_four_role_worktrees_and_metadata() {
+        let test_dir = TestDir::create("swarm");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "source\n");
+        let description = "Add GitHub OAuth to this Next.js app";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        let output = run(["swarm", description], &test_dir.path).unwrap();
+        let metadata_path = swarm_metadata_path(&test_dir.path, &task_id);
+        let metadata = fs::read_to_string(&metadata_path).unwrap();
+        let roles = [
+            "frontend-agent",
+            "backend-agent",
+            "test-agent",
+            "security-agent",
+        ];
+
+        assert!(output.contains("RaptorCode Swarm Created"));
+        assert!(output.contains(task_id.as_str()));
+        assert!(output.contains("Provider: DeepSeek"));
+        assert!(output.contains("Status: pending model execution"));
+        assert!(output.contains(&format!("raptor review {}", task_id.as_str())));
+        assert!(output.contains(&format!("raptor diff {}", task_id.as_str())));
+        assert!(output.contains("Model calls: not performed"));
+        assert!(output.contains("Source file writes in worktrees: not performed"));
+        assert!(metadata_path.exists());
+        assert!(metadata.contains(&format!("id = \"{}\"", task_id.as_str())));
+        assert!(metadata.contains("provider = \"deepseek\""));
+        assert!(metadata.contains("model = \"deepseek-chat\""));
+        assert!(metadata.contains("status = \"pending_model_execution\""));
+
+        for role in roles {
+            let worktree_path = swarm_agent_worktree_path(&test_dir.path, &task_id, role);
+            let branch_name = format!("raptor/{}/{role}", task_id.as_str());
+            let branch_ref = format!("refs/heads/{branch_name}");
+
+            assert!(worktree_path.is_dir());
+            assert!(worktree_path.starts_with(test_dir.path.join(".raptor").join("worktrees")));
+            assert!(output.contains(role));
+            assert!(output.contains(&branch_name));
+            assert!(metadata.contains(&format!("role = \"{role}\"")));
+            assert!(metadata.contains(&format!("agent_id = \"{}-{role}\"", task_id.as_str())));
+            assert!(metadata.contains(&format!("branch = \"{branch_name}\"")));
+            run_git(
+                &test_dir.path,
+                &["show-ref", "--verify", "--quiet", &branch_ref],
+            );
+            assert_eq!(
+                git_text(&worktree_path, &["status", "--short"]),
+                "",
+                "{role} worktree should be clean"
+            );
+        }
+
+        assert_eq!(
+            fs::read_to_string(test_dir.path.join("tracked.txt")).unwrap(),
+            "source\n"
+        );
+        assert_eq!(
+            git_text(
+                &test_dir.path,
+                &["status", "--short", "--untracked-files=no"]
+            ),
+            ""
+        );
+    }
+
+    #[test]
+    fn swarm_rejects_empty_description() {
+        let test_dir = TestDir::create("swarm-empty");
+        initialize_git_repo(&test_dir.path);
+
+        let error = run(["swarm", "   "], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("description is required"));
+    }
+
+    #[test]
+    fn swarm_rejects_non_git_directory() {
+        let test_dir = TestDir::create("swarm-non-git");
+
+        let error = run(["swarm", "Add feature"], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("not inside a git repository"));
+    }
+
+    #[test]
+    fn swarm_description_cannot_escape_worktree_directory() {
+        let test_dir = TestDir::create("swarm-unsafe-description");
+        initialize_git_repo(&test_dir.path);
+        let description = "../../escape branch && rm -rf app";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["swarm", description], &test_dir.path).unwrap();
+
+        assert!(!task_id.as_str().contains(".."));
+        assert!(task_id
+            .as_str()
+            .chars()
+            .all(|character| character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || character == '-'));
+
+        for role in [
+            "frontend-agent",
+            "backend-agent",
+            "test-agent",
+            "security-agent",
+        ] {
+            let worktree_path = swarm_agent_worktree_path(&test_dir.path, &task_id, role);
+
+            assert!(worktree_path.is_dir());
+            assert!(worktree_path.starts_with(test_dir.path.join(".raptor").join("worktrees")));
+            assert!(!worktree_path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir)));
+        }
+    }
+
+    #[test]
+    fn swarm_uses_deterministic_safe_branch_names() {
+        let task_id = TaskId::from_description("Deterministic swarm").unwrap();
+
+        for role in [
+            "frontend-agent",
+            "backend-agent",
+            "test-agent",
+            "security-agent",
+        ] {
+            let branch = format!("raptor/{}/{role}", task_id.as_str());
+
+            assert!(branch.starts_with("raptor/"));
+            assert!(!branch.contains(".."));
+            assert!(branch.split('/').all(|segment| {
+                !segment.is_empty()
+                    && segment.chars().all(|character| {
+                        character.is_ascii_lowercase()
+                            || character.is_ascii_digit()
+                            || character == '-'
+                    })
+            }));
+        }
+    }
+
+    #[test]
+    fn swarm_refuses_duplicate_metadata_or_worktrees() {
+        let test_dir = TestDir::create("swarm-duplicate");
+        initialize_git_repo(&test_dir.path);
+        let description = "Duplicate swarm";
+
+        run(["swarm", description], &test_dir.path).unwrap();
+        let error = run(["swarm", description], &test_dir.path).unwrap_err();
 
         assert!(error.to_string().contains("refusing to overwrite"));
     }
