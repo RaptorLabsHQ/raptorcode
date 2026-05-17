@@ -21,6 +21,8 @@ Implemented today:
 - `raptor provider list`.
 - `raptor agent list`.
 - `raptor agent show <id>`.
+- `raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]`.
+- `raptor agent policy`.
 - `raptor task "description"` safe task workflow foundation.
 - `raptor task list`.
 - `raptor task show <id>`.
@@ -31,8 +33,9 @@ Implemented today:
 - `raptor merge <task-id>` preflight dry run.
 - `raptor merge <task-id> --execute` supervised local merge execution.
 - Provider metadata catalog for DeepSeek first, plus future OpenAI/Codex, Claude, Gemini, and local model boundaries.
-- Read-only local agent session model for future multi-agent orchestration.
-- Local task metadata and worktree state under `.raptor/`.
+- Read-only persisted local agent session model for future multi-agent orchestration.
+- Deny-by-default permission policy foundation for future agent tools.
+- Local task, agent, and worktree state under `.raptor/`.
 
 Stubbed commands:
 
@@ -56,8 +59,10 @@ Current controls:
 - Git commands are executed through structured process arguments.
 - No autonomous agents are launched by the current task workflow.
 - Provider inspection performs no external requests and no model calls.
-- Agent inspection is read-only and currently uses empty local session state.
-- Agent sessions do not modify files, execute shell commands, or call AI models in this foundation.
+- Agent session creation writes metadata only under `.raptor/agents/`.
+- Agent inspection is read-only and loads only validated `.raptor/agents/<agent-id>.toml` metadata.
+- Agent sessions do not modify source files, execute shell commands, make network requests, or call AI models in this foundation.
+- The default permission policy denies file writes, shell execution, network access, model execution, and dangerous commands.
 - No commits, merges, or pushes are performed by `raptor task`.
 - `raptor review` and `raptor diff` are read-only inspection commands.
 - `raptor merge` runs preflight checks and prints a dry-run summary only; no merge is executed.
@@ -80,6 +85,8 @@ cargo run -p raptor-cli -- init
 cargo run -p raptor-cli -- provider list
 cargo run -p raptor-cli -- agent list
 cargo run -p raptor-cli -- agent show <id>
+cargo run -p raptor-cli -- agent create --role worker
+cargo run -p raptor-cli -- agent policy
 cargo run -p raptor-cli -- task "describe the supervised task"
 cargo run -p raptor-cli -- task list
 cargo run -p raptor-cli -- task show <id>
@@ -100,6 +107,8 @@ raptor init
 raptor provider list
 raptor agent list
 raptor agent show <id>
+raptor agent create --role worker
+raptor agent policy
 raptor task "describe the supervised task"
 raptor task list
 raptor task show <id>
@@ -149,7 +158,11 @@ enabled = true
 
 Provider support is metadata-only in this iteration. No API keys, secrets, network calls, or model execution are implemented.
 
-`raptor agent list` and `raptor agent show <id>` inspect local read-only agent session state. The session model supports future task binding, provider/model metadata, lifecycle state, messages, events, and audit entries, but there is no autonomous coding loop yet.
+`raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]` creates local session metadata only under `.raptor/agents/`. Roles currently include `architect`, `reviewer`, and `worker`. Task, provider, model, and agent ids are validated before persistence, and duplicate deterministic session ids are refused.
+
+`raptor agent list` and `raptor agent show <id>` inspect persisted read-only agent session state. The session model supports future task binding, provider/model metadata, lifecycle state, messages, events, and audit entries, but there is no autonomous coding loop yet.
+
+`raptor agent policy` prints the current default permission policy. V1 policy is manual approval with repository-root-only file-read modeling and denied file write, shell execution, network, model execution, and dangerous command permissions.
 
 ## Repository Layout
 
@@ -162,7 +175,7 @@ Provider support is metadata-only in this iteration. No API keys, secrets, netwo
 |   |-- raptor-git/        # Git repository and worktree operations
 |   |-- raptor-providers/  # Future provider integration boundary
 |   |-- raptor-sandbox/    # Future execution isolation boundary
-|   |-- raptor-store/      # Local config and task metadata persistence
+|   |-- raptor-store/      # Local config, task metadata, and agent metadata persistence
 |   |-- raptor-tools/      # Local tooling diagnostics
 |   `-- raptor-tui/        # Future terminal UI boundary
 |-- docs/
@@ -180,7 +193,7 @@ Provider support is metadata-only in this iteration. No API keys, secrets, netwo
 `-- Cargo.toml
 ```
 
-`.raptor/` is ignored by git and reserved for local runtime state.
+`.raptor/` is ignored by git and reserved for local runtime state, including task metadata, agent metadata, and task worktrees.
 
 ## Development
 

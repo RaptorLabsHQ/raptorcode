@@ -1,6 +1,6 @@
 # Security Design
 
-Date: 2026-05-16
+Date: 2026-05-17
 Author: Tim
 Company: RaptorLabs.dev
 
@@ -45,7 +45,7 @@ Security-relevant actions should be logged or surfaced clearly to the developer:
 
 ## Provider And Agent Foundation Controls
 
-`raptor provider list`, `raptor agent list`, and `raptor agent show <id>` are inspection-only commands.
+`raptor provider list`, `raptor agent list`, `raptor agent show <id>`, and `raptor agent policy` are inspection-only commands. `raptor agent create` writes agent metadata only.
 
 Current provider controls:
 
@@ -59,12 +59,26 @@ Current provider controls:
 
 Current agent controls:
 
-- Agent ids are validated before lookup.
+- Agent ids are validated before lookup or persistence.
+- Agent ids, task ids, provider ids, and model ids are treated as untrusted input.
 - Agent sessions are local-only and read-only in this foundation.
-- `raptor agent list` starts from empty local session state.
-- `raptor agent show <id>` validates the id and returns a clear not-found error when no session exists.
+- `raptor agent create` writes only `.raptor/agents/<agent-id>.toml` metadata and refuses duplicate deterministic ids.
+- `raptor agent list` reads persisted sessions only from `.raptor/agents/`.
+- `raptor agent show <id>` reads only `.raptor/agents/<agent-id>.toml`, validates path-safe ids, and returns a clear not-found error when no session exists.
 - Read-only agent execution mode does not allow file modification, shell execution, or model calls.
-- Agent session models support future audit entries, but no autonomous coding loop exists.
+- Agent session models support timestamps and future audit entries, but no autonomous coding loop exists.
+- Agent creation does not call models, execute shell commands, write source files, run provider APIs, install dependencies, or push remotes.
+
+Current permission policy controls:
+
+- Default approval mode is manual.
+- File-read permission is modeled as repository-root-only for future use.
+- File write is denied.
+- Shell execution is denied.
+- Network access is denied.
+- Model execution is denied until explicitly configured and invoked in a future design.
+- Dangerous commands are denied.
+- The policy is display/modeling only in this iteration; it does not grant tool execution.
 
 ## Implemented Task Workflow Controls
 
@@ -175,4 +189,4 @@ Auditability requirements:
 
 ## Current Status
 
-The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor agent list`, `raptor agent show <id>`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for provider metadata inspection, read-only agent session inspection, task setup, task inspection, lifecycle updates, cleanup, and merge execution. They remain design requirements for future model execution, autonomous agent, and TUI workflows.
+The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for provider metadata inspection, persisted read-only agent session metadata, permission policy display, task setup, task inspection, lifecycle updates, cleanup, and merge execution. They remain design requirements for future model execution, autonomous agent, and TUI workflows.

@@ -1,6 +1,6 @@
 # RaptorCode Roadmap
 
-Date: 2026-05-16
+Date: 2026-05-17
 Author: Tim
 Company: RaptorLabs.dev
 
@@ -26,6 +26,8 @@ V1 is not a full terminal emulator replacement. It will focus on supervised codi
 3. CLI workflow
    - Commands to initialize project state.
    - Commands to inspect provider metadata and local agent session state.
+   - Commands to create persisted read-only agent session metadata.
+   - Command to inspect the default deny-by-default permission policy.
    - Commands to create, list, inspect, and clean isolated worktrees.
    - Supervised merge preflight for task worktrees.
    - Typed `MERGE <task-id>` confirmation before supervised local merge execution.
@@ -41,7 +43,8 @@ V1 is not a full terminal emulator replacement. It will focus on supervised codi
 5. Multi-agent orchestrator
    - Provider abstraction with DeepSeek first and future OpenAI/Codex, Claude, Gemini, and local model boundaries.
    - Agent lifecycle management.
-   - Read-only agent session state before any autonomous coding loop.
+   - Persisted read-only agent session state before any autonomous coding loop.
+   - Deny-by-default permission policy before any model or tool execution.
    - Per-agent worktree isolation.
    - Review points before merge, commit, or push actions.
 

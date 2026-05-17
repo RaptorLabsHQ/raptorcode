@@ -5,8 +5,10 @@ use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use raptor_agent::{AgentId, AgentSession};
 use raptor_core::{TaskId, TaskMetadata};
 
+pub const AGENTS_DIR: &str = "agents";
 pub const CONFIG_FILE_NAME: &str = "raptor.toml";
 pub const CRATE_PURPOSE: &str = "Local state storage boundaries for RaptorCode.";
 pub const RAPTOR_STATE_DIR: &str = ".raptor";
@@ -35,6 +37,16 @@ pub enum ProjectConfigError {
     Parse { path: PathBuf, message: String },
     UnsafeBasePath(PathBuf),
     UnsafeProviderId(String),
+}
+
+#[derive(Debug)]
+pub enum AgentStoreError {
+    AlreadyExists(PathBuf),
+    Io { path: PathBuf, source: io::Error },
+    NotFound(String),
+    Parse { path: PathBuf, message: String },
+    UnsafeAgentId(String),
+    UnsafeBasePath(PathBuf),
 }
 
 #[derive(Debug)]
@@ -81,6 +93,12 @@ pub struct ProjectConfig {
 pub struct ProjectProviderConfig {
     pub enabled: bool,
     pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredAgentSession {
+    pub metadata_path: PathBuf,
+    pub session: AgentSession,
 }
 
 impl TaskStatusTransition {
@@ -156,6 +174,48 @@ impl Error for ProjectConfigError {
             | Self::Parse { .. }
             | Self::UnsafeBasePath(_)
             | Self::UnsafeProviderId(_) => None,
+        }
+    }
+}
+
+impl Display for AgentStoreError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyExists(path) => {
+                write!(
+                    formatter,
+                    "agent session metadata already exists: {}",
+                    path.display()
+                )
+            }
+            Self::Io { path, source } => {
+                write!(formatter, "{}: {source}", path.display())
+            }
+            Self::NotFound(agent_id) => {
+                write!(formatter, "agent session metadata not found: {agent_id}")
+            }
+            Self::Parse { path, message } => {
+                write!(formatter, "{}: {message}", path.display())
+            }
+            Self::UnsafeAgentId(agent_id) => {
+                write!(formatter, "agent id is not safe: {agent_id}")
+            }
+            Self::UnsafeBasePath(path) => {
+                write!(formatter, "{} is not a safe project path", path.display())
+            }
+        }
+    }
+}
+
+impl Error for AgentStoreError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Io { source, .. } => Some(source),
+            Self::AlreadyExists(_)
+            | Self::NotFound(_)
+            | Self::Parse { .. }
+            | Self::UnsafeAgentId(_)
+            | Self::UnsafeBasePath(_) => None,
         }
     }
 }
@@ -274,6 +334,173 @@ pub fn read_project_config(base_dir: &Path) -> Result<ProjectConfig, ProjectConf
     })?;
 
     parse_project_config(&config_path, &content)
+}
+
+pub fn persist_agent_session(
+    repository_root: &Path,
+    session: &AgentSession,
+) -> Result<PathBuf, AgentStoreError> {
+    validate_agent_base_dir(repository_root)?;
+
+    let agent_dir = agent_directory_path(repository_root)?;
+    validate_agent_child_path(repository_root, &agent_dir)?;
+
+    fs::create_dir_all(&agent_dir).map_err(|source| AgentStoreError::Io {
+        path: agent_dir.clone(),
+        source,
+    })?;
+
+    let metadata_path = agent_metadata_path(repository_root, &session.id)?;
+
+    let mut stored_session = session.clone();
+    let timestamp = current_unix_timestamp();
+
+    if stored_session.created_at.is_none() {
+        stored_session.created_at = Some(timestamp.clone());
+    }
+    stored_session.updated_at = Some(timestamp);
+    stored_session.audit_summary = Some(format!(
+        "{} audit entries",
+        stored_session.audit_entries.len()
+    ));
+
+    let mut file = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&metadata_path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(AgentStoreError::AlreadyExists(metadata_path));
+        }
+        Err(source) => {
+            return Err(AgentStoreError::Io {
+                path: metadata_path,
+                source,
+            });
+        }
+    };
+
+    file.write_all(stored_session.to_metadata().as_bytes())
+        .map_err(|source| AgentStoreError::Io {
+            path: metadata_path.clone(),
+            source,
+        })?;
+
+    Ok(metadata_path)
+}
+
+pub fn list_agent_sessions(
+    repository_root: &Path,
+) -> Result<Vec<StoredAgentSession>, AgentStoreError> {
+    validate_agent_base_dir(repository_root)?;
+
+    let agent_dir = agent_directory_path(repository_root)?;
+
+    match fs::symlink_metadata(&agent_dir) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => return Err(AgentStoreError::UnsafeBasePath(agent_dir)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(AgentStoreError::Io {
+                path: agent_dir,
+                source,
+            });
+        }
+    }
+
+    let mut sessions = Vec::new();
+
+    for entry in fs::read_dir(&agent_dir).map_err(|source| AgentStoreError::Io {
+        path: agent_dir.clone(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| AgentStoreError::Io {
+            path: agent_dir.clone(),
+            source,
+        })?;
+        let path = entry.path();
+        let Some(agent_id) = agent_id_from_metadata_path(&path) else {
+            continue;
+        };
+
+        if AgentId::new(&agent_id).is_err() {
+            continue;
+        }
+
+        sessions.push(read_agent_session(repository_root, &agent_id)?);
+    }
+
+    sessions.sort_by(|left, right| left.session.id.as_str().cmp(right.session.id.as_str()));
+
+    Ok(sessions)
+}
+
+pub fn read_agent_session(
+    repository_root: &Path,
+    agent_id: &str,
+) -> Result<StoredAgentSession, AgentStoreError> {
+    validate_agent_id(agent_id)?;
+
+    let agent_dir = agent_directory_path(repository_root)?;
+    let metadata_path = agent_metadata_path_for_id(repository_root, agent_id)?;
+
+    let file_metadata = match fs::symlink_metadata(&metadata_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(AgentStoreError::NotFound(agent_id.to_owned()));
+        }
+        Err(source) => {
+            return Err(AgentStoreError::Io {
+                path: metadata_path,
+                source,
+            });
+        }
+    };
+
+    if !file_metadata.file_type().is_file() {
+        return Err(AgentStoreError::NotFound(agent_id.to_owned()));
+    }
+
+    let canonical_agent_dir = agent_dir
+        .canonicalize()
+        .map_err(|source| AgentStoreError::Io {
+            path: agent_dir.clone(),
+            source,
+        })?;
+    let canonical_metadata_path =
+        metadata_path
+            .canonicalize()
+            .map_err(|source| AgentStoreError::Io {
+                path: metadata_path.clone(),
+                source,
+            })?;
+
+    if !canonical_metadata_path.starts_with(canonical_agent_dir) {
+        return Err(AgentStoreError::UnsafeBasePath(metadata_path));
+    }
+
+    let content = fs::read_to_string(&metadata_path).map_err(|source| AgentStoreError::Io {
+        path: metadata_path.clone(),
+        source,
+    })?;
+    let session =
+        AgentSession::from_metadata(&content).map_err(|error| AgentStoreError::Parse {
+            path: metadata_path.clone(),
+            message: error.to_string(),
+        })?;
+
+    if session.id.as_str() != agent_id {
+        return Err(AgentStoreError::Parse {
+            path: metadata_path.clone(),
+            message: "metadata id does not match file name".to_owned(),
+        });
+    }
+
+    Ok(StoredAgentSession {
+        metadata_path,
+        session,
+    })
 }
 
 pub fn persist_task_metadata(
@@ -466,6 +693,35 @@ fn task_metadata_path_for_id(
     Ok(metadata_path)
 }
 
+fn agent_metadata_path(
+    repository_root: &Path,
+    agent_id: &AgentId,
+) -> Result<PathBuf, AgentStoreError> {
+    agent_metadata_path_for_id(repository_root, agent_id.as_str())
+}
+
+fn agent_metadata_path_for_id(
+    repository_root: &Path,
+    agent_id: &str,
+) -> Result<PathBuf, AgentStoreError> {
+    validate_agent_base_dir(repository_root)?;
+    validate_agent_id(agent_id)?;
+
+    let metadata_path = agent_directory_path(repository_root)?.join(format!("{agent_id}.toml"));
+    validate_agent_child_path(repository_root, &metadata_path)?;
+
+    Ok(metadata_path)
+}
+
+fn agent_directory_path(repository_root: &Path) -> Result<PathBuf, AgentStoreError> {
+    validate_agent_base_dir(repository_root)?;
+
+    let agent_dir = repository_root.join(RAPTOR_STATE_DIR).join(AGENTS_DIR);
+    validate_agent_child_path(repository_root, &agent_dir)?;
+
+    Ok(agent_dir)
+}
+
 fn task_directory_path(repository_root: &Path) -> Result<PathBuf, TaskStoreError> {
     validate_task_base_dir(repository_root)?;
 
@@ -502,6 +758,18 @@ fn validate_project_config_base_dir(base_dir: &Path) -> Result<(), ProjectConfig
     Ok(())
 }
 
+fn validate_agent_base_dir(base_dir: &Path) -> Result<(), AgentStoreError> {
+    if base_dir.as_os_str().is_empty()
+        || base_dir
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(AgentStoreError::UnsafeBasePath(base_dir.to_path_buf()));
+    }
+
+    Ok(())
+}
+
 fn validate_task_base_dir(base_dir: &Path) -> Result<(), TaskStoreError> {
     if base_dir.as_os_str().is_empty()
         || base_dir
@@ -509,6 +777,18 @@ fn validate_task_base_dir(base_dir: &Path) -> Result<(), TaskStoreError> {
             .any(|component| matches!(component, Component::ParentDir))
     {
         return Err(TaskStoreError::UnsafeBasePath(base_dir.to_path_buf()));
+    }
+
+    Ok(())
+}
+
+fn validate_agent_child_path(base_dir: &Path, child_path: &Path) -> Result<(), AgentStoreError> {
+    if child_path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+        || !child_path.starts_with(base_dir)
+    {
+        return Err(AgentStoreError::UnsafeBasePath(child_path.to_path_buf()));
     }
 
     Ok(())
@@ -524,6 +804,12 @@ fn validate_child_path(base_dir: &Path, child_path: &Path) -> Result<(), TaskSto
     }
 
     Ok(())
+}
+
+fn validate_agent_id(agent_id: &str) -> Result<(), AgentStoreError> {
+    AgentId::new(agent_id)
+        .map(|_| ())
+        .map_err(|_| AgentStoreError::UnsafeAgentId(agent_id.to_owned()))
 }
 
 fn validate_task_id(task_id: &str) -> Result<(), TaskStoreError> {
@@ -596,6 +882,14 @@ fn escape_toml_string(value: &str) -> String {
 }
 
 fn task_id_from_metadata_path(path: &Path) -> Option<String> {
+    if path.extension()?.to_str()? != "toml" {
+        return None;
+    }
+
+    Some(path.file_stem()?.to_str()?.to_owned())
+}
+
+fn agent_id_from_metadata_path(path: &Path) -> Option<String> {
     if path.extension()?.to_str()? != "toml" {
         return None;
     }
@@ -889,6 +1183,7 @@ fn unescape_toml_string(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use raptor_agent::{AgentId, AgentRole, AgentSession};
     use raptor_core::{TaskMetadata, TaskStatus, WorktreeInfo};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1002,6 +1297,83 @@ mod tests {
         let error = read_project_config(&test_dir.path).unwrap_err();
 
         assert!(matches!(error, ProjectConfigError::NotFound(_)));
+    }
+
+    #[test]
+    fn persists_agent_session_without_overwrite() {
+        let test_dir = TestDir::create("agent-persist");
+        let session = AgentSession::new_read_only(
+            AgentId::new("agent-worker-123").unwrap(),
+            AgentRole::Worker,
+        );
+
+        let metadata_path = persist_agent_session(&test_dir.path, &session).unwrap();
+
+        assert!(metadata_path.exists());
+        assert!(matches!(
+            persist_agent_session(&test_dir.path, &session).unwrap_err(),
+            AgentStoreError::AlreadyExists(_)
+        ));
+    }
+
+    #[test]
+    fn list_returns_empty_when_no_agents_exist() {
+        let test_dir = TestDir::create("agent-list-empty");
+
+        assert!(list_agent_sessions(&test_dir.path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_reads_one_agent_session() {
+        let test_dir = TestDir::create("agent-list-one");
+        let mut session = AgentSession::new_read_only(
+            AgentId::new("agent-reviewer-123").unwrap(),
+            AgentRole::Reviewer,
+        );
+        session.set_provider_id("deepseek").unwrap();
+        persist_agent_session(&test_dir.path, &session).unwrap();
+
+        let sessions = list_agent_sessions(&test_dir.path).unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session.id.as_str(), "agent-reviewer-123");
+        assert_eq!(sessions[0].session.role, AgentRole::Reviewer);
+        assert_eq!(sessions[0].session.provider_id.as_deref(), Some("deepseek"));
+        assert!(sessions[0].session.created_at.is_some());
+        assert!(sessions[0].session.updated_at.is_some());
+    }
+
+    #[test]
+    fn show_reads_existing_agent_session() {
+        let test_dir = TestDir::create("agent-show");
+        let mut session =
+            AgentSession::new_read_only(AgentId::new("agent-1").unwrap(), AgentRole::Architect);
+        session.set_model_id("deepseek-chat").unwrap();
+        persist_agent_session(&test_dir.path, &session).unwrap();
+
+        let stored = read_agent_session(&test_dir.path, "agent-1").unwrap();
+
+        assert_eq!(stored.session.id.as_str(), "agent-1");
+        assert_eq!(stored.session.role, AgentRole::Architect);
+        assert_eq!(stored.session.model_id.as_deref(), Some("deepseek-chat"));
+    }
+
+    #[test]
+    fn show_missing_agent_returns_not_found() {
+        let test_dir = TestDir::create("agent-missing");
+
+        let error = read_agent_session(&test_dir.path, "missing-agent").unwrap_err();
+
+        assert!(matches!(error, AgentStoreError::NotFound(_)));
+    }
+
+    #[test]
+    fn rejects_unsafe_agent_id() {
+        let test_dir = TestDir::create("agent-unsafe");
+
+        let error = read_agent_session(&test_dir.path, "../agent").unwrap_err();
+
+        assert!(matches!(error, AgentStoreError::UnsafeAgentId(_)));
     }
 
     #[test]

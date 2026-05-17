@@ -41,6 +41,7 @@ version = "0.1.0"
 name = "raptor-store"
 version = "0.1.0"
 dependencies = [
+ "raptor-agent",
  "raptor-core",
 ]
 

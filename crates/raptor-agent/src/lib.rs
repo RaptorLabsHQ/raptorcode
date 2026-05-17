@@ -70,6 +70,8 @@ pub struct AgentAuditEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSession {
     pub audit_entries: Vec<AgentAuditEntry>,
+    pub audit_summary: Option<String>,
+    pub created_at: Option<String>,
     pub events: Vec<AgentEvent>,
     pub execution_mode: AgentExecutionMode,
     pub id: AgentId,
@@ -79,6 +81,7 @@ pub struct AgentSession {
     pub role: AgentRole,
     pub state: AgentSessionState,
     pub task_binding: Option<AgentTaskBinding>,
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,7 +93,56 @@ pub struct AgentSessionRegistry {
 pub enum AgentError {
     InvalidAgentId(String),
     InvalidMetadata(String),
+    InvalidModelId(String),
+    InvalidProviderId(String),
+    InvalidTaskId(String),
     NotFound(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionPolicy {
+    pub approval_mode: ApprovalMode,
+    pub dangerous_commands: DangerousCommandPolicy,
+    pub file_read: FileReadPolicy,
+    pub file_write: FileWritePolicy,
+    pub model_execution: ModelExecutionPolicy,
+    pub network: NetworkPolicy,
+    pub shell_execution: ShellExecutionPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalMode {
+    Manual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DangerousCommandPolicy {
+    Deny,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileReadPolicy {
+    RepositoryRootOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileWritePolicy {
+    Deny,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelExecutionPolicy {
+    DenyUntilConfiguredAndExplicit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkPolicy {
+    Deny,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellExecutionPolicy {
+    Deny,
 }
 
 impl AgentId {
@@ -113,6 +165,37 @@ impl AgentId {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub fn from_session_parts(
+        role: AgentRole,
+        task_id: Option<&str>,
+        provider_id: Option<&str>,
+        model_id: Option<&str>,
+    ) -> Result<Self, AgentError> {
+        if let Some(task_id) = task_id {
+            validate_task_id(task_id)?;
+        }
+        if let Some(provider_id) = provider_id {
+            validate_provider_id(provider_id)?;
+        }
+        if let Some(model_id) = model_id {
+            validate_model_id(model_id)?;
+        }
+
+        let seed = format!(
+            "{}|{}|{}|{}",
+            role.as_str(),
+            task_id.unwrap_or("-"),
+            provider_id.unwrap_or("-"),
+            model_id.unwrap_or("-")
+        );
+
+        Self::new(format!(
+            "agent-{}-{}",
+            role.as_str(),
+            stable_hash_hex(&seed)
+        ))
     }
 }
 
@@ -204,6 +287,8 @@ impl AgentSession {
     pub fn new_read_only(id: AgentId, role: AgentRole) -> Self {
         Self {
             audit_entries: Vec::new(),
+            audit_summary: None,
+            created_at: None,
             events: vec![AgentEvent {
                 detail: "session created".to_owned(),
                 kind: AgentEventKind::Created,
@@ -216,6 +301,7 @@ impl AgentSession {
             role,
             state: AgentSessionState::Created,
             task_binding: None,
+            updated_at: None,
         }
     }
 
@@ -227,11 +313,36 @@ impl AgentSession {
         });
     }
 
-    pub fn bind_task(&mut self, task_id: impl Into<String>, worktree_path: PathBuf) {
+    pub fn bind_task(
+        &mut self,
+        task_id: impl Into<String>,
+        worktree_path: PathBuf,
+    ) -> Result<(), AgentError> {
+        let task_id = task_id.into();
+        validate_task_id(&task_id)?;
+
         self.task_binding = Some(AgentTaskBinding {
-            task_id: task_id.into(),
+            task_id,
             worktree_path,
         });
+
+        Ok(())
+    }
+
+    pub fn set_provider_id(&mut self, provider_id: impl Into<String>) -> Result<(), AgentError> {
+        let provider_id = provider_id.into();
+        validate_provider_id(&provider_id)?;
+
+        self.provider_id = Some(provider_id);
+        Ok(())
+    }
+
+    pub fn set_model_id(&mut self, model_id: impl Into<String>) -> Result<(), AgentError> {
+        let model_id = model_id.into();
+        validate_model_id(&model_id)?;
+
+        self.model_id = Some(model_id);
+        Ok(())
     }
 
     pub fn to_metadata(&self) -> String {
@@ -241,6 +352,20 @@ impl AgentSession {
         push_key_value(&mut output, "role", self.role.as_str());
         push_key_value(&mut output, "state", self.state.as_str());
         push_key_value(&mut output, "execution_mode", self.execution_mode.as_str());
+        if let Some(created_at) = self.created_at.as_deref() {
+            push_key_value(&mut output, "created_at", created_at);
+        }
+        if let Some(updated_at) = self.updated_at.as_deref() {
+            push_key_value(&mut output, "updated_at", updated_at);
+        }
+        if let Some(audit_summary) = self.audit_summary.as_deref() {
+            push_key_value(&mut output, "audit_summary", audit_summary);
+        }
+        push_key_value(
+            &mut output,
+            "audit_entry_count",
+            &self.audit_entries.len().to_string(),
+        );
 
         if let Some(provider_id) = self.provider_id.as_deref() {
             push_key_value(&mut output, "provider_id", provider_id);
@@ -269,6 +394,9 @@ impl AgentSession {
         let mut model_id = None;
         let mut task_id = None;
         let mut worktree_path = None;
+        let mut created_at = None;
+        let mut updated_at = None;
+        let mut audit_summary = None;
 
         for (line_index, line) in content.lines().enumerate() {
             let trimmed = line.trim();
@@ -291,10 +419,23 @@ impl AgentSession {
                 "role" => role = Some(AgentRole::parse(&value)?),
                 "state" => state = Some(AgentSessionState::parse(&value)?),
                 "execution_mode" => execution_mode = Some(AgentExecutionMode::parse(&value)?),
-                "provider_id" => provider_id = Some(value),
-                "model_id" => model_id = Some(value),
-                "task_id" => task_id = Some(value),
+                "provider_id" => {
+                    validate_provider_id(&value)?;
+                    provider_id = Some(value);
+                }
+                "model_id" => {
+                    validate_model_id(&value)?;
+                    model_id = Some(value);
+                }
+                "task_id" => {
+                    validate_task_id(&value)?;
+                    task_id = Some(value);
+                }
                 "worktree_path" => worktree_path = Some(PathBuf::from(value)),
+                "created_at" => created_at = Some(value),
+                "updated_at" => updated_at = Some(value),
+                "audit_summary" => audit_summary = Some(value),
+                "audit_entry_count" => {}
                 _ => {}
             }
         }
@@ -306,9 +447,12 @@ impl AgentSession {
         session.execution_mode = execution_mode.unwrap_or(AgentExecutionMode::ReadOnly);
         session.provider_id = provider_id;
         session.model_id = model_id;
+        session.created_at = created_at;
+        session.updated_at = updated_at;
+        session.audit_summary = audit_summary;
 
         if let (Some(task_id), Some(worktree_path)) = (task_id, worktree_path) {
-            session.bind_task(task_id, worktree_path);
+            session.bind_task(task_id, worktree_path)?;
         }
 
         Ok(session)
@@ -345,12 +489,162 @@ impl Display for AgentError {
             Self::InvalidMetadata(message) => {
                 write!(formatter, "agent metadata is invalid: {message}")
             }
+            Self::InvalidModelId(model_id) => write!(formatter, "model id is not safe: {model_id}"),
+            Self::InvalidProviderId(provider_id) => {
+                write!(formatter, "provider id is not safe: {provider_id}")
+            }
+            Self::InvalidTaskId(task_id) => write!(formatter, "task id is not safe: {task_id}"),
             Self::NotFound(agent_id) => write!(formatter, "agent session not found: {agent_id}"),
         }
     }
 }
 
 impl Error for AgentError {}
+
+impl PermissionPolicy {
+    pub fn deny_by_default() -> Self {
+        Self {
+            approval_mode: ApprovalMode::Manual,
+            dangerous_commands: DangerousCommandPolicy::Deny,
+            file_read: FileReadPolicy::RepositoryRootOnly,
+            file_write: FileWritePolicy::Deny,
+            model_execution: ModelExecutionPolicy::DenyUntilConfiguredAndExplicit,
+            network: NetworkPolicy::Deny,
+            shell_execution: ShellExecutionPolicy::Deny,
+        }
+    }
+
+    pub fn allows_file_write(&self) -> bool {
+        false
+    }
+
+    pub fn allows_shell_execution(&self) -> bool {
+        false
+    }
+
+    pub fn allows_network(&self) -> bool {
+        false
+    }
+
+    pub fn allows_model_execution(&self) -> bool {
+        false
+    }
+}
+
+impl ApprovalMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+        }
+    }
+}
+
+impl DangerousCommandPolicy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+        }
+    }
+}
+
+impl FileReadPolicy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::RepositoryRootOnly => "repository_root_only",
+        }
+    }
+}
+
+impl FileWritePolicy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+        }
+    }
+}
+
+impl ModelExecutionPolicy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::DenyUntilConfiguredAndExplicit => "deny_until_configured_and_explicit",
+        }
+    }
+}
+
+impl NetworkPolicy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+        }
+    }
+}
+
+impl ShellExecutionPolicy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+        }
+    }
+}
+
+fn validate_task_id(task_id: &str) -> Result<(), AgentError> {
+    let valid = !task_id.is_empty()
+        && !task_id.starts_with('-')
+        && !task_id.ends_with('-')
+        && !task_id.contains("..")
+        && task_id.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        });
+
+    if valid {
+        Ok(())
+    } else {
+        Err(AgentError::InvalidTaskId(task_id.to_owned()))
+    }
+}
+
+fn validate_provider_id(provider_id: &str) -> Result<(), AgentError> {
+    let valid = !provider_id.is_empty()
+        && !provider_id.starts_with('-')
+        && !provider_id.ends_with('-')
+        && !provider_id.contains("..")
+        && provider_id.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        });
+
+    if valid {
+        Ok(())
+    } else {
+        Err(AgentError::InvalidProviderId(provider_id.to_owned()))
+    }
+}
+
+fn validate_model_id(model_id: &str) -> Result<(), AgentError> {
+    let valid = !model_id.is_empty()
+        && !model_id.starts_with('-')
+        && !model_id.ends_with('-')
+        && !model_id.contains("..")
+        && model_id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':' | '/')
+        });
+
+    if valid {
+        Ok(())
+    } else {
+        Err(AgentError::InvalidModelId(model_id.to_owned()))
+    }
+}
+
+fn stable_hash_hex(input: &str) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+
+    for byte in input.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+
+    format!("{hash:016x}")
+}
 
 fn push_key_value(output: &mut String, key: &str, value: &str) {
     output.push_str(&format!("{key} = \"{}\"\n", escape_metadata_value(value)));
@@ -455,6 +749,39 @@ mod tests {
     }
 
     #[test]
+    fn default_permission_policy_denies_mutating_execution() {
+        let policy = PermissionPolicy::deny_by_default();
+
+        assert_eq!(policy.file_read, FileReadPolicy::RepositoryRootOnly);
+        assert!(!policy.allows_file_write());
+        assert!(!policy.allows_shell_execution());
+        assert!(!policy.allows_network());
+        assert!(!policy.allows_model_execution());
+        assert_eq!(policy.approval_mode.as_str(), "manual");
+    }
+
+    #[test]
+    fn creates_deterministic_agent_ids_from_session_parts() {
+        let first = AgentId::from_session_parts(
+            AgentRole::Worker,
+            Some("task-1"),
+            Some("deepseek"),
+            Some("deepseek-chat"),
+        )
+        .unwrap();
+        let second = AgentId::from_session_parts(
+            AgentRole::Worker,
+            Some("task-1"),
+            Some("deepseek"),
+            Some("deepseek-chat"),
+        )
+        .unwrap();
+
+        assert_eq!(first, second);
+        assert!(first.as_str().starts_with("agent-worker-"));
+    }
+
+    #[test]
     fn session_lifecycle_records_state_events() {
         let mut session =
             AgentSession::new_read_only(AgentId::new("agent-1").unwrap(), AgentRole::Worker);
@@ -471,9 +798,14 @@ mod tests {
         let mut session =
             AgentSession::new_read_only(AgentId::new("agent-1").unwrap(), AgentRole::Reviewer);
         session.transition_to(AgentSessionState::Waiting);
-        session.provider_id = Some("deepseek".to_owned());
-        session.model_id = Some("deepseek-chat".to_owned());
-        session.bind_task("task-1", PathBuf::from("/tmp/task-1"));
+        session.set_provider_id("deepseek").unwrap();
+        session.set_model_id("deepseek-chat").unwrap();
+        session
+            .bind_task("task-1", PathBuf::from("/tmp/task-1"))
+            .unwrap();
+        session.created_at = Some("1".to_owned());
+        session.updated_at = Some("2".to_owned());
+        session.audit_summary = Some("0 audit entries".to_owned());
 
         let parsed = AgentSession::from_metadata(&session.to_metadata()).unwrap();
 
@@ -484,5 +816,18 @@ mod tests {
         assert_eq!(parsed.provider_id.as_deref(), Some("deepseek"));
         assert_eq!(parsed.model_id.as_deref(), Some("deepseek-chat"));
         assert_eq!(parsed.task_binding.as_ref().unwrap().task_id, "task-1");
+        assert_eq!(parsed.created_at.as_deref(), Some("1"));
+        assert_eq!(parsed.updated_at.as_deref(), Some("2"));
+        assert_eq!(parsed.audit_summary.as_deref(), Some("0 audit entries"));
+    }
+
+    #[test]
+    fn rejects_unsafe_session_metadata_ids() {
+        assert!(AgentSession::from_metadata("id = \"../agent\"\n").is_err());
+        assert!(AgentSession::from_metadata("id = \"agent-1\"\ntask_id = \"../task\"\n").is_err());
+        assert!(AgentSession::from_metadata("id = \"agent-1\"\nprovider_id = \"Bad\"\n").is_err());
+        assert!(
+            AgentSession::from_metadata("id = \"agent-1\"\nmodel_id = \"../model\"\n").is_err()
+        );
     }
 }

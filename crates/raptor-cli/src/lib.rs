@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
-use raptor_agent::{AgentId, AgentSession, AgentSessionRegistry};
+use raptor_agent::{AgentId, AgentRole, AgentSession, PermissionPolicy};
 use raptor_core::{project_description, project_name, version, TaskId, TaskMetadata, TaskStatus};
 use raptor_git::{
     create_task_worktree, diff_task_worktree, execute_task_merge, execute_task_worktree_cleanup,
@@ -11,11 +11,14 @@ use raptor_git::{
     plan_task_worktree_cleanup, preflight_task_merge, GitError, MergeExecution, MergePreflight,
     RepositoryRoot, WorktreeCleanupPlan, WorktreeDiff, WorktreeReview,
 };
-use raptor_providers::{ProviderCatalog, ProviderConfiguration, ProviderId, ProviderSummary};
+use raptor_providers::{
+    ModelId, ProviderCatalog, ProviderConfiguration, ProviderId, ProviderSummary,
+};
 use raptor_store::{
-    init_project_config, list_task_metadata, persist_task_metadata, read_project_config,
-    read_task_metadata, task_metadata_exists, update_task_status, InitConfigOutcome,
-    ProjectConfigError, StoredTaskMetadata, TaskStatusTransition,
+    init_project_config, list_agent_sessions, list_task_metadata, persist_agent_session,
+    persist_task_metadata, read_agent_session, read_project_config, read_task_metadata,
+    task_metadata_exists, update_task_status, InitConfigOutcome, ProjectConfigError,
+    StoredAgentSession, StoredTaskMetadata, TaskStatusTransition,
 };
 use raptor_tools::command_version;
 
@@ -38,8 +41,17 @@ pub enum CliCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentCommand {
+    Create {
+        model_id: Option<String>,
+        provider_id: Option<String>,
+        role: String,
+        task_id: Option<String>,
+    },
     List,
-    Show { id: String },
+    Policy,
+    Show {
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,12 +121,21 @@ where
         [arg] if arg == "--version" || arg == "-V" => Ok(CliCommand::Version),
         [arg] if arg == "init" => Ok(CliCommand::Init),
         [arg] if arg == "agent" => Err(CliError::new("agent command is required")),
+        [arg, subcommand, options @ ..] if arg == "agent" && subcommand == "create" => {
+            parse_agent_create_options(options)
+        }
         [arg, subcommand] if arg == "agent" && subcommand == "list" => {
             Ok(CliCommand::Agent(AgentCommand::List))
         }
         [arg, subcommand, ..] if arg == "agent" && subcommand == "list" => {
             Err(CliError::new("agent list accepts no additional arguments"))
         }
+        [arg, subcommand] if arg == "agent" && subcommand == "policy" => {
+            Ok(CliCommand::Agent(AgentCommand::Policy))
+        }
+        [arg, subcommand, ..] if arg == "agent" && subcommand == "policy" => Err(CliError::new(
+            "agent policy accepts no additional arguments",
+        )),
         [arg, subcommand] if arg == "agent" && subcommand == "show" => {
             Err(CliError::new("agent id is required"))
         }
@@ -200,6 +221,55 @@ where
     }
 }
 
+fn parse_agent_create_options(options: &[String]) -> Result<CliCommand, CliError> {
+    let mut model_id = None;
+    let mut provider_id = None;
+    let mut role = None;
+    let mut task_id = None;
+    let mut index = 0;
+
+    while index < options.len() {
+        let flag = options[index].as_str();
+        let value = options
+            .get(index + 1)
+            .ok_or_else(|| CliError::new(format!("{flag} requires a value")))?;
+
+        match flag {
+            "--model" if model_id.is_none() => model_id = Some(value.to_owned()),
+            "--model" => return Err(CliError::new("agent create accepts one --model value")),
+            "--provider" if provider_id.is_none() => provider_id = Some(value.to_owned()),
+            "--provider" => {
+                return Err(CliError::new("agent create accepts one --provider value"));
+            }
+            "--role" if role.is_none() => role = Some(value.to_owned()),
+            "--role" => return Err(CliError::new("agent create accepts one --role value")),
+            "--task" if task_id.is_none() => task_id = Some(value.to_owned()),
+            "--task" => return Err(CliError::new("agent create accepts one --task value")),
+            _ if flag.starts_with("--") => {
+                return Err(CliError::new(format!(
+                    "unknown agent create option: {flag}"
+                )));
+            }
+            _ => {
+                return Err(CliError::new(format!(
+                    "unexpected agent create argument: {flag}"
+                )))
+            }
+        }
+
+        index += 2;
+    }
+
+    let role = role.ok_or_else(|| CliError::new("agent create requires --role <role>"))?;
+
+    Ok(CliCommand::Agent(AgentCommand::Create {
+        model_id,
+        provider_id,
+        role,
+        task_id,
+    }))
+}
+
 pub fn run<I, S>(args: I, current_dir: &Path) -> Result<String, CliError>
 where
     I: IntoIterator<Item = S>,
@@ -218,8 +288,17 @@ where
     S: Into<String>,
 {
     match parse_args(args)? {
-        CliCommand::Agent(AgentCommand::List) => list_agents(),
-        CliCommand::Agent(AgentCommand::Show { id }) => show_agent(&id),
+        CliCommand::Agent(AgentCommand::Create {
+            model_id,
+            provider_id,
+            role,
+            task_id,
+        }) => create_agent(current_dir, &role, task_id, provider_id, model_id),
+        CliCommand::Agent(AgentCommand::List) => list_agents(current_dir),
+        CliCommand::Agent(AgentCommand::Policy) => Ok(render_permission_policy(
+            &PermissionPolicy::deny_by_default(),
+        )),
+        CliCommand::Agent(AgentCommand::Show { id }) => show_agent(current_dir, &id),
         CliCommand::Chat => Ok(render_stub("chat")),
         CliCommand::Diff { task_id } => diff_task(current_dir, &task_id),
         CliCommand::Doctor => Ok(render_doctor(current_dir)),
@@ -252,7 +331,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -303,18 +382,90 @@ pub fn list_providers(current_dir: &Path) -> Result<String, CliError> {
     Ok(render_provider_list(&config_status, &summaries))
 }
 
-pub fn list_agents() -> Result<String, CliError> {
-    Ok(render_agent_list(&AgentSessionRegistry::empty()))
-}
+pub fn create_agent(
+    current_dir: &Path,
+    role: &str,
+    task_id: Option<String>,
+    provider_id: Option<String>,
+    model_id: Option<String>,
+) -> Result<String, CliError> {
+    let repository_root =
+        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let role = AgentRole::parse(role).map_err(|error| CliError::new(error.to_string()))?;
+    let provider_id = provider_id
+        .map(|provider_id| {
+            ProviderId::new(provider_id)
+                .map(|provider_id| provider_id.as_str().to_owned())
+                .map_err(|error| CliError::new(error.to_string()))
+        })
+        .transpose()?;
+    let model_id = model_id
+        .map(|model_id| {
+            ModelId::new(model_id)
+                .map(|model_id| model_id.as_str().to_owned())
+                .map_err(|error| CliError::new(error.to_string()))
+        })
+        .transpose()?;
+    let task = task_id
+        .as_deref()
+        .map(|task_id| {
+            read_task_metadata(repository_root.path(), task_id)
+                .map_err(|error| CliError::new(error.to_string()))
+        })
+        .transpose()?;
+    let agent_id = AgentId::from_session_parts(
+        role,
+        task_id.as_deref(),
+        provider_id.as_deref(),
+        model_id.as_deref(),
+    )
+    .map_err(|error| CliError::new(error.to_string()))?;
+    let mut session = AgentSession::new_read_only(agent_id, role);
 
-pub fn show_agent(agent_id: &str) -> Result<String, CliError> {
-    let agent_id = AgentId::new(agent_id).map_err(|error| CliError::new(error.to_string()))?;
-    let registry = AgentSessionRegistry::empty();
-    let session = registry
-        .find(&agent_id)
+    if let Some(provider_id) = provider_id {
+        session
+            .set_provider_id(provider_id)
+            .map_err(|error| CliError::new(error.to_string()))?;
+    }
+    if let Some(model_id) = model_id {
+        session
+            .set_model_id(model_id)
+            .map_err(|error| CliError::new(error.to_string()))?;
+    }
+    if let Some(task) = task.as_ref() {
+        let worktree_path = task
+            .worktree_path
+            .clone()
+            .ok_or_else(|| CliError::new("task metadata is missing worktree_path"))?;
+        session
+            .bind_task(task.id.clone(), worktree_path)
+            .map_err(|error| CliError::new(error.to_string()))?;
+    }
+
+    let metadata_path = persist_agent_session(repository_root.path(), &session)
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let stored = read_agent_session(repository_root.path(), session.id.as_str())
         .map_err(|error| CliError::new(error.to_string()))?;
 
-    Ok(render_agent_session(session))
+    Ok(render_agent_created(&stored, &metadata_path))
+}
+
+pub fn list_agents(current_dir: &Path) -> Result<String, CliError> {
+    let repository_root =
+        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let sessions = list_agent_sessions(repository_root.path())
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(render_agent_list(&sessions))
+}
+
+pub fn show_agent(current_dir: &Path, agent_id: &str) -> Result<String, CliError> {
+    let repository_root =
+        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let session = read_agent_session(repository_root.path(), agent_id)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    Ok(render_agent_session(&session))
 }
 
 pub fn create_task(current_dir: &Path, description: &str) -> Result<String, CliError> {
@@ -731,21 +882,46 @@ fn render_provider_list(config_status: &str, providers: &[ProviderSummary]) -> S
     output
 }
 
-fn render_agent_list(registry: &AgentSessionRegistry) -> String {
-    if registry.sessions().is_empty() {
+fn render_agent_created(stored: &StoredAgentSession, metadata_path: &Path) -> String {
+    let session = &stored.session;
+
+    format!(
+        "Agent session created\nAgent: {}\nRole: {}\nState: {}\nExecution mode: {}\nProvider: {}\nModel: {}\nTask: {}\nMetadata: {}\nModel execution: not performed\nShell execution: not performed\nSource file writes: not performed\n",
+        session.id.as_str(),
+        session.role.as_str(),
+        session.state.as_str(),
+        session.execution_mode.as_str(),
+        display_optional(session.provider_id.as_deref()),
+        display_optional(session.model_id.as_deref()),
+        session
+            .task_binding
+            .as_ref()
+            .map(|binding| binding.task_id.as_str())
+            .unwrap_or("-"),
+        metadata_path.display()
+    )
+}
+
+fn render_agent_list(sessions: &[StoredAgentSession]) -> String {
+    if sessions.is_empty() {
         return "No RaptorCode agent sessions found.\nExecution: read-only foundation only; no model calls, shell execution, or file modification are configured.\n".to_owned();
     }
 
-    let mut output = String::from("ID | Role | State | Execution mode | Provider | Model | Task\n");
-    output.push_str("--- | --- | --- | --- | --- | --- | ---\n");
+    let mut output = String::from(
+        "ID | Role | State | Execution mode | Created | Updated | Provider | Model | Task\n",
+    );
+    output.push_str("--- | --- | --- | --- | --- | --- | --- | --- | ---\n");
 
-    for session in registry.sessions() {
+    for stored in sessions {
+        let session = &stored.session;
         output.push_str(&format!(
-            "{} | {} | {} | {} | {} | {} | {}\n",
+            "{} | {} | {} | {} | {} | {} | {} | {} | {}\n",
             session.id.as_str(),
             session.role.as_str(),
             session.state.as_str(),
             session.execution_mode.as_str(),
+            display_optional(session.created_at.as_deref()),
+            display_optional(session.updated_at.as_deref()),
             display_optional(session.provider_id.as_deref()),
             display_optional(session.model_id.as_deref()),
             session
@@ -759,13 +935,17 @@ fn render_agent_list(registry: &AgentSessionRegistry) -> String {
     output
 }
 
-fn render_agent_session(session: &AgentSession) -> String {
+fn render_agent_session(stored: &StoredAgentSession) -> String {
+    let session = &stored.session;
+
     format!(
-        "Agent: {}\nRole: {}\nState: {}\nExecution mode: {}\nProvider: {}\nModel: {}\nTask: {}\nWorktree: {}\nMessages: {}\nEvents: {}\nAudit entries: {}\n",
+        "Agent: {}\nRole: {}\nState: {}\nExecution mode: {}\nCreated: {}\nUpdated: {}\nProvider: {}\nModel: {}\nTask: {}\nWorktree: {}\nMessages: {}\nEvents: {}\nAudit entries: {}\nAudit summary: {}\nMetadata: {}\nModel execution: not performed\nShell execution: not performed\nSource file writes: not performed\n",
         session.id.as_str(),
         session.role.as_str(),
         session.state.as_str(),
         session.execution_mode.as_str(),
+        display_optional(session.created_at.as_deref()),
+        display_optional(session.updated_at.as_deref()),
         display_optional(session.provider_id.as_deref()),
         display_optional(session.model_id.as_deref()),
         session
@@ -780,7 +960,26 @@ fn render_agent_session(session: &AgentSession) -> String {
             .unwrap_or_else(|| "-".to_owned()),
         session.messages.len(),
         session.events.len(),
-        session.audit_entries.len()
+        session.audit_entries.len(),
+        display_optional(session.audit_summary.as_deref()),
+        stored.metadata_path.display()
+    )
+}
+
+fn render_permission_policy(policy: &PermissionPolicy) -> String {
+    format!(
+        "RaptorCode default permission policy\nApproval mode: {}\nFile read: {}\nFile write: {}\nShell execution: {}\nNetwork: {}\nModel execution: {}\nDangerous commands: {}\nFile write allowed: {}\nShell execution allowed: {}\nNetwork allowed: {}\nModel execution allowed: {}\nExecution: policy display only; no model calls, shell commands, network requests, or source file writes are performed.\n",
+        policy.approval_mode.as_str(),
+        policy.file_read.as_str(),
+        policy.file_write.as_str(),
+        policy.shell_execution.as_str(),
+        policy.network.as_str(),
+        policy.model_execution.as_str(),
+        policy.dangerous_commands.as_str(),
+        if policy.allows_file_write() { "yes" } else { "no" },
+        if policy.allows_shell_execution() { "yes" } else { "no" },
+        if policy.allows_network() { "yes" } else { "no" },
+        if policy.allows_model_execution() { "yes" } else { "no" }
     )
 }
 
@@ -1113,6 +1312,13 @@ mod tests {
             .join(format!("{}.toml", task_id.as_str()))
     }
 
+    fn agent_metadata_path(repository_root: &Path, agent_id: &AgentId) -> PathBuf {
+        repository_root
+            .join(".raptor")
+            .join("agents")
+            .join(format!("{}.toml", agent_id.as_str()))
+    }
+
     fn replace_worktree_path_in_metadata(
         repository_root: &Path,
         task_id: &TaskId,
@@ -1225,6 +1431,31 @@ mod tests {
             parse_args(["agent", "show", "agent-1"]).unwrap(),
             CliCommand::Agent(AgentCommand::Show {
                 id: "agent-1".to_owned()
+            })
+        );
+        assert_eq!(
+            parse_args(["agent", "policy"]).unwrap(),
+            CliCommand::Agent(AgentCommand::Policy)
+        );
+        assert_eq!(
+            parse_args([
+                "agent",
+                "create",
+                "--role",
+                "worker",
+                "--task",
+                "task-1",
+                "--provider",
+                "deepseek",
+                "--model",
+                "deepseek-chat"
+            ])
+            .unwrap(),
+            CliCommand::Agent(AgentCommand::Create {
+                model_id: Some("deepseek-chat".to_owned()),
+                provider_id: Some("deepseek".to_owned()),
+                role: "worker".to_owned(),
+                task_id: Some("task-1".to_owned())
             })
         );
     }
@@ -1360,10 +1591,12 @@ mod tests {
         let provider_error = parse_args(["provider"]).unwrap_err();
         let agent_error = parse_args(["agent"]).unwrap_err();
         let agent_show_error = parse_args(["agent", "show"]).unwrap_err();
+        let agent_create_error = parse_args(["agent", "create"]).unwrap_err();
 
         assert!(provider_error.to_string().contains("provider command"));
         assert!(agent_error.to_string().contains("agent command"));
         assert!(agent_show_error.to_string().contains("agent id"));
+        assert!(agent_create_error.to_string().contains("--role"));
     }
 
     #[test]
@@ -1435,7 +1668,10 @@ mod tests {
 
     #[test]
     fn agent_list_handles_empty_local_state() {
-        let output = run(["agent", "list"], Path::new(".")).unwrap();
+        let test_dir = TestDir::create("agent-list-empty");
+        initialize_git_repo(&test_dir.path);
+
+        let output = run(["agent", "list"], &test_dir.path).unwrap();
 
         assert_eq!(
             output,
@@ -1445,11 +1681,209 @@ mod tests {
 
     #[test]
     fn agent_show_validates_id_and_reports_missing_session() {
-        let unsafe_error = run(["agent", "show", "../agent"], Path::new(".")).unwrap_err();
-        let missing_error = run(["agent", "show", "agent-1"], Path::new(".")).unwrap_err();
+        let test_dir = TestDir::create("agent-show-missing");
+        initialize_git_repo(&test_dir.path);
+
+        let unsafe_error = run(["agent", "show", "../agent"], &test_dir.path).unwrap_err();
+        let missing_error = run(["agent", "show", "agent-1"], &test_dir.path).unwrap_err();
 
         assert!(unsafe_error.to_string().contains("not safe"));
         assert!(missing_error.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn agent_create_persists_metadata_only() {
+        let test_dir = TestDir::create("agent-create");
+        initialize_git_repo(&test_dir.path);
+        let agent_id = AgentId::from_session_parts(
+            AgentRole::Worker,
+            None,
+            Some("deepseek"),
+            Some("deepseek-chat"),
+        )
+        .unwrap();
+
+        let output = run(
+            [
+                "agent",
+                "create",
+                "--role",
+                "worker",
+                "--provider",
+                "deepseek",
+                "--model",
+                "deepseek-chat",
+            ],
+            &test_dir.path,
+        )
+        .unwrap();
+        let metadata_path = agent_metadata_path(&test_dir.path, &agent_id);
+        let metadata = fs::read_to_string(metadata_path).unwrap();
+
+        assert!(output.contains("Agent session created"));
+        assert!(output.contains(agent_id.as_str()));
+        assert!(output.contains("Model execution: not performed"));
+        assert!(output.contains("Shell execution: not performed"));
+        assert!(output.contains("Source file writes: not performed"));
+        assert!(metadata.contains(&format!("id = \"{}\"", agent_id.as_str())));
+        assert!(metadata.contains("role = \"worker\""));
+        assert!(metadata.contains("execution_mode = \"read_only\""));
+        assert!(metadata.contains("provider_id = \"deepseek\""));
+        assert!(metadata.contains("model_id = \"deepseek-chat\""));
+    }
+
+    #[test]
+    fn agent_create_rejects_duplicate_deterministic_session() {
+        let test_dir = TestDir::create("agent-create-duplicate");
+        initialize_git_repo(&test_dir.path);
+
+        run(["agent", "create", "--role", "worker"], &test_dir.path).unwrap();
+        let error = run(["agent", "create", "--role", "worker"], &test_dir.path).unwrap_err();
+
+        assert!(error.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn agent_list_reads_persisted_session() {
+        let test_dir = TestDir::create("agent-list-one");
+        initialize_git_repo(&test_dir.path);
+        let agent_id = AgentId::from_session_parts(AgentRole::Reviewer, None, None, None).unwrap();
+
+        run(["agent", "create", "--role", "reviewer"], &test_dir.path).unwrap();
+        let output = run(["agent", "list"], &test_dir.path).unwrap();
+
+        assert!(output.contains("ID | Role | State | Execution mode"));
+        assert!(output.contains(agent_id.as_str()));
+        assert!(output.contains("reviewer"));
+        assert!(output.contains("read_only"));
+    }
+
+    #[test]
+    fn agent_show_reads_persisted_session() {
+        let test_dir = TestDir::create("agent-show-existing");
+        initialize_git_repo(&test_dir.path);
+        let agent_id = AgentId::from_session_parts(
+            AgentRole::Architect,
+            None,
+            Some("deepseek"),
+            Some("deepseek-chat"),
+        )
+        .unwrap();
+
+        run(
+            [
+                "agent",
+                "create",
+                "--role",
+                "architect",
+                "--provider",
+                "deepseek",
+                "--model",
+                "deepseek-chat",
+            ],
+            &test_dir.path,
+        )
+        .unwrap();
+        let output = run(["agent", "show", agent_id.as_str()], &test_dir.path).unwrap();
+
+        assert!(output.contains(&format!("Agent: {}", agent_id.as_str())));
+        assert!(output.contains("Role: architect"));
+        assert!(output.contains("Provider: deepseek"));
+        assert!(output.contains("Model: deepseek-chat"));
+        assert!(output.contains("Metadata:"));
+    }
+
+    #[test]
+    fn agent_create_rejects_unsafe_bindings_and_ids() {
+        let test_dir = TestDir::create("agent-create-unsafe");
+        initialize_git_repo(&test_dir.path);
+
+        let task_error = run(
+            ["agent", "create", "--role", "worker", "--task", "../task"],
+            &test_dir.path,
+        )
+        .unwrap_err();
+        let provider_error = run(
+            ["agent", "create", "--role", "worker", "--provider", "Bad"],
+            &test_dir.path,
+        )
+        .unwrap_err();
+        let model_error = run(
+            ["agent", "create", "--role", "worker", "--model", "../model"],
+            &test_dir.path,
+        )
+        .unwrap_err();
+
+        assert!(task_error.to_string().contains("not safe"));
+        assert!(provider_error.to_string().contains("not safe"));
+        assert!(model_error.to_string().contains("not safe"));
+    }
+
+    #[test]
+    fn agent_create_binds_existing_task_metadata() {
+        let test_dir = TestDir::create("agent-create-task");
+        initialize_git_repo(&test_dir.path);
+        let description = "Bind agent task";
+        let task_id = TaskId::from_description(description).unwrap();
+        let agent_id =
+            AgentId::from_session_parts(AgentRole::Worker, Some(task_id.as_str()), None, None)
+                .unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let output = run(
+            [
+                "agent",
+                "create",
+                "--role",
+                "worker",
+                "--task",
+                task_id.as_str(),
+            ],
+            &test_dir.path,
+        )
+        .unwrap();
+
+        assert!(output.contains(task_id.as_str()));
+        let stored = run(["agent", "show", agent_id.as_str()], &test_dir.path).unwrap();
+        assert!(stored.contains(&format!("Task: {}", task_id.as_str())));
+        assert!(stored.contains("Worktree:"));
+    }
+
+    #[test]
+    fn agent_policy_displays_deny_by_default_rules() {
+        let output = run(["agent", "policy"], Path::new(".")).unwrap();
+
+        assert!(output.contains("Approval mode: manual"));
+        assert!(output.contains("File read: repository_root_only"));
+        assert!(output.contains("File write: deny"));
+        assert!(output.contains("Shell execution: deny"));
+        assert!(output.contains("Network: deny"));
+        assert!(output.contains("Model execution: deny_until_configured_and_explicit"));
+        assert!(output.contains("File write allowed: no"));
+        assert!(output.contains("Shell execution allowed: no"));
+        assert!(output.contains("Network allowed: no"));
+        assert!(output.contains("Model execution allowed: no"));
+    }
+
+    #[test]
+    fn agent_create_does_not_modify_source_files() {
+        let test_dir = TestDir::create("agent-create-no-source-effects");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "source\n");
+
+        run(["agent", "create", "--role", "worker"], &test_dir.path).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(test_dir.path.join("tracked.txt")).unwrap(),
+            "source\n"
+        );
+        assert_eq!(
+            git_text(
+                &test_dir.path,
+                &["status", "--short", "--untracked-files=no"]
+            ),
+            ""
+        );
     }
 
     #[test]
