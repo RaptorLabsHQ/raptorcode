@@ -394,6 +394,16 @@ Current layout:
 - Task cleanup does not delete metadata or branches in V1.
 - Failed metadata persistence before a task record is available may require manual cleanup.
 
+## v0.1 Scope Note
+
+Task lifecycle cleanup refinements are not the next priority for v0.1 unless they directly block the launch demo. The active v0.1 path is:
+
+```text
+swarm -> DeepSeek -> worktrees -> tests -> diffs -> TUI -> release
+```
+
+Persisted agent sessions and permission policy were implemented early but are frozen until after v0.1.
+
 ## Recommended Next Step
 
-Add cleanup status recording and lifecycle display refinements for the future TUI.
+PROMPT 17 - Implement `raptor swarm` MVP

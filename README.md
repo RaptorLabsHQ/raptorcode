@@ -8,9 +8,23 @@ RaptorCode V1 is not a full terminal emulator replacement. It is focused on supe
 
 ## Status
 
-RaptorCode is in early foundation development.
+RaptorCode is in early foundation development. v0.1 is not released yet.
 
-Implemented today:
+The active Phase 1 product scope is:
+
+```text
+CLI + TUI + Agent Orchestrator
+```
+
+The core intended v0.1 demo command is:
+
+```bash
+raptor swarm "Add GitHub OAuth to this Next.js app"
+```
+
+No Phase 2 features should be developed before v0.1 is complete, tagged, documented, and launch-ready.
+
+Implemented foundation:
 
 - Rust Cargo workspace.
 - `raptor` CLI binary from `raptor-cli`.
@@ -42,6 +56,20 @@ Stubbed commands:
 - `raptor chat`
 - `raptor swarm`
 - `raptor test`
+
+## v0.1 Scope Lock
+
+The controlling source of truth is `COMPLETE_PROJECT_TECHNICAL_BLUEPRINT_SPECIFICATIONS_GUIDELINES_ROADMAP.md`.
+
+Until v0.1 ships, implementation must directly support:
+
+```text
+swarm -> DeepSeek -> worktrees -> tests -> diffs -> TUI -> release
+```
+
+Do not add advanced persisted agent sessions, advanced permission policy systems, policy enforcement hooks, cloud features, plugin systems, MCP, desktop terminal features, marketplace features, team features, or additional model providers before v0.1.
+
+The persisted agent sessions and permission policy added in commit `483135d7e8e8d25de726874eaddfaa7338f77fe0` are implemented early but frozen until after v0.1. They should not be expanded on the v0.1 path.
 
 ## Safety Model
 
@@ -162,7 +190,19 @@ Provider support is metadata-only in this iteration. No API keys, secrets, netwo
 
 `raptor agent list` and `raptor agent show <id>` inspect persisted read-only agent session state. The session model supports future task binding, provider/model metadata, lifecycle state, messages, events, and audit entries, but there is no autonomous coding loop yet.
 
-`raptor agent policy` prints the current default permission policy. V1 policy is manual approval with repository-root-only file-read modeling and denied file write, shell execution, network, model execution, and dangerous command permissions.
+`raptor agent policy` prints the current default permission policy. This exists early but is frozen until after v0.1 and must not grow into a policy enforcement system before launch.
+
+## v0.1 Launch UX Requirement
+
+Running plain `raptor` must eventually show a premium terminal launch screen before the developer prompt becomes ready.
+
+The launch screen must include Raptor Labs, `https://raptorlabs.dev`, RaptorCode `v0.1`, a premium robust CLI logo treatment, and a short greeting from the Raptor Labs team. Brand colors are white, near-white light gray, and vivid high-saturation intense red aligned with RaptorLabs.dev. Exact hex values are blocked until BOB adds the brand reference image to the repository or provides exact hex values.
+
+The launch flow must also onboard the developer to DeepSeek. If no DeepSeek API key is available, the CLI must direct the developer to:
+
+```text
+https://platform.deepseek.com/api_keys
+```
 
 ## Repository Layout
 

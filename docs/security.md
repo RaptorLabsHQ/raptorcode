@@ -12,6 +12,14 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 
 RaptorCode assumes AI coding agents can make incorrect or unsafe changes. The system must keep developers in control and make agent actions inspectable before they affect the main working tree or remote repository.
 
+For v0.1, security work must stay focused on the launch path:
+
+```text
+swarm -> DeepSeek -> worktrees -> tests -> diffs -> TUI -> release
+```
+
+Do not expand policy enforcement hooks, enterprise policy systems, advanced agent memory, additional providers, cloud features, plugin systems, or MCP before v0.1.
+
 ## Primary Controls
 
 - Worktree isolation for concurrent agent changes.
@@ -42,6 +50,7 @@ Security-relevant actions should be logged or surfaced clearly to the developer:
 - Uncontrolled model or provider execution.
 - Secret leakage through provider configuration.
 - Leaking secrets through logs or generated files.
+- Model output proposing unsafe commands or hidden file changes.
 
 ## Provider And Agent Foundation Controls
 
@@ -51,9 +60,10 @@ Current provider controls:
 
 - Provider ids are validated before configuration is accepted.
 - Provider metadata is built in and local.
-- DeepSeek is listed first for future integration, with OpenAI/Codex, Claude, Gemini, and local model boundaries represented as future providers.
+- DeepSeek is the only provider that may receive real execution before v0.1.
 - `raptor.toml` supports provider enablement metadata only.
 - No API keys, tokens, secrets, endpoints, or credentials are stored in `raptor.toml`.
+- DeepSeek API keys must never be committed, stored in repository files, or logged.
 - No external requests, model calls, streaming connections, or provider SDKs are implemented.
 - Completion execution returns an explicit disabled/not-implemented error.
 
@@ -79,6 +89,24 @@ Current permission policy controls:
 - Model execution is denied until explicitly configured and invoked in a future design.
 - Dangerous commands are denied.
 - The policy is display/modeling only in this iteration; it does not grant tool execution.
+- This permission policy code was implemented early and is frozen until after v0.1 unless BOB explicitly approves a narrow change directly required for the v0.1 demo.
+- Policy enforcement hooks must not be implemented before v0.1.
+
+## v0.1 Model And Worktree Safety
+
+DeepSeek output remains untrusted.
+
+Before v0.1 launch:
+
+- Never execute commands automatically from model output.
+- Never install dependencies automatically from model output.
+- Never write files outside assigned worktrees.
+- Never perform hidden file writes.
+- Never include `.env`, API keys, credentials, or secrets in model context.
+- Never commit or log `DEEPSEEK_API_KEY`.
+- Show diffs before merge.
+- Keep merge supervised.
+- Keep generated code reviewable by the developer.
 
 ## Implemented Task Workflow Controls
 

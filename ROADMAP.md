@@ -6,72 +6,137 @@ Company: RaptorLabs.dev
 
 RaptorCode is an open-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
 
-## V1 Scope
+## v0.1 Launch Checklist
 
-V1 scope is CLI + TUI + multi-agent orchestrator.
+Only these items are active before v0.1 is complete, tagged, documented, and launch-ready:
 
-V1 is not a full terminal emulator replacement. It will focus on supervised coding-agent workflows, not on replacing shells, multiplexers, or general terminal applications.
+- [x] Scope audit complete
+- [ ] `raptor swarm` MVP
+- [ ] DeepSeek provider execution
+- [ ] `raptor chat`
+- [ ] Agent role templates
+- [ ] Minimal worktree file modification path
+- [ ] `raptor test`
+- [ ] Ratatui dashboard
+- [ ] Premium terminal launch screen shown when user runs `raptor`
+- [ ] DeepSeek API key onboarding prompt and fallback instruction URL
+- [ ] README install/demo polish
+- [ ] Release notes
+- [ ] Tag `v0.1.0`
 
-## Milestones
+## v0.1 Scope Lock
 
-1. Repository foundation
-   - License, contribution, security, and project documentation.
-   - Agent operating instructions tracked in the repository.
+v0.1 scope is strictly:
 
-2. Rust workspace foundation
-   - Minimal Cargo workspace.
-   - CLI crate skeleton.
-   - Shared configuration and error conventions.
+```text
+CLI + TUI + Agent Orchestrator
+```
 
-3. CLI workflow
-   - Commands to initialize project state.
-   - Commands to inspect provider metadata and local agent session state.
-   - Commands to create persisted read-only agent session metadata.
-   - Command to inspect the default deny-by-default permission policy.
-   - Commands to create, list, inspect, and clean isolated worktrees.
-   - Supervised merge preflight for task worktrees.
-   - Typed `MERGE <task-id>` confirmation before supervised local merge execution.
-   - Task lifecycle status updates for merge success, merge conflict, and abandonment.
-   - Typed `CLEANUP <task-id>` confirmation before deleting validated task worktrees.
-   - Explicit safety checks before destructive operations.
+The only active implementation path is:
 
-4. TUI workflow
-   - Developer supervision interface.
-   - Agent session overview.
-   - Worktree status and task state display.
+```text
+swarm -> DeepSeek -> worktrees -> tests -> diffs -> TUI -> release
+```
 
-5. Multi-agent orchestrator
-   - Provider abstraction with DeepSeek first and future OpenAI/Codex, Claude, Gemini, and local model boundaries.
-   - Agent lifecycle management.
-   - Persisted read-only agent session state before any autonomous coding loop.
-   - Deny-by-default permission policy before any model or tool execution.
-   - Per-agent worktree isolation.
-   - Review points before merge, commit, or push actions.
+No Phase 2 feature work is allowed before v0.1. This explicitly excludes advanced persisted agent sessions, advanced permission policy engines, policy enforcement hooks, additional providers, cloud features, plugin systems, MCP, desktop terminal work, marketplace features, and team features.
 
-6. Security hardening
-   - Command execution boundaries.
-   - Path validation.
-   - Audit-friendly logs.
-   - Dependency review.
+The persisted agent sessions and permission policy added in commit `483135d7e8e8d25de726874eaddfaa7338f77fe0` are implemented early but frozen until after v0.1. They should be kept if tests pass and should not be expanded unless BOB explicitly reopens that scope after v0.1.
 
-## Non-Goals For V1
+## Current v0.1 Status
+
+Complete and in-scope:
+
+- Rust workspace and `raptor` CLI binary.
+- CLI command router.
+- `raptor init`.
+- `raptor doctor`.
+- Single-task worktree foundation through `raptor task "description"`.
+- Task metadata list/show.
+- Read-only worktree review and diff commands.
+- Supervised merge preflight and local merge execution.
+- Basic local safety checks for task ids, worktree paths, and merge confirmation.
+
+Incomplete but required:
+
+- `raptor swarm` role-based MVP.
+- DeepSeek execution using `DEEPSEEK_API_KEY`.
+- `raptor chat`.
+- Role templates for `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent`.
+- Minimal model-output-to-worktree file modification path.
+- `raptor test <task-id>`.
+- Simple Ratatui dashboard.
+- Premium startup screen for plain `raptor`.
+- DeepSeek API key onboarding prompt and help URL.
+- README install/demo polish.
+- Release notes and `v0.1.0` tag.
+
+Implemented early but frozen:
+
+- Persisted `.raptor/agents/<agent-id>.toml` sessions.
+- `raptor agent create`.
+- Persisted `raptor agent list` and `raptor agent show <id>`.
+- `raptor agent policy`.
+- Deny-by-default permission policy modeling.
+
+## Mandatory v0.1 Launch UX
+
+When a developer runs:
+
+```bash
+raptor
+```
+
+the application must show a premium terminal launch screen before the developer prompt becomes ready. This is a v0.1 requirement, but it is not implemented in this documentation-only recovery iteration.
+
+The launch screen must include:
+
+- Raptor Labs company name.
+- Raptor Labs URL: `https://raptorlabs.dev`.
+- RaptorCode name and version display: `v0.1`.
+- Premium robust RaptorCode CLI logo treatment.
+- Short greeting from the Raptor Labs team wishing the developer an enjoyable, agentic, productive, creative coding session and successful delivery.
+- Brand color direction: white, near-white light gray, and vivid high-saturation intense red aligned with RaptorLabs.dev.
+- Exact brand hex values only after BOB adds the reference brand image to the repository or provides exact hex values.
+
+After the launch screen, v0.1 must onboard the developer to DeepSeek:
+
+- Prompt for the DeepSeek API key before the developer prompt is ready.
+- Do not commit or log API keys.
+- If the developer does not have a key, show this URL: `https://platform.deepseek.com/api_keys`.
+
+## Non-Goals Before v0.1
 
 - Full terminal emulator replacement.
-- Unsupervised autonomous production changes.
-- Provider API calls before explicit provider integration design.
-- Agent shell execution before explicit permissioning design.
-- Auto-merge without explicit developer confirmation.
-- Force merge and automatic conflict resolution.
-- Remote push from the first merge workflow.
-- `--no-confirm` merge execution in V1.
-- Cloud-hosted control plane.
-- Plugin marketplace.
-- Cross-repository fleet management.
+- Advanced agent memory.
+- Enterprise policy engine.
+- Policy enforcement hooks.
+- Additional model providers beyond DeepSeek execution.
+- OpenAI provider implementation.
+- Claude provider implementation.
+- Gemini provider implementation.
+- Ollama provider implementation.
+- Desktop terminal.
+- Cloud features.
+- Plugin systems.
+- MCP.
+- Marketplace features.
+- Team features.
 
 ## Release Criteria
 
-- Safe default behavior for local repositories.
-- Clear user confirmation before risky actions.
-- Documented architecture and threat model.
-- Basic CLI and TUI flows covered by tests.
-- Reproducible local build and development instructions.
+v0.1 is complete when this supervised local workflow works and is documented:
+
+```bash
+raptor init
+raptor swarm "Add GitHub OAuth to this Next.js app"
+raptor review <task-id>
+raptor diff <task-id>
+raptor test <task-id>
+raptor merge <task-id> --execute
+```
+
+The output must be understandable, safe, demo-ready, and aligned with the premium Raptor Labs launch experience.
+
+## Next Implementation Prompt
+
+PROMPT 17 - Implement `raptor swarm` MVP

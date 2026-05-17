@@ -28,6 +28,27 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 
 RaptorCode V1 should coordinate coding-agent workflows inside existing developer environments. It should not replace the user's shell, terminal emulator, package manager, editor, or git hosting provider.
 
+## v0.1 Minimal Architecture Lock
+
+The v0.1 architecture is intentionally minimal. The active architecture path is:
+
+```text
+swarm -> DeepSeek -> worktrees -> tests -> diffs -> TUI -> release
+```
+
+Rules before v0.1:
+
+- Provider abstraction may exist, but only DeepSeek execution is implemented before v0.1.
+- The TUI is a simple Ratatui dashboard only.
+- `raptor swarm` is role-based and worktree-based.
+- Agent roles are limited to the v0.1 demo path.
+- No plugin architecture before v0.1.
+- No policy enforcement expansion before v0.1.
+- No additional model provider implementation before v0.1.
+- No desktop terminal before v0.1.
+
+The launch UX is part of v0.1. Running plain `raptor` must show a premium Raptor Labs / RaptorCode terminal startup screen before the developer prompt becomes ready. The launch UX must then onboard the developer to enter a DeepSeek API key or direct them to `https://platform.deepseek.com/api_keys`.
+
 ## Current Implementation
 
 The repository contains a minimal Cargo workspace with crate boundaries for core metadata, task metadata, CLI, git diagnostics, tooling diagnostics, agent orchestration, providers, TUI, sandboxing, and local storage. The implemented CLI router supports `raptor init`, `raptor provider list`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor chat`, `raptor task`, `raptor swarm`, `raptor review`, `raptor diff`, `raptor test`, `raptor merge`, and `raptor doctor`.
@@ -36,9 +57,9 @@ The repository contains a minimal Cargo workspace with crate boundaries for core
 
 ## Provider Boundary
 
-`raptor-providers` owns provider and model metadata only in this foundation.
+`raptor-providers` owns provider and model metadata in the current foundation. For v0.1, it must grow only enough to execute DeepSeek.
 
-- Built-in provider catalog lists DeepSeek first, followed by future OpenAI/Codex, Claude, Gemini, and local model boundaries.
+- Built-in provider catalog lists DeepSeek first. Other provider boundaries may remain as future metadata but must not receive execution before v0.1.
 - Provider ids and model ids are validated before use.
 - Provider capabilities describe chat, streaming, system prompt, tool call, local, and network requirements.
 - Completion request and response types exist for future integration, but provider execution returns an explicit disabled error today.
@@ -67,6 +88,8 @@ Provider configuration currently records enablement only. It does not contain AP
 
 No agent session is executed yet. Persisted sessions are local runtime metadata only; they do not trigger model calls, shell commands, network requests, source file writes, or autonomous loops.
 
+Persisted agent sessions and permission policy were implemented early in commit `483135d7e8e8d25de726874eaddfaa7338f77fe0`. They are frozen until after v0.1 and must not expand into advanced memory, policy enforcement hooks, or an enterprise policy engine before launch.
+
 ## Task Workflow Boundaries
 
 - `raptor-core`: owns task identifiers, task status, task metadata, and worktree information models.
@@ -76,7 +99,7 @@ No agent session is executed yet. Persisted sessions are local runtime metadata 
 - `raptor-providers`: owns provider ids, model ids, capability metadata, completion request/response shapes, and the disabled provider trait boundary.
 - `raptor-agent`: owns read-only local session state, lifecycle models, task binding metadata, messages, events, audit entry structures, and the permission policy foundation.
 
-The current task workflow is intentionally local and supervised. Task creation and inspection prepare isolated work but do not call model providers, start background agents, commit changes, or push to remotes. The current provider foundation is inspection-only, and the current agent foundation is persistence plus policy modeling only. Merge execution is available only through the explicit `--execute` path after preflight and exact typed confirmation.
+The current task workflow is intentionally local and supervised. Task creation and inspection prepare isolated work but do not call model providers, start background agents, commit changes, or push to remotes. The current provider foundation is inspection-only until DeepSeek execution is implemented for v0.1, and the current agent foundation is persistence plus frozen policy modeling only. Merge execution is available only through the explicit `--execute` path after preflight and exact typed confirmation.
 
 ## Merge Boundary
 

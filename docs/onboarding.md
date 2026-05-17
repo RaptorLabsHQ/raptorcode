@@ -49,7 +49,7 @@ Use the stable Rust toolchain.
 
 ## Task Workflow Notes
 
-`raptor provider list` reads `raptor.toml` when present and lists provider metadata without network calls or model execution. `raptor agent create` writes read-only local agent session metadata under `.raptor/agents/` only. `raptor agent list` and `raptor agent show <id>` inspect persisted agent session metadata. `raptor agent policy` displays the current deny-by-default permission model. No autonomous coding loop, shell execution, network request, model call, or agent source-file modification exists yet.
+`raptor provider list` reads `raptor.toml` when present and lists provider metadata without network calls or model execution. `raptor agent create` writes read-only local agent session metadata under `.raptor/agents/` only. `raptor agent list` and `raptor agent show <id>` inspect persisted agent session metadata. `raptor agent policy` displays the current deny-by-default permission model. Persisted agent sessions and permission policy were implemented early but are frozen until after v0.1. No autonomous coding loop, shell execution, network request, model call, policy enforcement hook, or agent source-file modification exists yet.
 
 `raptor task "description"` must be run inside a git repository. It creates an isolated git worktree under `.raptor/worktrees/` and writes metadata under `.raptor/tasks/`. It does not start autonomous agents or modify the main worktree.
 
@@ -57,4 +57,6 @@ Use the stable Rust toolchain.
 
 ## Current Contributor Task
 
-The `task` workflow now creates isolated worktree infrastructure and local task metadata without launching autonomous agents. Provider metadata, persisted read-only agent session metadata, and a deny-by-default permission policy foundation are in place for future orchestration. Task metadata and task worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`. Merge preflight, typed confirmation, supervised local merge execution, lifecycle status updates, abandonment, and safe worktree cleanup are in place. The next implementation step is policy enforcement around future model invocation scaffolding.
+The `task` workflow now creates isolated worktree infrastructure and local task metadata without launching autonomous agents. Provider metadata, persisted read-only agent session metadata, and a deny-by-default permission policy foundation are in place, but only DeepSeek execution and the v0.1 launch path may move forward before release. Task metadata and task worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`. Merge preflight, typed confirmation, supervised local merge execution, lifecycle status updates, abandonment, and safe worktree cleanup are in place.
+
+The next implementation step is `PROMPT 17 - Implement raptor swarm MVP`.
