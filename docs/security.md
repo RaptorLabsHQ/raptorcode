@@ -58,6 +58,10 @@ Security-relevant actions should be logged or surfaced clearly to the developer:
 
 Current provider controls:
 
+- Base `raptor` checks only whether `DEEPSEEK_API_KEY` is present, never prints it, never stores it, and never reads `.env` files.
+- Base `raptor` prints `https://platform.deepseek.com/api_keys` when the DeepSeek key is missing.
+- Base `raptor` uses minimal plain-text output for non-TTY output and `CI=true`; `NO_COLOR` disables ANSI color.
+- `raptor tui` is read-only and does not call models, run shell commands, modify files, write metadata, commit, merge, or push.
 - Provider ids are validated before configuration is accepted.
 - Provider metadata is built in and local.
 - DeepSeek is the only provider that may receive real execution before v0.1.
@@ -308,4 +312,4 @@ Auditability requirements:
 
 ## Current Status
 
-The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor chat`, `raptor swarm`, `raptor swarm implement <task-id> <role>`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id> [role]`, `raptor diff <task-id> [role]`, `raptor test <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for provider metadata inspection, DeepSeek chat, DeepSeek swarm planning artifacts, swarm implementation proposal artifacts, role-aware swarm review/diff inspection, supervised test execution, persisted read-only agent session metadata, permission policy display, task setup, task inspection, lifecycle updates, cleanup, and merge execution. They remain design requirements for future autonomous source modification and TUI workflows.
+The repository contains a Rust workspace with an implemented CLI router, base `raptor` startup screen, `raptor tui`, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor chat`, `raptor swarm`, `raptor swarm implement <task-id> <role>`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id> [role]`, `raptor diff <task-id> [role]`, `raptor test <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for startup key detection, read-only dashboard rendering, provider metadata inspection, DeepSeek chat, DeepSeek swarm planning artifacts, swarm implementation proposal artifacts, role-aware swarm review/diff inspection, supervised test execution, persisted read-only agent session metadata, permission policy display, task setup, task inspection, lifecycle updates, cleanup, and merge execution. They remain design requirements for future autonomous source modification workflows.

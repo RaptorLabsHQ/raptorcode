@@ -73,12 +73,12 @@ Complete and in-scope for v0.1:
 - Minimal supervised implementation proposal artifacts.
 - Role-aware swarm review and diff inspection.
 - Supervised `raptor test <task-id>` execution in validated worktrees.
+- Premium startup screen for base `raptor`.
+- Simple read-only `raptor tui` Ratatui dashboard.
+- Startup DeepSeek API key detection and fallback URL.
 
 Incomplete but required for v0.1:
 
-- Simple Ratatui dashboard.
-- Premium startup screen for plain `raptor`.
-- DeepSeek API key onboarding prompt with fallback URL.
 - README install/demo polish.
 - Release notes and `v0.1.0` tag.
 
@@ -98,8 +98,8 @@ Code or docs that were pointing toward Phase 2 before v0.1:
 
 Direct blockers for v0.1 launch:
 
-- Ratatui dashboard is not implemented.
-- Premium launch screen and interactive DeepSeek API key onboarding are not implemented.
+- README install/demo polish is not complete.
+- Release notes and `v0.1.0` tag are not complete.
 
 ## Definition Of Done
 
@@ -113,11 +113,11 @@ An increment is complete when:
 
 ## Current Status
 
-The repository has project documentation, governance files, a minimal Rust workspace, a CLI command router, `raptor init`, `raptor doctor`, provider metadata inspection, DeepSeek chat completion through `raptor chat "message"`, persisted read-only agent session metadata, a deny-by-default permission policy display, a safe single-task workflow, and a v0.1 swarm worktree MVP. The task workflow validates input, creates an isolated worktree, persists local task metadata, supports read-only metadata and worktree inspection through `raptor task list`, `raptor task show <id>`, `raptor review <task-id> [role]`, and `raptor diff <task-id> [role]`, runs supervised tests through `raptor test <task-id>`, includes merge dry-run plus supervised local merge execution, records lifecycle status updates, and supports safe cleanup for merged, completed, or abandoned task worktrees without launching autonomous agents. The swarm workflow creates role worktrees, records swarm metadata, can generate DeepSeek plans and implementation proposal artifacts, supports read-only review/diff fan-out or per-role inspection, and runs supervised tests across validated role worktrees.
+The repository has project documentation, governance files, a minimal Rust workspace, a CLI command router, a branded base `raptor` startup screen, a simple read-only `raptor tui` dashboard, `raptor init`, `raptor doctor`, provider metadata inspection, DeepSeek chat completion through `raptor chat "message"`, persisted read-only agent session metadata, a deny-by-default permission policy display, a safe single-task workflow, and a v0.1 swarm worktree MVP. The task workflow validates input, creates an isolated worktree, persists local task metadata, supports read-only metadata and worktree inspection through `raptor task list`, `raptor task show <id>`, `raptor review <task-id> [role]`, and `raptor diff <task-id> [role]`, runs supervised tests through `raptor test <task-id>`, includes merge dry-run plus supervised local merge execution, records lifecycle status updates, and supports safe cleanup for merged, completed, or abandoned task worktrees without launching autonomous agents. The swarm workflow creates role worktrees, records swarm metadata, can generate DeepSeek plans and implementation proposal artifacts, supports read-only review/diff fan-out or per-role inspection, and runs supervised tests across validated role worktrees.
 
-DeepSeek is the only provider execution path before v0.1. `raptor chat` does not execute model output, modify source files, run shell commands, create worktrees, merge, commit, or push. `raptor agent create` creates `.raptor/agents/<agent-id>.toml` records without model calls, shell execution, source file writes, or network requests. Persisted agent sessions and permission policy are frozen until after v0.1. V1 TUI and full multi-agent orchestration are not complete.
+DeepSeek is the only provider execution path before v0.1. Startup checks only whether `DEEPSEEK_API_KEY` exists and never prints or stores the key. `raptor tui` is read-only and does not call models. `raptor chat` does not execute model output, modify source files, run shell commands, create worktrees, merge, commit, or push. `raptor agent create` creates `.raptor/agents/<agent-id>.toml` records without model calls, shell execution, source file writes, or network requests. Persisted agent sessions and permission policy are frozen until after v0.1. Full multi-agent autonomous orchestration is not complete.
 
 ## Near-Term Backlog
 
-- PROMPT 23 - Implement simple Ratatui dashboard.
-- Implement TUI, launch screen, API key onboarding, and release polish only as required for v0.1.
+- PROMPT 24 - Final README demo polish and v0.1 release preparation.
+- Implement README/demo polish, release notes, and tag preparation only as required for v0.1.

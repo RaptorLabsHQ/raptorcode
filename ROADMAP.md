@@ -19,9 +19,9 @@ Only these items are active before v0.1 is complete, tagged, documented, and lau
 - [x] Minimal worktree file modification path
 - [x] Role-aware swarm review and diff
 - [x] `raptor test`
-- [ ] Ratatui dashboard
-- [ ] Premium terminal launch screen shown when user runs `raptor`
-- [ ] DeepSeek API key onboarding prompt and fallback instruction URL
+- [x] Ratatui dashboard
+- [x] Premium terminal launch screen shown when user runs `raptor`
+- [x] DeepSeek API key environment detection and fallback instruction URL
 - [ ] README install/demo polish
 - [ ] Release notes
 - [ ] Tag `v0.1.0`
@@ -43,6 +43,8 @@ swarm -> DeepSeek -> worktrees -> tests -> diffs -> TUI -> release
 No Phase 2 feature work is allowed before v0.1. This explicitly excludes advanced persisted agent sessions, advanced permission policy engines, policy enforcement hooks, additional providers, cloud features, plugin systems, MCP, desktop terminal work, marketplace features, and team features.
 
 The persisted agent sessions and permission policy added in commit `483135d7e8e8d25de726874eaddfaa7338f77fe0` are implemented early but frozen until after v0.1. They should be kept if tests pass and should not be expanded unless BOB explicitly reopens that scope after v0.1.
+
+The v0.1 binary remains `raptor`. A `raptorcode` alias can be considered later only after BOB explicitly approves that naming change.
 
 ## Current v0.1 Status
 
@@ -67,12 +69,12 @@ Complete and in-scope:
 - `RAPTOR_IMPLEMENTATION_PROPOSAL.md` artifacts inside selected role worktrees.
 - `raptor review <task-id> [role]` and `raptor diff <task-id> [role]` inspect swarm role worktrees read-only.
 - `raptor test <task-id>` runs detected or explicit test commands inside validated task or swarm role worktrees.
+- Base `raptor` renders the premium Raptor Labs / Raptor Code startup screen.
+- `raptor tui` opens the simple read-only Ratatui dashboard.
+- Startup detects `DEEPSEEK_API_KEY` and prints the DeepSeek key URL when missing without storing or printing keys.
 
 Incomplete but required:
 
-- Simple Ratatui dashboard.
-- Premium startup screen for plain `raptor`.
-- DeepSeek API key onboarding prompt and help URL.
 - README install/demo polish.
 - Release notes and `v0.1.0` tag.
 
@@ -92,25 +94,18 @@ When a developer runs:
 raptor
 ```
 
-the application must show a premium terminal launch screen before the developer prompt becomes ready. This is a v0.1 requirement and remains incomplete.
+the application shows a premium terminal launch screen before the developer prompt becomes ready. This v0.1 requirement is implemented for the existing `raptor` binary.
 
 The launch screen must include:
 
 - Raptor Labs company name.
 - Raptor Labs URL: `https://raptorlabs.dev`.
-- RaptorCode name and version display: `v0.1`.
-- Premium robust RaptorCode CLI logo treatment.
+- Raptor Code name and version display: `v0.1`.
+- Premium compact Raptor Code CLI logo treatment.
 - Short greeting from the Raptor Labs team wishing the developer an enjoyable, agentic, productive, creative coding session and successful delivery.
-- Brand color direction: white, near-white light gray, and vivid high-saturation intense red aligned with RaptorLabs.dev.
-- Exact brand hex values only after BOB adds the reference brand image to the repository or provides exact hex values.
+- Brand colors from the v0.1 UI specification: `#0A0A0A`, `#F4F4F4`, `#AAAAA9`, `#636262`, `#FF1919`, `#A51D20`, and `#261313`.
 
-After the launch screen, v0.1 must onboard the developer to DeepSeek:
-
-- Prompt for the DeepSeek API key before the developer prompt is ready.
-- Do not commit or log API keys.
-- If the developer does not have a key, show this URL: `https://platform.deepseek.com/api_keys`.
-
-The non-interactive `raptor chat "message"` path already requires `DEEPSEEK_API_KEY` and prints the same key URL when it is missing. The premium launch-screen interactive prompt remains incomplete.
+After the launch screen, v0.1 onboards the developer to DeepSeek by detecting `DEEPSEEK_API_KEY`. If the key exists, startup reports that it is detected without printing it. If the developer does not have a key, startup shows `https://platform.deepseek.com/api_keys`. RaptorCode does not store API keys, prompt for persistence, read `.env` files, or log secrets.
 
 ## Non-Goals Before v0.1
 
@@ -136,6 +131,8 @@ v0.1 is complete when this supervised local workflow works and is documented:
 
 ```bash
 raptor init
+raptor
+raptor tui
 raptor swarm "Add GitHub OAuth to this Next.js app"
 raptor swarm implement <task-id> frontend-agent
 raptor review <task-id>
@@ -150,4 +147,4 @@ The output must be understandable, safe, demo-ready, and aligned with the premiu
 
 ## Next Implementation Prompt
 
-PROMPT 23 - Implement simple Ratatui dashboard
+PROMPT 24 - Final README demo polish and v0.1 release preparation

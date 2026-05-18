@@ -25,19 +25,24 @@ use raptor_git::{
 use raptor_providers::{
     CompletionMessage, CompletionRequest, CompletionResponse, DeepSeekProvider, ModelId, Provider,
     ProviderCatalog, ProviderConfiguration, ProviderError, ProviderId, ProviderSummary, TokenUsage,
-    DEEPSEEK_API_KEY_URL,
+    DEEPSEEK_API_KEY_ENV, DEEPSEEK_API_KEY_URL,
 };
 use raptor_store::{
-    init_project_config, list_agent_sessions, list_task_metadata, persist_agent_session,
-    persist_swarm_metadata, persist_task_metadata, read_agent_session, read_project_config,
-    read_swarm_metadata, read_task_metadata, swarm_metadata_exists, task_metadata_exists,
-    update_swarm_metadata, update_task_status, InitConfigOutcome, ProjectConfigError,
-    StoredAgentSession, StoredTaskMetadata, SwarmAgentMetadata, SwarmMetadata,
+    init_project_config, list_agent_sessions, list_swarm_metadata, list_task_metadata,
+    persist_agent_session, persist_swarm_metadata, persist_task_metadata, read_agent_session,
+    read_project_config, read_swarm_metadata, read_task_metadata, swarm_metadata_exists,
+    task_metadata_exists, update_swarm_metadata, update_task_status, InitConfigOutcome,
+    ProjectConfigError, StoredAgentSession, StoredTaskMetadata, SwarmAgentMetadata, SwarmMetadata,
     TaskStatusTransition, TaskStoreError,
 };
 use raptor_tools::{
     command_version, detect_test_command, explicit_test_command, run_test_command,
     TestCommandOutput,
+};
+use raptor_tui::{
+    color_mode_from_environment, render_dashboard_snapshot, render_startup_banner, run_dashboard,
+    terminal_width_from_environment, AgentDashboardSummary, ColorMode, DashboardState,
+    StartupBannerOptions, SwarmDashboardSummary, TaskDashboardSummary,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +76,8 @@ pub enum CliCommand {
         task_id: String,
         test_command: Option<Vec<String>>,
     },
+    Tui,
+    Startup,
     Version,
 }
 
@@ -160,10 +167,12 @@ where
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
 
     match args.as_slice() {
-        [] => Ok(CliCommand::Help),
+        [] => Ok(CliCommand::Startup),
         [arg] if arg == "--help" || arg == "-h" => Ok(CliCommand::Help),
         [arg] if arg == "--version" || arg == "-V" => Ok(CliCommand::Version),
         [arg] if arg == "init" => Ok(CliCommand::Init),
+        [arg] if arg == "tui" => Ok(CliCommand::Tui),
+        [arg, ..] if arg == "tui" => Err(CliError::new("tui accepts no additional arguments")),
         [arg] if arg == "agent" => Err(CliError::new("agent command is required")),
         [arg, subcommand, options @ ..] if arg == "agent" && subcommand == "create" => {
             parse_agent_create_options(options)
@@ -383,6 +392,20 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    let startup_options = startup_banner_options(current_dir, false, true, 80, ColorMode::None);
+    run_with_startup_banner(args, current_dir, confirmation_input, startup_options)
+}
+
+pub fn run_with_startup_banner<I, S>(
+    args: I,
+    current_dir: &Path,
+    confirmation_input: Option<&mut dyn BufRead>,
+    startup_options: StartupBannerOptions,
+) -> Result<String, CliError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
     match parse_args(args)? {
         CliCommand::Agent(AgentCommand::Create {
             model_id,
@@ -423,8 +446,106 @@ where
             task_id,
             test_command,
         } => test_task(current_dir, &task_id, test_command.as_deref()),
+        CliCommand::Tui => Ok(render_dashboard_snapshot(&dashboard_state(current_dir))),
+        CliCommand::Startup => Ok(render_startup_banner(&startup_options)),
         CliCommand::Version => Ok(render_version()),
     }
+}
+
+pub fn startup_banner_options(
+    current_dir: &Path,
+    interactive: bool,
+    ci: bool,
+    terminal_width: u16,
+    color_mode: ColorMode,
+) -> StartupBannerOptions {
+    StartupBannerOptions {
+        api_key_url: DEEPSEEK_API_KEY_URL.to_owned(),
+        ci,
+        color_mode,
+        compact: terminal_width < 70,
+        cwd: current_dir.to_path_buf(),
+        deepseek_api_key_present: std::env::var_os(DEEPSEEK_API_KEY_ENV).is_some(),
+        interactive,
+        mode: Some("Supervised v0.1".to_owned()),
+        model_name: Some(format!("{SWARM_PROVIDER_DISPLAY} / {SWARM_MODEL_ID}")),
+        terminal_width,
+        user_name: "developer".to_owned(),
+        version: version().to_owned(),
+    }
+}
+
+pub fn runtime_startup_banner_options(
+    current_dir: &Path,
+    stdout_interactive: bool,
+) -> StartupBannerOptions {
+    let ci = ci_environment_enabled();
+    let terminal_width = terminal_width_from_environment();
+    let color_mode = color_mode_from_environment(stdout_interactive, ci);
+
+    startup_banner_options(
+        current_dir,
+        stdout_interactive,
+        ci,
+        terminal_width,
+        color_mode,
+    )
+}
+
+pub fn dashboard_state(current_dir: &Path) -> DashboardState {
+    let mut state = DashboardState::empty(version(), current_dir);
+    state.deepseek_api_key_present = std::env::var_os(DEEPSEEK_API_KEY_ENV).is_some();
+    state.provider_name = SWARM_PROVIDER_DISPLAY.to_owned();
+    state.model_name = SWARM_MODEL_ID.to_owned();
+    state.test_status = Some("not recorded".to_owned());
+
+    if let Ok(repository_root) = inspect_repository_root(current_dir) {
+        let root = repository_root.path();
+        if let Ok(tasks) = list_task_metadata(root) {
+            state.tasks = tasks
+                .into_iter()
+                .map(|task| TaskDashboardSummary {
+                    id: task.id,
+                    status: task.status.unwrap_or_else(|| "-".to_owned()),
+                })
+                .collect();
+        }
+        if let Ok(swarms) = list_swarm_metadata(root) {
+            state.swarms = swarms
+                .iter()
+                .map(|swarm| SwarmDashboardSummary {
+                    id: swarm.id.clone(),
+                    planning_status: swarm.planning_status.clone(),
+                    status: swarm.status.clone(),
+                })
+                .collect();
+
+            if let Some(latest_swarm) = swarms.last() {
+                state.agent_roles = latest_swarm
+                    .agents
+                    .iter()
+                    .map(|agent| AgentDashboardSummary {
+                        planning_status: agent.planning_status.clone(),
+                        proposal_status: agent.implementation_status.clone(),
+                        role: agent.role.clone(),
+                        status: agent.status.clone(),
+                    })
+                    .collect();
+            }
+        }
+    }
+
+    state
+}
+
+pub fn run_tui_dashboard(current_dir: &Path) -> Result<(), CliError> {
+    run_dashboard(dashboard_state(current_dir)).map_err(|error| CliError::new(error.to_string()))
+}
+
+pub fn ci_environment_enabled() -> bool {
+    std::env::var("CI")
+        .map(|value| value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 pub fn render_version() -> String {
@@ -433,7 +554,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat \"message\"\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm \"task description\"\n  raptor swarm implement <task-id> <role>\n  raptor review <task-id> [role]\n  raptor diff <task-id> [role]\n  raptor test <task-id> [-- <command>]\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor\n  raptor --version\n  raptor init\n  raptor tui\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat \"message\"\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm \"task description\"\n  raptor swarm implement <task-id> <role>\n  raptor review <task-id> [role]\n  raptor diff <task-id> [role]\n  raptor test <task-id> [-- <command>]\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -2779,6 +2900,20 @@ mod tests {
     }
 
     #[test]
+    fn parses_startup_and_tui_commands() {
+        assert_eq!(
+            parse_args(std::iter::empty::<&str>()).unwrap(),
+            CliCommand::Startup
+        );
+        assert_eq!(parse_args(["tui"]).unwrap(), CliCommand::Tui);
+
+        let error = parse_args(["tui", "extra"]).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("tui accepts no additional arguments"));
+    }
+
+    #[test]
     fn parses_router_commands() {
         let commands = [("init", CliCommand::Init), ("doctor", CliCommand::Doctor)];
 
@@ -3089,6 +3224,29 @@ mod tests {
     #[test]
     fn renders_version_output() {
         assert_eq!(render_version(), "raptor 0.1.0\n");
+    }
+
+    #[test]
+    fn startup_and_tui_render_without_side_effects() {
+        let test_dir = TestDir::create("startup-and-tui-render");
+        initialize_git_repo(&test_dir.path);
+        let startup_options =
+            startup_banner_options(&test_dir.path, false, false, 100, ColorMode::None);
+
+        let startup = run_with_startup_banner(
+            std::iter::empty::<&str>(),
+            &test_dir.path,
+            None,
+            startup_options,
+        )
+        .unwrap();
+        let dashboard = run(["tui"], &test_dir.path).unwrap();
+
+        assert_eq!(startup, "Raptor Code v0.1 - Raptor Labs\n");
+        assert!(dashboard.contains("Raptor Code v0.1"));
+        assert!(dashboard.contains("Raptor Labs"));
+        assert!(dashboard.contains("frontend-agent"));
+        assert!(dashboard.contains("read-only"));
     }
 
     #[test]

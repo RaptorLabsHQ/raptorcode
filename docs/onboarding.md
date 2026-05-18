@@ -30,6 +30,8 @@ Use the stable Rust toolchain.
 - Check: `cargo check`
 - Test: `cargo test`
 - Lint: `cargo clippy --all-targets --all-features`
+- Startup screen: `cargo run -p raptor-cli`
+- TUI dashboard command: `cargo run -p raptor-cli -- tui`
 - Version command: `cargo run -p raptor-cli -- --version`
 - Init command: `cargo run -p raptor-cli -- init`
 - Provider list command: `cargo run -p raptor-cli -- provider list`
@@ -57,6 +59,10 @@ Use the stable Rust toolchain.
 
 ## Task Workflow Notes
 
+Running base `raptor` renders the premium Raptor Labs / Raptor Code startup screen. It reads only whether `DEEPSEEK_API_KEY` exists, never prints or stores the key, and shows `https://platform.deepseek.com/api_keys` when the key is missing. `NO_COLOR` disables ANSI color, while non-TTY output and `CI=true` use minimal plain text.
+
+`raptor tui` opens the simple v0.1 Ratatui dashboard in an interactive terminal. In non-interactive output it prints a plain snapshot. The dashboard reads local task and swarm metadata only. It does not call DeepSeek, run shell commands, modify files, write metadata, commit, merge, or push.
+
 `raptor provider list` reads `raptor.toml` when present and lists provider metadata without network calls or model execution. `raptor chat "message"` calls DeepSeek when `DEEPSEEK_API_KEY` is set and prints the assistant response without executing it or writing files. If the key is missing, it directs the developer to `https://platform.deepseek.com/api_keys`. `raptor agent create` writes read-only local agent session metadata under `.raptor/agents/` only. `raptor agent list` and `raptor agent show <id>` inspect persisted agent session metadata. `raptor agent policy` displays the current deny-by-default permission model. Persisted agent sessions and permission policy were implemented early but are frozen until after v0.1. No autonomous coding loop, shell execution, policy enforcement hook, or automatic source-file modification exists yet.
 
 `raptor task "description"` must be run inside a git repository. It creates an isolated git worktree under `.raptor/worktrees/` and writes metadata under `.raptor/tasks/`. It does not start autonomous agents or modify the main worktree.
@@ -71,4 +77,4 @@ Use the stable Rust toolchain.
 
 The `task` workflow creates isolated single-task worktree infrastructure and local task metadata without launching autonomous agents. The `swarm` workflow creates the v0.1 multi-agent worktree structure, metadata, planning artifacts, supervised proposal artifacts, read-only role-aware review/diff inspection, and supervised test execution. Provider execution exists only for DeepSeek chat completion through `raptor chat`, DeepSeek planning through `raptor swarm`, and DeepSeek implementation proposal generation through `raptor swarm implement`. Persisted read-only agent session metadata and a deny-by-default permission policy foundation are in place, but they remain frozen until after v0.1. Existing task metadata and task or swarm worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id> [role]`, and `raptor diff <task-id> [role]`. Tests can be run with `raptor test <task-id>`. Merge preflight, typed confirmation, supervised local merge execution, lifecycle status updates, abandonment, and safe worktree cleanup are in place for single-task metadata.
 
-The next implementation step is `PROMPT 23 - Implement simple Ratatui dashboard`.
+The next implementation step is `PROMPT 24 - Final README demo polish and v0.1 release preparation`.

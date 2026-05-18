@@ -724,6 +724,50 @@ pub fn update_swarm_metadata(
     Ok(metadata_path)
 }
 
+pub fn list_swarm_metadata(repository_root: &Path) -> Result<Vec<SwarmMetadata>, SwarmStoreError> {
+    validate_swarm_base_dir(repository_root)?;
+
+    let swarm_dir = swarm_directory_path(repository_root)?;
+
+    match fs::symlink_metadata(&swarm_dir) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => return Err(SwarmStoreError::UnsafeBasePath(swarm_dir)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(SwarmStoreError::Io {
+                path: swarm_dir,
+                source,
+            });
+        }
+    }
+
+    let mut swarms = Vec::new();
+
+    for entry in fs::read_dir(&swarm_dir).map_err(|source| SwarmStoreError::Io {
+        path: swarm_dir.clone(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| SwarmStoreError::Io {
+            path: swarm_dir.clone(),
+            source,
+        })?;
+        let path = entry.path();
+        let Some(swarm_id) = swarm_id_from_metadata_path(&path) else {
+            continue;
+        };
+
+        if validate_swarm_id(&swarm_id).is_err() {
+            continue;
+        }
+
+        swarms.push(read_swarm_metadata(repository_root, &swarm_id)?);
+    }
+
+    swarms.sort_by(|left, right| left.id.cmp(&right.id));
+
+    Ok(swarms)
+}
+
 pub fn read_swarm_metadata(
     repository_root: &Path,
     swarm_id: &str,
@@ -1390,6 +1434,14 @@ fn escape_toml_string(value: &str) -> String {
 }
 
 fn task_id_from_metadata_path(path: &Path) -> Option<String> {
+    if path.extension()?.to_str()? != "toml" {
+        return None;
+    }
+
+    Some(path.file_stem()?.to_str()?.to_owned())
+}
+
+fn swarm_id_from_metadata_path(path: &Path) -> Option<String> {
     if path.extension()?.to_str()? != "toml" {
         return None;
     }
@@ -2152,6 +2204,30 @@ mod tests {
             persist_swarm_metadata(&test_dir.path, &metadata).unwrap_err(),
             SwarmStoreError::AlreadyExists(_)
         ));
+    }
+
+    #[test]
+    fn list_reads_persisted_swarm_metadata() {
+        let test_dir = TestDir::create("swarm-list");
+        let task_id = TaskId::from_description("Swarm list").unwrap();
+        let metadata = test_swarm_metadata(&test_dir.path, task_id.clone(), "Swarm list");
+
+        persist_swarm_metadata(&test_dir.path, &metadata).unwrap();
+        fs::write(
+            test_dir
+                .path
+                .join(".raptor")
+                .join("swarms")
+                .join("ignore.txt"),
+            "ignore",
+        )
+        .unwrap();
+
+        let swarms = list_swarm_metadata(&test_dir.path).unwrap();
+
+        assert_eq!(swarms.len(), 1);
+        assert_eq!(swarms[0].id, task_id.as_str());
+        assert_eq!(swarms[0].agents.len(), 1);
     }
 
     #[test]

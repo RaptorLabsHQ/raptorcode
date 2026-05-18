@@ -14,6 +14,7 @@ raptor-git.workspace = true
 raptor-providers.workspace = true
 raptor-store.workspace = true
 raptor-tools.workspace = true
+raptor-tui.workspace = true
 
 [lib]
 name = "raptor_cli"

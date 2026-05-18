@@ -13,12 +13,32 @@ fn main() -> ExitCode {
     };
 
     let stdin = io::stdin();
-    let result = if stdin.is_terminal() {
+    let stdin_interactive = stdin.is_terminal();
+    let stdout_interactive = io::stdout().is_terminal();
+    let startup_options =
+        raptor_cli::runtime_startup_banner_options(&current_dir, stdout_interactive);
+
+    if args.len() == 1
+        && args[0] == "tui"
+        && stdin_interactive
+        && stdout_interactive
+        && !raptor_cli::ci_environment_enabled()
+    {
+        return match raptor_cli::run_tui_dashboard(&current_dir) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    let result = if stdin_interactive {
         let mut stdin = stdin.lock();
 
-        raptor_cli::run_with_merge_confirmation(args, &current_dir, Some(&mut stdin))
+        raptor_cli::run_with_startup_banner(args, &current_dir, Some(&mut stdin), startup_options)
     } else {
-        raptor_cli::run_with_merge_confirmation(args, &current_dir, None)
+        raptor_cli::run_with_startup_banner(args, &current_dir, None, startup_options)
     };
 
     match result {

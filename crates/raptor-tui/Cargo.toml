@@ -10,3 +10,7 @@ version.workspace = true
 [lib]
 name = "raptor_tui"
 path = "src/lib.rs"
+
+[dependencies]
+crossterm.workspace = true
+ratatui.workspace = true

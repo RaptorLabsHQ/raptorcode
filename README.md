@@ -29,8 +29,10 @@ Implemented foundation:
 - Rust Cargo workspace.
 - `raptor` CLI binary from `raptor-cli`.
 - CLI command router for the planned V1 command surface.
+- Premium Raptor Labs / Raptor Code startup screen for base `raptor`.
 - `raptor --version`.
 - `raptor init`.
+- `raptor tui` simple read-only Ratatui dashboard.
 - `raptor doctor`.
 - `raptor provider list`.
 - `raptor chat "message"` DeepSeek completion smoke test.
@@ -104,6 +106,11 @@ Current controls:
 - `raptor test <task-id>` detects `cargo test`, `npm test`, or `make test` when possible, or accepts an explicit test command after `--`.
 - Explicit test commands use structured process arguments, allow only test-oriented subcommands, reject path traversal arguments, and do not use a shell.
 - `raptor test <task-id>` does not install dependencies, call AI models, execute model output, update metadata, edit source files, commit, merge, or push.
+- Running base `raptor` shows a branded startup screen in interactive terminals and a minimal plain line for non-TTY or CI output.
+- The startup screen checks only whether `DEEPSEEK_API_KEY` exists, never prints it, never stores it, and directs missing-key users to `https://platform.deepseek.com/api_keys`.
+- `NO_COLOR` disables startup banner ANSI color.
+- `raptor tui` opens a simple read-only dashboard in interactive terminals and prints a plain dashboard snapshot for non-interactive output.
+- `raptor tui` reads local task and swarm metadata only; it does not call models, run shell commands, modify files, update metadata, commit, merge, or push.
 - Agent session creation writes metadata only under `.raptor/agents/`.
 - Agent inspection is read-only and loads only validated `.raptor/agents/<agent-id>.toml` metadata.
 - Agent sessions do not modify source files, execute shell commands, make network requests, or call AI models in this foundation.
@@ -124,9 +131,11 @@ Known early gap:
 Run the CLI through Cargo during development:
 
 ```bash
+cargo run -p raptor-cli
 cargo run -p raptor-cli -- --version
 cargo run -p raptor-cli -- doctor
 cargo run -p raptor-cli -- init
+cargo run -p raptor-cli -- tui
 cargo run -p raptor-cli -- provider list
 cargo run -p raptor-cli -- chat "Explain the next implementation step"
 cargo run -p raptor-cli -- agent list
@@ -153,9 +162,11 @@ cargo run -p raptor-cli -- swarm implement <task-id> frontend-agent
 Expected installed binary form:
 
 ```bash
+raptor
 raptor --version
 raptor doctor
 raptor init
+raptor tui
 raptor provider list
 raptor chat "Explain the next implementation step"
 raptor agent list
@@ -285,15 +296,17 @@ API keys must not be stored in `raptor.toml`, committed to the repository, print
 
 ## v0.1 Launch UX Requirement
 
-Running plain `raptor` must eventually show a premium terminal launch screen before the developer prompt becomes ready.
+Running plain `raptor` shows a premium terminal launch screen before the developer prompt becomes ready. Interactive terminals receive a styled Raptor Labs / Raptor Code banner. Non-TTY output and `CI=true` receive the minimal plain-text line `Raptor Code v0.1 - Raptor Labs`. `NO_COLOR` disables ANSI color while preserving the interactive layout.
 
-The launch screen must include Raptor Labs, `https://raptorlabs.dev`, RaptorCode `v0.1`, a premium robust CLI logo treatment, and a short greeting from the Raptor Labs team. Brand colors are white, near-white light gray, and vivid high-saturation intense red aligned with RaptorLabs.dev. Exact hex values are blocked until BOB adds the brand reference image to the repository or provides exact hex values.
-
-The launch flow must also onboard the developer to DeepSeek. If no DeepSeek API key is available, the CLI must direct the developer to:
+The launch flow also onboards the developer to DeepSeek through environment-key detection. If `DEEPSEEK_API_KEY` is present, startup reports that the key is detected without printing it. If it is missing, the CLI directs the developer to:
 
 ```text
 https://platform.deepseek.com/api_keys
 ```
+
+The key is not printed, prompted for, stored, or read from `.env` files.
+
+`raptor tui` opens the simple v0.1 Ratatui dashboard. It displays Raptor Code v0.1, Raptor Labs, provider/model, local task and swarm counts, v0.1 agent role statuses from swarm metadata when available, and helper controls. The dashboard is read-only and performs no model calls, source edits, metadata writes, shell execution, commits, merges, or pushes.
 
 ## Repository Layout
 
@@ -308,7 +321,7 @@ https://platform.deepseek.com/api_keys
 |   |-- raptor-sandbox/    # Future execution isolation boundary
 |   |-- raptor-store/      # Local config, task metadata, swarm metadata, and agent metadata persistence
 |   |-- raptor-tools/      # Local tooling diagnostics
-|   `-- raptor-tui/        # Future terminal UI boundary
+|   `-- raptor-tui/        # Startup banner and simple read-only Ratatui dashboard
 |-- docs/
 |   |-- architecture.md
 |   |-- onboarding.md
@@ -337,7 +350,7 @@ cargo clippy --all-targets --all-features
 cargo test
 ```
 
-The workspace uses internal crates plus `reqwest`, `serde`, and `serde_json` for the DeepSeek HTTPS chat completion path and its no-live-network tests.
+The workspace uses internal crates plus `reqwest`, `serde`, and `serde_json` for the DeepSeek HTTPS chat completion path and its no-live-network tests. The v0.1 dashboard uses `ratatui` and `crossterm`.
 
 ## Documentation
 
