@@ -1,6 +1,6 @@
 # RaptorCode Roadmap
 
-Date: 2026-05-17
+Date: 2026-05-18
 Author: Tim
 Company: RaptorLabs.dev
 
@@ -17,6 +17,7 @@ Only these items are active before v0.1 is complete, tagged, documented, and lau
 - [x] Agent role templates
 - [x] Swarm DeepSeek planning artifacts
 - [x] Minimal worktree file modification path
+- [x] Role-aware swarm review and diff
 - [ ] `raptor test`
 - [ ] Ratatui dashboard
 - [ ] Premium terminal launch screen shown when user runs `raptor`
@@ -64,10 +65,10 @@ Complete and in-scope:
 - Missing `DEEPSEEK_API_KEY` blocks planning status without failing swarm worktree creation.
 - `raptor swarm implement <task-id> <role>` supervised implementation proposal generation.
 - `RAPTOR_IMPLEMENTATION_PROPOSAL.md` artifacts inside selected role worktrees.
+- `raptor review <task-id> [role]` and `raptor diff <task-id> [role]` inspect swarm role worktrees read-only.
 
 Incomplete but required:
 
-- Role-aware swarm review and diff.
 - `raptor test <task-id>`.
 - Simple Ratatui dashboard.
 - Premium startup screen for plain `raptor`.
@@ -91,7 +92,7 @@ When a developer runs:
 raptor
 ```
 
-the application must show a premium terminal launch screen before the developer prompt becomes ready. This is a v0.1 requirement, but it is not implemented in this documentation-only recovery iteration.
+the application must show a premium terminal launch screen before the developer prompt becomes ready. This is a v0.1 requirement and remains incomplete.
 
 The launch screen must include:
 
@@ -138,7 +139,9 @@ raptor init
 raptor swarm "Add GitHub OAuth to this Next.js app"
 raptor swarm implement <task-id> frontend-agent
 raptor review <task-id>
+raptor review <task-id> frontend-agent
 raptor diff <task-id>
+raptor diff <task-id> frontend-agent
 raptor test <task-id>
 raptor merge <task-id> --execute
 ```
@@ -147,4 +150,4 @@ The output must be understandable, safe, demo-ready, and aligned with the premiu
 
 ## Next Implementation Prompt
 
-PROMPT 21 - Implement role-aware swarm review and diff
+PROMPT 22 - Implement raptor test <task-id>

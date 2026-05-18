@@ -1,6 +1,6 @@
 # Security Design
 
-Date: 2026-05-17
+Date: 2026-05-18
 Author: Tim
 Company: RaptorLabs.dev
 
@@ -141,6 +141,8 @@ Before v0.1 launch:
 - Rejects unsafe task ids and path traversal attempts in task inspection commands.
 - Validates stored worktree paths against `.raptor/worktrees/<task-id>` before review or diff inspection.
 - Uses read-only git status and diff commands for `raptor review <task-id>` and `raptor diff <task-id>`.
+- Falls back to swarm metadata for `raptor review <task-id> [role]` and `raptor diff <task-id> [role]` when no single-task metadata exists.
+- Validates swarm role worktree paths against `.raptor/worktrees/<task-id>/<role>/` before role-aware review or diff inspection.
 - Runs `raptor merge <task-id>` as a preflight dry run only.
 - Refuses merge preflight when the target repository is dirty, the task worktree has no changes, or unresolved conflicts are present.
 - Runs `raptor merge <task-id> --execute` only after exact typed confirmation.
@@ -189,6 +191,22 @@ Known gap: if metadata persistence fails before a task record exists, manual cle
 - Records per-agent implementation status and proposal file path in `.raptor/swarms/<task-id>.toml`.
 - Treats generated proposals and patch-like content as untrusted Markdown text for developer review.
 - Does not execute model output, run shell commands, apply patches, modify application source files, run tests, commit, merge, or push.
+
+## Implemented Swarm Review And Diff Controls
+
+`raptor review <task-id> [role]` and `raptor diff <task-id> [role]` currently apply these swarm inspection controls:
+
+- Treat task id and optional role as untrusted input.
+- Allow only `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent` when a role is provided.
+- Load validated `.raptor/swarms/<task-id>.toml` metadata only after no single-task metadata exists.
+- Validate each inspected role exists in the swarm metadata.
+- Validate each inspected role worktree path under `.raptor/worktrees/<task-id>/<role>/`.
+- Reject unsafe task ids, unsafe roles, path traversal, missing metadata, missing worktrees, and unsafe stored worktree paths.
+- Use structured git `status --short`, `diff`, and `diff --cached` calls in the validated role worktree.
+- Fan out across all four roles when no role is provided.
+- Inspect only the selected role when a role is provided.
+- List untracked files under changed files; standard git diff output does not include untracked file contents until they are added.
+- Do not write files, update metadata, stage changes, commit, merge, delete worktrees, run tests, call models, execute model output, install dependencies, or push.
 
 ## Merge Controls
 
@@ -270,4 +288,4 @@ Auditability requirements:
 
 ## Current Status
 
-The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor chat`, `raptor swarm`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id>`, `raptor diff <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for provider metadata inspection, DeepSeek chat, DeepSeek swarm planning artifacts, persisted read-only agent session metadata, permission policy display, task setup, task inspection, lifecycle updates, cleanup, and merge execution. They remain design requirements for future autonomous source modification, test execution, and TUI workflows.
+The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor chat`, `raptor swarm`, `raptor swarm implement <task-id> <role>`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id> [role]`, `raptor diff <task-id> [role]`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for provider metadata inspection, DeepSeek chat, DeepSeek swarm planning artifacts, swarm implementation proposal artifacts, role-aware swarm review/diff inspection, persisted read-only agent session metadata, permission policy display, task setup, task inspection, lifecycle updates, cleanup, and merge execution. They remain design requirements for future autonomous source modification, test execution, and TUI workflows.

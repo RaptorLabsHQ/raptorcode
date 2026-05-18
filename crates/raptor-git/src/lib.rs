@@ -52,7 +52,9 @@ pub struct WorktreeReview {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeDiff {
+    pub changed_files: Vec<String>,
     pub staged: String,
+    pub status_lines: Vec<String>,
     pub unstaged: String,
     pub worktree_path: PathBuf,
 }
@@ -365,6 +367,27 @@ pub fn inspect_task_worktree(
     })
 }
 
+pub fn inspect_swarm_role_worktree(
+    repository_root: &RepositoryRoot,
+    swarm_id: &str,
+    role: &str,
+    stored_worktree_path: &Path,
+) -> Result<WorktreeReview, GitError> {
+    let worktree_path =
+        validate_swarm_role_worktree_path(repository_root, swarm_id, role, stored_worktree_path)?;
+    let status_lines = status_lines(&worktree_path)?;
+    let changed_files = status_lines
+        .iter()
+        .filter_map(|line| changed_file_from_status_line(line))
+        .collect::<Vec<_>>();
+
+    Ok(WorktreeReview {
+        changed_files,
+        status_lines,
+        worktree_path,
+    })
+}
+
 pub fn diff_task_worktree(
     repository_root: &RepositoryRoot,
     task_id: &str,
@@ -372,11 +395,43 @@ pub fn diff_task_worktree(
 ) -> Result<WorktreeDiff, GitError> {
     let worktree_path =
         validate_task_worktree_path(repository_root, task_id, stored_worktree_path)?;
+    let status_lines = status_lines(&worktree_path)?;
+    let changed_files = status_lines
+        .iter()
+        .filter_map(|line| changed_file_from_status_line(line))
+        .collect::<Vec<_>>();
     let unstaged = git_output_text(&worktree_path, &["diff"])?;
     let staged = git_output_text(&worktree_path, &["diff", "--cached"])?;
 
     Ok(WorktreeDiff {
+        changed_files,
         staged,
+        status_lines,
+        unstaged,
+        worktree_path,
+    })
+}
+
+pub fn diff_swarm_role_worktree(
+    repository_root: &RepositoryRoot,
+    swarm_id: &str,
+    role: &str,
+    stored_worktree_path: &Path,
+) -> Result<WorktreeDiff, GitError> {
+    let worktree_path =
+        validate_swarm_role_worktree_path(repository_root, swarm_id, role, stored_worktree_path)?;
+    let status_lines = status_lines(&worktree_path)?;
+    let changed_files = status_lines
+        .iter()
+        .filter_map(|line| changed_file_from_status_line(line))
+        .collect::<Vec<_>>();
+    let unstaged = git_output_text(&worktree_path, &["diff"])?;
+    let staged = git_output_text(&worktree_path, &["diff", "--cached"])?;
+
+    Ok(WorktreeDiff {
+        changed_files,
+        staged,
+        status_lines,
         unstaged,
         worktree_path,
     })
@@ -909,6 +964,41 @@ fn validate_task_worktree_path(
 
     ensure_existing_directory(&state_dir, &expected_path)?;
     ensure_existing_directory(&worktrees_dir, &expected_path)?;
+    ensure_existing_directory(&expected_path, &expected_path)?;
+
+    Ok(expected_path)
+}
+
+fn validate_swarm_role_worktree_path(
+    repository_root: &RepositoryRoot,
+    swarm_id: &str,
+    role: &str,
+    stored_worktree_path: &Path,
+) -> Result<PathBuf, GitError> {
+    validate_worktree_name(swarm_id)?;
+    validate_worktree_name(role)?;
+
+    if stored_worktree_path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(GitError::UnsafePath(stored_worktree_path.to_path_buf()));
+    }
+
+    let state_dir = repository_root.path().join(RAPTOR_STATE_DIR);
+    let worktrees_dir = state_dir.join(WORKTREES_DIR);
+    let swarm_root = worktrees_dir.join(swarm_id);
+    let expected_path = swarm_root.join(role);
+
+    validate_path_inside(repository_root.path(), &expected_path)?;
+
+    if stored_worktree_path != expected_path {
+        return Err(GitError::UnsafePath(stored_worktree_path.to_path_buf()));
+    }
+
+    ensure_existing_directory(&state_dir, &expected_path)?;
+    ensure_existing_directory(&worktrees_dir, &expected_path)?;
+    ensure_existing_directory(&swarm_root, &expected_path)?;
     ensure_existing_directory(&expected_path, &expected_path)?;
 
     Ok(expected_path)

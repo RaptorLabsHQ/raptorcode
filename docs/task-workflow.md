@@ -1,6 +1,6 @@
 # Task Workflow
 
-Date: 2026-05-17
+Date: 2026-05-18
 Author: Tim
 Company: RaptorLabs.dev
 
@@ -10,7 +10,7 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 
 ## Summary
 
-The first single-worktree workflow is `raptor task "description"`. The v0.1 multi-agent workflow is `raptor swarm "description"`. The swarm workflow creates role worktrees, can generate role-specific DeepSeek planning artifacts, and can generate one supervised implementation proposal for a selected role. It does not launch autonomous coding agents or modify application source code.
+The first single-worktree workflow is `raptor task "description"`. The v0.1 multi-agent workflow is `raptor swarm "description"`. The swarm workflow creates role worktrees, can generate role-specific DeepSeek planning artifacts, can generate one supervised implementation proposal for a selected role, and can inspect swarm role worktrees with read-only review and diff commands. It does not launch autonomous coding agents or modify application source code automatically.
 
 ## Command
 
@@ -30,7 +30,9 @@ cargo run -p raptor-cli -- task show <id>
 cargo run -p raptor-cli -- task abandon <id>
 cargo run -p raptor-cli -- task cleanup <id>
 cargo run -p raptor-cli -- review <task-id>
+cargo run -p raptor-cli -- review <task-id> frontend-agent
 cargo run -p raptor-cli -- diff <task-id>
+cargo run -p raptor-cli -- diff <task-id> frontend-agent
 cargo run -p raptor-cli -- merge <task-id>
 cargo run -p raptor-cli -- merge <task-id> --execute
 ```
@@ -46,7 +48,9 @@ raptor task show <id>
 raptor task abandon <id>
 raptor task cleanup <id>
 raptor review <task-id>
+raptor review <task-id> frontend-agent
 raptor diff <task-id>
+raptor diff <task-id> frontend-agent
 raptor merge <task-id>
 raptor merge <task-id> --execute
 ```
@@ -104,7 +108,7 @@ Each generated `RAPTOR_PLAN.md` includes the task id, task description, agent ro
 
 The generated implementation proposal preserves patch-like model output as reviewable Markdown text only. Applying source changes remains manual and supervised.
 
-Existing `raptor review <task-id>` and `raptor diff <task-id>` currently inspect only single-worktree task metadata from `.raptor/tasks/`. Multi-agent review and diff fan-out remain v0.1 follow-up work after swarm DeepSeek planning creates reviewable role worktree changes.
+`raptor review <task-id> [role]` and `raptor diff <task-id> [role]` are read-only. They first load single-task metadata from `.raptor/tasks/` when it exists. If no single-task metadata exists, they load swarm metadata from `.raptor/swarms/<task-id>.toml` and inspect swarm role worktrees. Passing a role limits inspection to one of `frontend-agent`, `backend-agent`, `test-agent`, or `security-agent`; omitting the role fans out across all roles.
 
 `raptor task list`:
 
@@ -151,12 +155,39 @@ Existing `raptor review <task-id>` and `raptor diff <task-id>` currently inspect
 - Prints task id, status, description, worktree path, git status summary, and changed files.
 - Does not stage, commit, merge, delete, or modify files.
 
+If single-task metadata does not exist, `raptor review <task-id>`:
+
+- Loads existing swarm metadata from `.raptor/swarms/<task-id>.toml`.
+- Validates each role worktree path against `.raptor/worktrees/<task-id>/<role>/`.
+- Prints swarm task id, description, status, planning status, each inspected role, role statuses, worktree paths, plan/proposal paths, git status summaries, and changed files.
+- Does not write metadata, stage, commit, merge, delete, run tests, call models, execute model output, or modify files.
+
+`raptor review <task-id> <role>`:
+
+- Allows only the four v0.1 roles.
+- Loads swarm metadata and inspects only the selected role worktree.
+- Rejects unsafe roles, unknown roles, missing metadata, missing worktrees, and unsafe worktree paths.
+
 `raptor diff <task-id>`:
 
 - Loads existing task metadata from `.raptor/tasks/<task-id>.toml`.
 - Validates the stored worktree path against `.raptor/worktrees/<task-id>`.
-- Prints unstaged and staged git diffs for the task worktree.
+- Prints changed files plus unstaged and staged git diffs for the task worktree.
 - Does not stage, commit, merge, delete, or modify files.
+
+If single-task metadata does not exist, `raptor diff <task-id>`:
+
+- Loads existing swarm metadata from `.raptor/swarms/<task-id>.toml`.
+- Validates each role worktree path against `.raptor/worktrees/<task-id>/<role>/`.
+- Prints each inspected role, role worktree path, proposal path when recorded, changed files, unstaged diffs, and staged diffs.
+- Lists untracked files under changed files because standard git diff output does not include untracked file contents until they are added.
+- Does not write metadata, stage, commit, merge, delete, run tests, call models, execute model output, or modify files.
+
+`raptor diff <task-id> <role>`:
+
+- Allows only the four v0.1 roles.
+- Loads swarm metadata and inspects only the selected role worktree.
+- Rejects unsafe roles, unknown roles, missing metadata, missing worktrees, and unsafe worktree paths.
 
 `raptor merge <task-id>`:
 
@@ -469,4 +500,4 @@ Persisted agent sessions and permission policy were implemented early but are fr
 
 ## Recommended Next Step
 
-PROMPT 21 - Implement role-aware swarm review and diff
+PROMPT 22 - Implement raptor test <task-id>

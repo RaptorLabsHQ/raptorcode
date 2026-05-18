@@ -43,8 +43,8 @@ Implemented foundation:
 - `raptor task show <id>`.
 - `raptor task abandon <id>`.
 - `raptor task cleanup <id>`.
-- `raptor review <task-id>`.
-- `raptor diff <task-id>`.
+- `raptor review <task-id> [role]`.
+- `raptor diff <task-id> [role]`.
 - `raptor merge <task-id>` preflight dry run.
 - `raptor merge <task-id> --execute` supervised local merge execution.
 - `raptor swarm "task description"` multi-agent worktree MVP.
@@ -108,7 +108,7 @@ Current controls:
 - Agent sessions do not modify source files, execute shell commands, make network requests, or call AI models in this foundation.
 - The default permission policy denies file writes, shell execution, network access, model execution, and dangerous commands.
 - No commits, merges, or pushes are performed by `raptor task`.
-- `raptor review` and `raptor diff` are read-only inspection commands.
+- `raptor review` and `raptor diff` are read-only inspection commands for single-task worktrees and swarm role worktrees.
 - `raptor merge` runs preflight checks and prints a dry-run summary only; no merge is executed.
 - `raptor merge <task-id> --execute` runs the same preflight checks, requires exact typed confirmation `MERGE <task-id>`, performs a local git merge from the task branch, and records task status as `merged` or `merge_conflict`.
 - `raptor task cleanup <id>` deletes only the validated task worktree after exact typed confirmation `CLEANUP <task-id>` and only for `merged`, `completed`, or `abandoned` tasks.
@@ -138,7 +138,9 @@ cargo run -p raptor-cli -- task show <id>
 cargo run -p raptor-cli -- task abandon <id>
 cargo run -p raptor-cli -- task cleanup <id>
 cargo run -p raptor-cli -- review <task-id>
+cargo run -p raptor-cli -- review <task-id> frontend-agent
 cargo run -p raptor-cli -- diff <task-id>
+cargo run -p raptor-cli -- diff <task-id> frontend-agent
 cargo run -p raptor-cli -- merge <task-id>
 cargo run -p raptor-cli -- merge <task-id> --execute
 cargo run -p raptor-cli -- swarm "Add GitHub OAuth to this Next.js app"
@@ -163,7 +165,9 @@ raptor task show <id>
 raptor task abandon <id>
 raptor task cleanup <id>
 raptor review <task-id>
+raptor review <task-id> frontend-agent
 raptor diff <task-id>
+raptor diff <task-id> frontend-agent
 raptor merge <task-id>
 raptor merge <task-id> --execute
 raptor swarm "Add GitHub OAuth to this Next.js app"
@@ -211,7 +215,7 @@ It currently:
   - `.raptor/worktrees/<task-id>/security-agent/RAPTOR_PLAN.md`
 - Without `DEEPSEEK_API_KEY`, preserves worktrees and metadata, marks planning as `blocked_missing_deepseek_api_key`, and prints `https://platform.deepseek.com/api_keys`.
 
-Swarm planning is planning-only. It does not modify application source files inside the role worktrees, execute model output, run tests, merge, commit, or push. Existing `raptor review` and `raptor diff` remain single-worktree task commands until multi-agent review fan-out is implemented.
+Swarm planning is planning-only. It does not modify application source files inside the role worktrees, execute model output, run tests, merge, commit, or push.
 
 `raptor swarm implement <task-id> <role>` is the minimal supervised worktree file modification path for v0.1. It:
 
@@ -224,14 +228,23 @@ Swarm planning is planning-only. It does not modify application source files ins
 - Writes `.raptor/worktrees/<task-id>/<role>/RAPTOR_IMPLEMENTATION_PROPOSAL.md`.
 - Records per-role implementation status and proposal file path in swarm metadata.
 
-The proposal file preserves any patch-like model output as text only. RaptorCode does not apply patches, modify application source code, execute model output, run tests, merge, commit, or push in this command. Role-aware swarm review and diff are still a v0.1 follow-up.
+The proposal file preserves any patch-like model output as text only. RaptorCode does not apply patches, modify application source code, execute model output, run tests, merge, commit, or push in this command.
+
+Role-aware review and diff are read-only:
+
+- `raptor review <task-id>` inspects a single-task worktree when task metadata exists, otherwise it loads swarm metadata and fans out across all role worktrees.
+- `raptor review <task-id> <role>` inspects one swarm role worktree.
+- `raptor diff <task-id>` prints single-task diffs when task metadata exists, otherwise it loads swarm metadata and prints diffs for all role worktrees.
+- `raptor diff <task-id> <role>` prints diffs for one swarm role worktree.
+- Valid swarm roles are `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent`.
+- Review and diff never stage, commit, merge, delete, write metadata, modify files, execute model output, run tests, or push.
 
 Task inspection commands are read-only:
 
 - `raptor task list` prints persisted task metadata from `.raptor/tasks/`.
 - `raptor task show <id>` validates the task id and prints details for one task.
-- `raptor review <task-id>` prints task metadata, git status, and changed files from the task worktree.
-- `raptor diff <task-id>` prints unstaged and staged git diffs from the task worktree.
+- `raptor review <task-id> [role]` prints task or swarm role metadata, git status, and changed files from validated worktrees.
+- `raptor diff <task-id> [role]` prints changed files plus unstaged and staged git diffs from validated worktrees.
 - `raptor merge <task-id>` validates merge preconditions and prints a dry-run summary without merging.
 - `raptor merge <task-id> --execute` validates preconditions, requires `MERGE <task-id>`, and merges committed task branch changes into the current target branch.
 - Successful merge execution records task status as `merged`; merge conflicts record `merge_conflict`; failed preflight does not mark a task merged.

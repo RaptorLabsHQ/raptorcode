@@ -15,11 +15,11 @@ use raptor_core::{
     SWARM_PLANNING_FAILED_STATUS, SWARM_PROPOSAL_GENERATED_STATUS,
 };
 use raptor_git::{
-    create_swarm_worktrees, create_task_worktree, diff_task_worktree, execute_task_merge,
-    execute_task_worktree_cleanup, inspect_repository, inspect_repository_root,
-    inspect_task_worktree, plan_task_worktree, plan_task_worktree_cleanup, preflight_task_merge,
-    GitError, MergeExecution, MergePreflight, RepositoryRoot, SwarmWorktreePlan,
-    WorktreeCleanupPlan, WorktreeDiff, WorktreeReview,
+    create_swarm_worktrees, create_task_worktree, diff_swarm_role_worktree, diff_task_worktree,
+    execute_task_merge, execute_task_worktree_cleanup, inspect_repository, inspect_repository_root,
+    inspect_swarm_role_worktree, inspect_task_worktree, plan_task_worktree,
+    plan_task_worktree_cleanup, preflight_task_merge, GitError, MergeExecution, MergePreflight,
+    RepositoryRoot, SwarmWorktreePlan, WorktreeCleanupPlan, WorktreeDiff, WorktreeReview,
 };
 use raptor_providers::{
     CompletionMessage, CompletionRequest, CompletionResponse, DeepSeekProvider, ModelId, Provider,
@@ -32,23 +32,36 @@ use raptor_store::{
     read_swarm_metadata, read_task_metadata, swarm_metadata_exists, task_metadata_exists,
     update_swarm_metadata, update_task_status, InitConfigOutcome, ProjectConfigError,
     StoredAgentSession, StoredTaskMetadata, SwarmAgentMetadata, SwarmMetadata,
-    TaskStatusTransition,
+    TaskStatusTransition, TaskStoreError,
 };
 use raptor_tools::command_version;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
     Agent(AgentCommand),
-    Chat { message: String },
-    Diff { task_id: String },
+    Chat {
+        message: String,
+    },
+    Diff {
+        role: Option<String>,
+        task_id: String,
+    },
     Doctor,
     Help,
     Init,
     Merge(MergeCommand),
     Provider(ProviderCommand),
-    Review { task_id: String },
-    Swarm { description: String },
-    SwarmImplement { role: String, task_id: String },
+    Review {
+        role: Option<String>,
+        task_id: String,
+    },
+    Swarm {
+        description: String,
+    },
+    SwarmImplement {
+        role: String,
+        task_id: String,
+    },
     Task(TaskCommand),
     Test,
     Version,
@@ -238,14 +251,28 @@ where
         }),
         [arg] if arg == "review" => Err(CliError::new("review task id is required")),
         [arg, task_id] if arg == "review" => Ok(CliCommand::Review {
+            role: None,
             task_id: task_id.to_owned(),
         }),
-        [arg, ..] if arg == "review" => Err(CliError::new("review accepts exactly one task id")),
+        [arg, task_id, role] if arg == "review" => Ok(CliCommand::Review {
+            role: Some(role.to_owned()),
+            task_id: task_id.to_owned(),
+        }),
+        [arg, ..] if arg == "review" => Err(CliError::new(
+            "review accepts one task id and optional swarm role",
+        )),
         [arg] if arg == "diff" => Err(CliError::new("diff task id is required")),
         [arg, task_id] if arg == "diff" => Ok(CliCommand::Diff {
+            role: None,
             task_id: task_id.to_owned(),
         }),
-        [arg, ..] if arg == "diff" => Err(CliError::new("diff accepts exactly one task id")),
+        [arg, task_id, role] if arg == "diff" => Ok(CliCommand::Diff {
+            role: Some(role.to_owned()),
+            task_id: task_id.to_owned(),
+        }),
+        [arg, ..] if arg == "diff" => Err(CliError::new(
+            "diff accepts one task id and optional swarm role",
+        )),
         [arg] if arg == "test" => Ok(CliCommand::Test),
         [arg] if arg == "merge" => Err(CliError::new("merge task id is required")),
         [arg, task_id] if arg == "merge" => Ok(CliCommand::Merge(MergeCommand::DryRun {
@@ -345,7 +372,7 @@ where
         )),
         CliCommand::Agent(AgentCommand::Show { id }) => show_agent(current_dir, &id),
         CliCommand::Chat { message } => chat(&message),
-        CliCommand::Diff { task_id } => diff_task(current_dir, &task_id),
+        CliCommand::Diff { role, task_id } => diff_task(current_dir, &task_id, role.as_deref()),
         CliCommand::Doctor => Ok(render_doctor(current_dir)),
         CliCommand::Help => Ok(render_help()),
         CliCommand::Init => init_project(current_dir),
@@ -354,7 +381,7 @@ where
             merge_task_execute(current_dir, &task_id, confirmation_input)
         }
         CliCommand::Provider(ProviderCommand::List) => list_providers(current_dir),
-        CliCommand::Review { task_id } => review_task(current_dir, &task_id),
+        CliCommand::Review { role, task_id } => review_task(current_dir, &task_id, role.as_deref()),
         CliCommand::Swarm { description } => create_swarm(current_dir, &description),
         CliCommand::SwarmImplement { role, task_id } => {
             implement_swarm_role(current_dir, &task_id, &role)
@@ -379,7 +406,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat \"message\"\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm \"task description\"\n  raptor swarm implement <task-id> <role>\n  raptor review <task-id>\n  raptor diff <task-id>\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat \"message\"\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm \"task description\"\n  raptor swarm implement <task-id> <role>\n  raptor review <task-id> [role]\n  raptor diff <task-id> [role]\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -610,6 +637,16 @@ enum SwarmImplementationSource<'a> {
     Environment,
     MissingDeepSeekApiKey,
     Provider(&'a dyn Provider),
+}
+
+struct SwarmRoleReview<'a> {
+    agent: &'a SwarmAgentMetadata,
+    review: WorktreeReview,
+}
+
+struct SwarmRoleDiff<'a> {
+    agent: &'a SwarmAgentMetadata,
+    diff: WorktreeDiff,
 }
 
 fn create_swarm_with_planning_source(
@@ -1171,7 +1208,7 @@ fn render_swarm_implementation_generated(
         .unwrap_or_else(|| "-".to_owned());
 
     format!(
-        "RaptorCode Implementation Proposal Generated\nTask: {}\nRole: {}\nWorktree: {}\nProposal file: {}\nProvider: {}\nModel: {}\nStatus: {}\nNext commands:\n  Inspect proposal file: {}\n  raptor diff {} (single-task only; role-aware swarm diff remains a v0.1 task)\n  raptor review {} (single-task only; role-aware swarm review remains a v0.1 task)\n  raptor test {} after test command exists\nSource code auto-editing: not implemented\nModel output execution: not performed\nPolicy enforcement hooks: not implemented\n",
+        "RaptorCode Implementation Proposal Generated\nTask: {}\nRole: {}\nWorktree: {}\nProposal file: {}\nProvider: {}\nModel: {}\nStatus: {}\nNext commands:\n  Inspect proposal file: {}\n  raptor diff {} {}\n  raptor review {} {}\n  raptor test {} after test command exists\nSource code auto-editing: not implemented\nModel output execution: not performed\nPolicy enforcement hooks: not implemented\n",
         metadata.id,
         agent.role,
         agent.worktree_path.display(),
@@ -1184,7 +1221,9 @@ fn render_swarm_implementation_generated(
             .unwrap_or(&agent.status),
         proposal_file_path,
         metadata.id,
+        agent.role,
         metadata.id,
+        agent.role,
         metadata.id
     )
 }
@@ -1347,11 +1386,27 @@ pub fn cleanup_task(
     }
 }
 
-pub fn review_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> {
+pub fn review_task(
+    current_dir: &Path,
+    task_id: &str,
+    role: Option<&str>,
+) -> Result<String, CliError> {
     let repository_root =
         inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
-    let task = read_task_metadata(repository_root.path(), task_id)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let task = match read_task_metadata(repository_root.path(), task_id) {
+        Ok(task) => task,
+        Err(TaskStoreError::NotFound(_)) => {
+            return review_swarm_task(&repository_root, task_id, role);
+        }
+        Err(error) => return Err(CliError::new(error.to_string())),
+    };
+
+    if role.is_some() {
+        return Err(CliError::new(
+            "role selection is supported only for swarm review",
+        ));
+    }
+
     let worktree_path = task
         .worktree_path
         .as_ref()
@@ -1362,11 +1417,27 @@ pub fn review_task(current_dir: &Path, task_id: &str) -> Result<String, CliError
     Ok(render_task_review(&task, &review))
 }
 
-pub fn diff_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> {
+pub fn diff_task(
+    current_dir: &Path,
+    task_id: &str,
+    role: Option<&str>,
+) -> Result<String, CliError> {
     let repository_root =
         inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
-    let task = read_task_metadata(repository_root.path(), task_id)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let task = match read_task_metadata(repository_root.path(), task_id) {
+        Ok(task) => task,
+        Err(TaskStoreError::NotFound(_)) => {
+            return diff_swarm_task(&repository_root, task_id, role);
+        }
+        Err(error) => return Err(CliError::new(error.to_string())),
+    };
+
+    if role.is_some() {
+        return Err(CliError::new(
+            "role selection is supported only for swarm diff",
+        ));
+    }
+
     let worktree_path = task
         .worktree_path
         .as_ref()
@@ -1375,6 +1446,84 @@ pub fn diff_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> 
         .map_err(|error| CliError::new(error.to_string()))?;
 
     Ok(render_task_diff(&task, &diff))
+}
+
+fn review_swarm_task(
+    repository_root: &RepositoryRoot,
+    task_id: &str,
+    role: Option<&str>,
+) -> Result<String, CliError> {
+    if let Some(role) = role {
+        role_prompt_template(role).map_err(|error| CliError::new(error.to_string()))?;
+    }
+
+    let metadata = read_swarm_metadata(repository_root.path(), task_id)
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let agents = selected_swarm_agents(&metadata, role)?;
+    let mut reviews = Vec::new();
+
+    for agent in agents {
+        let review = inspect_swarm_role_worktree(
+            repository_root,
+            &metadata.id,
+            &agent.role,
+            &agent.worktree_path,
+        )
+        .map_err(|error| CliError::new(error.to_string()))?;
+        reviews.push(SwarmRoleReview { agent, review });
+    }
+
+    Ok(render_swarm_review(&metadata, role, &reviews))
+}
+
+fn diff_swarm_task(
+    repository_root: &RepositoryRoot,
+    task_id: &str,
+    role: Option<&str>,
+) -> Result<String, CliError> {
+    if let Some(role) = role {
+        role_prompt_template(role).map_err(|error| CliError::new(error.to_string()))?;
+    }
+
+    let metadata = read_swarm_metadata(repository_root.path(), task_id)
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let agents = selected_swarm_agents(&metadata, role)?;
+    let mut diffs = Vec::new();
+
+    for agent in agents {
+        let diff = diff_swarm_role_worktree(
+            repository_root,
+            &metadata.id,
+            &agent.role,
+            &agent.worktree_path,
+        )
+        .map_err(|error| CliError::new(error.to_string()))?;
+        diffs.push(SwarmRoleDiff { agent, diff });
+    }
+
+    Ok(render_swarm_diff(&metadata, role, &diffs))
+}
+
+fn selected_swarm_agents<'a>(
+    metadata: &'a SwarmMetadata,
+    role: Option<&str>,
+) -> Result<Vec<&'a SwarmAgentMetadata>, CliError> {
+    let Some(role) = role else {
+        return Ok(metadata.agents.iter().collect());
+    };
+
+    role_prompt_template(role).map_err(|error| CliError::new(error.to_string()))?;
+    metadata
+        .agents
+        .iter()
+        .find(|agent| agent.role == role)
+        .map(|agent| vec![agent])
+        .ok_or_else(|| {
+            CliError::new(format!(
+                "swarm role not found for task {}: {role}",
+                metadata.id
+            ))
+        })
 }
 
 pub fn merge_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> {
@@ -1753,7 +1902,9 @@ fn render_swarm_created(metadata: &SwarmMetadata, metadata_path: &Path) -> Strin
 
     output.push_str("Next commands:\n");
     output.push_str(&format!("  raptor review {}\n", metadata.id));
+    output.push_str(&format!("  raptor review {} <role>\n", metadata.id));
     output.push_str(&format!("  raptor diff {}\n", metadata.id));
+    output.push_str(&format!("  raptor diff {} <role>\n", metadata.id));
     output.push_str(&format!(
         "  raptor test {} after test command exists\n",
         metadata.id
@@ -1764,7 +1915,7 @@ fn render_swarm_created(metadata: &SwarmMetadata, metadata_path: &Path) -> Strin
     output.push_str("Merge: not performed\n");
     output.push_str("Remote push: not performed\n");
     output.push_str("Model output execution: not performed\n");
-    output.push_str("Note: review and diff remain single-worktree commands until multi-agent review fan-out is implemented.\n");
+    output.push_str("Note: review and diff inspect swarm role worktrees read-only.\n");
 
     output
 }
@@ -1828,11 +1979,97 @@ fn render_task_diff(task: &StoredTaskMetadata, diff: &WorktreeDiff) -> String {
         diff.worktree_path.display()
     );
 
+    output.push_str("Changed files:\n");
+    push_changed_files_section(&mut output, &diff.changed_files);
     output.push_str("Unstaged diff:\n");
     push_diff_section(&mut output, &diff.unstaged);
     output.push_str("Staged diff:\n");
     push_diff_section(&mut output, &diff.staged);
 
+    output
+}
+
+fn render_swarm_review(
+    metadata: &SwarmMetadata,
+    role: Option<&str>,
+    reviews: &[SwarmRoleReview<'_>],
+) -> String {
+    let mut output = format!(
+        "RaptorCode Swarm Review\nTask: {}\nDescription: {}\nStatus: {}\nPlanning status: {}\nRole filter: {}\nAgents reviewed: {}\n",
+        metadata.id,
+        metadata.description,
+        metadata.status,
+        metadata.planning_status.as_deref().unwrap_or("-"),
+        role.unwrap_or("all"),
+        reviews.len()
+    );
+
+    for item in reviews {
+        output.push_str(&format!(
+            "\nAgent: {}\nStatus: {}\nPlanning status: {}\nImplementation status: {}\nWorktree: {}\nPlan file: {}\nProposal file: {}\n",
+            item.agent.role,
+            item.agent.status,
+            item.agent.planning_status.as_deref().unwrap_or("-"),
+            item.agent.implementation_status.as_deref().unwrap_or("-"),
+            item.review.worktree_path.display(),
+            display_path_optional(item.agent.plan_file_path.as_ref()),
+            display_path_optional(item.agent.proposal_file_path.as_ref())
+        ));
+
+        output.push_str("Git status:\n");
+        if item.review.status_lines.is_empty() {
+            output.push_str("  clean\n");
+        } else {
+            for line in &item.review.status_lines {
+                output.push_str("  ");
+                output.push_str(line);
+                output.push('\n');
+            }
+        }
+
+        output.push_str("Changed files:\n");
+        push_changed_files_section(&mut output, &item.review.changed_files);
+    }
+
+    output.push_str(
+        "\nRead-only: no files, metadata, git index, commits, merges, or pushes were modified.\n",
+    );
+    output
+}
+
+fn render_swarm_diff(
+    metadata: &SwarmMetadata,
+    role: Option<&str>,
+    diffs: &[SwarmRoleDiff<'_>],
+) -> String {
+    let mut output = format!(
+        "RaptorCode Swarm Diff\nTask: {}\nDescription: {}\nStatus: {}\nRole filter: {}\nAgents inspected: {}\n",
+        metadata.id,
+        metadata.description,
+        metadata.status,
+        role.unwrap_or("all"),
+        diffs.len()
+    );
+
+    for item in diffs {
+        output.push_str(&format!(
+            "\nAgent: {}\nWorktree: {}\nProposal file: {}\n",
+            item.agent.role,
+            item.diff.worktree_path.display(),
+            display_path_optional(item.agent.proposal_file_path.as_ref())
+        ));
+        output.push_str("Changed files:\n");
+        push_changed_files_section(&mut output, &item.diff.changed_files);
+        output.push_str("Unstaged diff:\n");
+        push_diff_section(&mut output, &item.diff.unstaged);
+        output.push_str("Staged diff:\n");
+        push_diff_section(&mut output, &item.diff.staged);
+    }
+
+    output.push_str("\nUntracked files are listed under Changed files; git does not include their contents in standard staged or unstaged diff output until they are added.\n");
+    output.push_str(
+        "Read-only: no files, metadata, git index, commits, merges, or pushes were modified.\n",
+    );
     output
 }
 
@@ -1950,6 +2187,19 @@ fn push_diff_section(output: &mut String, diff: &str) {
 
     output.push_str(diff);
     if !diff.ends_with('\n') {
+        output.push('\n');
+    }
+}
+
+fn push_changed_files_section(output: &mut String, changed_files: &[String]) {
+    if changed_files.is_empty() {
+        output.push_str("  (none)\n");
+        return;
+    }
+
+    for file in changed_files {
+        output.push_str("  ");
+        output.push_str(file);
         output.push('\n');
     }
 }
@@ -2407,12 +2657,28 @@ mod tests {
         assert_eq!(
             parse_args(["review", "task-123"]).unwrap(),
             CliCommand::Review {
+                role: None,
                 task_id: "task-123".to_owned()
             }
         );
         assert_eq!(
             parse_args(["diff", "task-123"]).unwrap(),
             CliCommand::Diff {
+                role: None,
+                task_id: "task-123".to_owned()
+            }
+        );
+        assert_eq!(
+            parse_args(["review", "task-123", "frontend-agent"]).unwrap(),
+            CliCommand::Review {
+                role: Some("frontend-agent".to_owned()),
+                task_id: "task-123".to_owned()
+            }
+        );
+        assert_eq!(
+            parse_args(["diff", "task-123", "frontend-agent"]).unwrap(),
+            CliCommand::Diff {
+                role: Some("frontend-agent".to_owned()),
                 task_id: "task-123".to_owned()
             }
         );
@@ -2534,11 +2800,12 @@ mod tests {
 
     #[test]
     fn rejects_extra_review_and_diff_arguments() {
-        let review_error = parse_args(["review", "task-123", "extra"]).unwrap_err();
-        let diff_error = parse_args(["diff", "task-123", "extra"]).unwrap_err();
+        let review_error =
+            parse_args(["review", "task-123", "frontend-agent", "extra"]).unwrap_err();
+        let diff_error = parse_args(["diff", "task-123", "frontend-agent", "extra"]).unwrap_err();
 
-        assert!(review_error.to_string().contains("exactly one"));
-        assert!(diff_error.to_string().contains("exactly one"));
+        assert!(review_error.to_string().contains("optional swarm role"));
+        assert!(diff_error.to_string().contains("optional swarm role"));
     }
 
     #[test]
@@ -3824,6 +4091,235 @@ mod tests {
         assert_eq!(
             git_text(&worktree_path, &["diff", "--cached"]),
             before_staged_diff
+        );
+    }
+
+    #[test]
+    fn review_and_diff_swarm_all_role_worktrees() {
+        let test_dir = TestDir::create("swarm-review-all");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "source\n");
+        let description = "Review every swarm role";
+        let task_id = TaskId::from_description(description).unwrap();
+        let provider = FakeDeepSeekProvider::new("Plan artifact.");
+
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&provider),
+        )
+        .unwrap();
+
+        let review_output = run(["review", task_id.as_str()], &test_dir.path).unwrap();
+        let diff_output = run(["diff", task_id.as_str()], &test_dir.path).unwrap();
+
+        assert!(review_output.contains("RaptorCode Swarm Review"));
+        assert!(review_output.contains("Role filter: all"));
+        assert!(review_output.contains("Agents reviewed: 4"));
+        assert!(review_output.contains("Agent: frontend-agent"));
+        assert!(review_output.contains("Agent: backend-agent"));
+        assert!(review_output.contains("Agent: test-agent"));
+        assert!(review_output.contains("Agent: security-agent"));
+        assert!(review_output.contains("RAPTOR_PLAN.md"));
+        assert!(review_output.contains("Read-only: no files"));
+        assert!(diff_output.contains("RaptorCode Swarm Diff"));
+        assert!(diff_output.contains("Agents inspected: 4"));
+        assert!(diff_output.contains("RAPTOR_PLAN.md"));
+        assert!(diff_output.contains("Untracked files are listed"));
+        assert!(diff_output.contains("Read-only: no files"));
+    }
+
+    #[test]
+    fn review_and_diff_swarm_selected_role_only() {
+        let test_dir = TestDir::create("swarm-review-role");
+        initialize_git_repo(&test_dir.path);
+        fs::create_dir_all(test_dir.path.join("src")).unwrap();
+        commit_file(&test_dir.path, "src/app.tsx", "before\n");
+        let description = "Review selected swarm role";
+        let task_id = TaskId::from_description(description).unwrap();
+        let provider = FakeDeepSeekProvider::new("Plan selected role.");
+
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&provider),
+        )
+        .unwrap();
+        let frontend_worktree =
+            swarm_agent_worktree_path(&test_dir.path, &task_id, "frontend-agent");
+        fs::write(frontend_worktree.join("src/app.tsx"), "after\n").unwrap();
+
+        let review_output = run(
+            ["review", task_id.as_str(), "frontend-agent"],
+            &test_dir.path,
+        )
+        .unwrap();
+        let diff_output =
+            run(["diff", task_id.as_str(), "frontend-agent"], &test_dir.path).unwrap();
+
+        assert!(review_output.contains("Role filter: frontend-agent"));
+        assert!(review_output.contains("Agents reviewed: 1"));
+        assert!(review_output.contains("Agent: frontend-agent"));
+        assert!(!review_output.contains("Agent: backend-agent"));
+        assert!(review_output.contains("M src/app.tsx"));
+        assert!(diff_output.contains("Role filter: frontend-agent"));
+        assert!(diff_output.contains("Agents inspected: 1"));
+        assert!(diff_output.contains("Agent: frontend-agent"));
+        assert!(!diff_output.contains("Agent: backend-agent"));
+        assert!(diff_output.contains("diff --git"));
+        assert!(diff_output.contains("-before"));
+        assert!(diff_output.contains("+after"));
+    }
+
+    #[test]
+    fn swarm_review_and_diff_reject_invalid_role_missing_metadata_and_worktree() {
+        let test_dir = TestDir::create("swarm-review-rejects");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "source\n");
+        let missing_review = run(["review", "missing-task"], &test_dir.path).unwrap_err();
+        let missing_diff = run(["diff", "missing-task"], &test_dir.path).unwrap_err();
+        let invalid_missing_review =
+            run(["review", "missing-task", "docs-agent"], &test_dir.path).unwrap_err();
+        let invalid_missing_diff =
+            run(["diff", "missing-task", "docs-agent"], &test_dir.path).unwrap_err();
+        let description = "Reject unsafe swarm review";
+        let task_id = TaskId::from_description(description).unwrap();
+        let provider = FakeDeepSeekProvider::new("Plan first.");
+
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&provider),
+        )
+        .unwrap();
+
+        let invalid_review =
+            run(["review", task_id.as_str(), "docs-agent"], &test_dir.path).unwrap_err();
+        let invalid_diff =
+            run(["diff", task_id.as_str(), "docs-agent"], &test_dir.path).unwrap_err();
+
+        fs::remove_dir_all(swarm_agent_worktree_path(
+            &test_dir.path,
+            &task_id,
+            "test-agent",
+        ))
+        .unwrap();
+
+        let missing_worktree_review =
+            run(["review", task_id.as_str(), "test-agent"], &test_dir.path).unwrap_err();
+        let missing_worktree_diff =
+            run(["diff", task_id.as_str(), "test-agent"], &test_dir.path).unwrap_err();
+
+        assert!(missing_review
+            .to_string()
+            .contains("swarm metadata not found"));
+        assert!(missing_diff
+            .to_string()
+            .contains("swarm metadata not found"));
+        assert!(invalid_missing_review
+            .to_string()
+            .contains("unknown swarm agent role"));
+        assert!(invalid_missing_diff
+            .to_string()
+            .contains("unknown swarm agent role"));
+        assert!(invalid_review
+            .to_string()
+            .contains("unknown swarm agent role"));
+        assert!(invalid_diff
+            .to_string()
+            .contains("unknown swarm agent role"));
+        assert!(missing_worktree_review
+            .to_string()
+            .contains("worktree not found"));
+        assert!(missing_worktree_diff
+            .to_string()
+            .contains("worktree not found"));
+    }
+
+    #[test]
+    fn swarm_review_and_diff_reject_unsafe_role_worktree_path() {
+        let test_dir = TestDir::create("swarm-review-unsafe-path");
+        initialize_git_repo(&test_dir.path);
+        commit_file(&test_dir.path, "tracked.txt", "source\n");
+        let description = "Reject unsafe swarm role path";
+        let task_id = TaskId::from_description(description).unwrap();
+        let provider = FakeDeepSeekProvider::new("Plan first.");
+
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&provider),
+        )
+        .unwrap();
+        replace_swarm_worktree_path_in_metadata(
+            &test_dir.path,
+            &task_id,
+            "security-agent",
+            &test_dir.path.join("outside-security-agent"),
+        );
+
+        let review_error = run(
+            ["review", task_id.as_str(), "security-agent"],
+            &test_dir.path,
+        )
+        .unwrap_err();
+        let diff_error =
+            run(["diff", task_id.as_str(), "security-agent"], &test_dir.path).unwrap_err();
+
+        assert!(review_error.to_string().contains("safe project path"));
+        assert!(diff_error.to_string().contains("safe project path"));
+    }
+
+    #[test]
+    fn swarm_review_and_diff_preserve_read_only_behavior() {
+        let test_dir = TestDir::create("swarm-review-readonly");
+        initialize_git_repo(&test_dir.path);
+        fs::create_dir_all(test_dir.path.join("src")).unwrap();
+        commit_file(&test_dir.path, "src/app.tsx", "before\n");
+        let description = "Swarm read-only review";
+        let task_id = TaskId::from_description(description).unwrap();
+        let provider = FakeDeepSeekProvider::new("Plan read-only review.");
+
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&provider),
+        )
+        .unwrap();
+        let frontend_worktree =
+            swarm_agent_worktree_path(&test_dir.path, &task_id, "frontend-agent");
+        fs::write(frontend_worktree.join("src/app.tsx"), "after\n").unwrap();
+        run_git(&frontend_worktree, &["add", "src/app.tsx"]);
+
+        let metadata_path = swarm_metadata_path(&test_dir.path, &task_id);
+        let before_metadata = fs::read_to_string(&metadata_path).unwrap();
+        let before_status = git_text(&frontend_worktree, &["status", "--short"]);
+        let before_unstaged_diff = git_text(&frontend_worktree, &["diff"]);
+        let before_staged_diff = git_text(&frontend_worktree, &["diff", "--cached"]);
+
+        run(
+            ["review", task_id.as_str(), "frontend-agent"],
+            &test_dir.path,
+        )
+        .unwrap();
+        run(["diff", task_id.as_str(), "frontend-agent"], &test_dir.path).unwrap();
+
+        assert_eq!(fs::read_to_string(metadata_path).unwrap(), before_metadata);
+        assert_eq!(
+            git_text(&frontend_worktree, &["status", "--short"]),
+            before_status
+        );
+        assert_eq!(
+            git_text(&frontend_worktree, &["diff"]),
+            before_unstaged_diff
+        );
+        assert_eq!(
+            git_text(&frontend_worktree, &["diff", "--cached"]),
+            before_staged_diff
+        );
+        assert_eq!(
+            fs::read_to_string(test_dir.path.join("src/app.tsx")).unwrap(),
+            "before\n"
         );
     }
 

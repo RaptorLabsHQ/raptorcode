@@ -1,6 +1,6 @@
 # Project Management
 
-Date: 2026-05-17
+Date: 2026-05-18
 Author: Tim
 Company: RaptorLabs.dev
 
@@ -23,6 +23,7 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 - `raptor chat`.
 - Agent role templates.
 - Minimal worktree file modification path.
+- Role-aware swarm review and diff.
 - `raptor test`.
 - Ratatui dashboard.
 - Premium terminal launch screen.
@@ -67,11 +68,13 @@ Complete and in-scope for v0.1:
 - `raptor swarm` MVP.
 - DeepSeek provider execution through `DEEPSEEK_API_KEY`.
 - `raptor chat "message"`.
+- Agent role templates.
+- Swarm DeepSeek planning artifacts.
+- Minimal supervised implementation proposal artifacts.
+- Role-aware swarm review and diff inspection.
 
 Incomplete but required for v0.1:
 
-- Agent role templates.
-- Minimal worktree file modification path.
 - `raptor test`.
 - Simple Ratatui dashboard.
 - Premium startup screen for plain `raptor`.
@@ -96,8 +99,6 @@ Code or docs that were pointing toward Phase 2 before v0.1:
 Direct blockers for v0.1 launch:
 
 - `raptor test` is still a stub.
-- Swarm DeepSeek planning and agent role prompts are not implemented.
-- Worktree file modification from model output is not implemented.
 - Ratatui dashboard is not implemented.
 - Premium launch screen and interactive DeepSeek API key onboarding are not implemented.
 
@@ -113,11 +114,11 @@ An increment is complete when:
 
 ## Current Status
 
-The repository has project documentation, governance files, a minimal Rust workspace, a CLI command router, `raptor init`, `raptor doctor`, provider metadata inspection, DeepSeek chat completion through `raptor chat "message"`, persisted read-only agent session metadata, a deny-by-default permission policy display, a safe single-task workflow, and a v0.1 swarm worktree MVP. The task workflow validates input, creates an isolated worktree, persists local task metadata, supports read-only metadata and worktree inspection through `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`, includes merge dry-run plus supervised local merge execution, records lifecycle status updates, and supports safe cleanup for merged, completed, or abandoned task worktrees without launching autonomous agents.
+The repository has project documentation, governance files, a minimal Rust workspace, a CLI command router, `raptor init`, `raptor doctor`, provider metadata inspection, DeepSeek chat completion through `raptor chat "message"`, persisted read-only agent session metadata, a deny-by-default permission policy display, a safe single-task workflow, and a v0.1 swarm worktree MVP. The task workflow validates input, creates an isolated worktree, persists local task metadata, supports read-only metadata and worktree inspection through `raptor task list`, `raptor task show <id>`, `raptor review <task-id> [role]`, and `raptor diff <task-id> [role]`, includes merge dry-run plus supervised local merge execution, records lifecycle status updates, and supports safe cleanup for merged, completed, or abandoned task worktrees without launching autonomous agents. The swarm workflow creates role worktrees, records swarm metadata, can generate DeepSeek plans and implementation proposal artifacts, and supports read-only review/diff fan-out or per-role inspection.
 
 DeepSeek is the only provider execution path before v0.1. `raptor chat` does not execute model output, modify source files, run shell commands, create worktrees, merge, commit, or push. `raptor agent create` creates `.raptor/agents/<agent-id>.toml` records without model calls, shell execution, source file writes, or network requests. Persisted agent sessions and permission policy are frozen until after v0.1. V1 TUI and full multi-agent orchestration are not complete.
 
 ## Near-Term Backlog
 
-- PROMPT 19 - Implement agent role templates and swarm DeepSeek planning.
-- Implement minimal file modification, test, diff, TUI, and release polish only as required for v0.1.
+- PROMPT 22 - Implement raptor test <task-id>.
+- Implement test execution, TUI, launch screen, API key onboarding, and release polish only as required for v0.1.

@@ -1,6 +1,6 @@
 # Onboarding
 
-Date: 2026-05-17
+Date: 2026-05-18
 Author: Tim
 Company: RaptorLabs.dev
 
@@ -46,7 +46,9 @@ Use the stable Rust toolchain.
 - Task abandon command: `cargo run -p raptor-cli -- task abandon <id>`
 - Task cleanup command: `cargo run -p raptor-cli -- task cleanup <id>`
 - Review command: `cargo run -p raptor-cli -- review <task-id>`
+- Swarm role review command: `cargo run -p raptor-cli -- review <task-id> frontend-agent`
 - Diff command: `cargo run -p raptor-cli -- diff <task-id>`
+- Swarm role diff command: `cargo run -p raptor-cli -- diff <task-id> frontend-agent`
 - Merge dry-run command: `cargo run -p raptor-cli -- merge <task-id>`
 - Merge execution command: `cargo run -p raptor-cli -- merge <task-id> --execute`
 - Doctor command: `cargo run -p raptor-cli -- doctor`
@@ -61,10 +63,10 @@ Use the stable Rust toolchain.
 
 `raptor swarm implement <task-id> <role>` generates a supervised implementation proposal for one selected role. It validates the swarm metadata and selected role worktree, reads that role's `RAPTOR_PLAN.md`, calls DeepSeek once, writes `RAPTOR_IMPLEMENTATION_PROPOSAL.md` inside the selected role worktree, and updates swarm metadata with implementation status and proposal path. It does not execute model output, apply patches, modify application source files, run tests, merge, or push.
 
-`raptor task list` and `raptor task show <id>` are read-only inspection commands for persisted task metadata. `raptor task abandon <id>` marks an unmerged task as abandoned without deleting metadata or the worktree. `raptor task cleanup <id>` validates the stored worktree path and deletes only the associated worktree after exact `CLEANUP <task-id>` confirmation. `raptor review <task-id>` and `raptor diff <task-id>` inspect the associated task worktree without staging, committing, merging, deleting, or modifying files. `raptor merge <task-id>` performs merge preflight dry-run checks only. `raptor merge <task-id> --execute` requires typed confirmation, performs a supervised local merge for committed task branch changes, and records task status as `merged` or `merge_conflict`.
+`raptor task list` and `raptor task show <id>` are read-only inspection commands for persisted task metadata. `raptor task abandon <id>` marks an unmerged task as abandoned without deleting metadata or the worktree. `raptor task cleanup <id>` validates the stored worktree path and deletes only the associated worktree after exact `CLEANUP <task-id>` confirmation. `raptor review <task-id>` and `raptor diff <task-id>` inspect the associated task worktree when task metadata exists; when no single-task metadata exists, they load swarm metadata and inspect all role worktrees. `raptor review <task-id> <role>` and `raptor diff <task-id> <role>` inspect one swarm role worktree. Review and diff never stage, commit, merge, delete, write metadata, or modify files. `raptor merge <task-id>` performs merge preflight dry-run checks only. `raptor merge <task-id> --execute` requires typed confirmation, performs a supervised local merge for committed task branch changes, and records task status as `merged` or `merge_conflict`.
 
 ## Current Contributor Task
 
-The `task` workflow creates isolated single-task worktree infrastructure and local task metadata without launching autonomous agents. The `swarm` workflow creates the v0.1 multi-agent worktree structure, metadata, planning artifacts, and supervised proposal artifacts. Provider execution exists only for DeepSeek chat completion through `raptor chat`, DeepSeek planning through `raptor swarm`, and DeepSeek implementation proposal generation through `raptor swarm implement`. Persisted read-only agent session metadata and a deny-by-default permission policy foundation are in place, but they remain frozen until after v0.1. Existing task metadata and single-task worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id>`, and `raptor diff <task-id>`. Multi-agent review fan-out is not implemented yet. Merge preflight, typed confirmation, supervised local merge execution, lifecycle status updates, abandonment, and safe worktree cleanup are in place for single-task metadata.
+The `task` workflow creates isolated single-task worktree infrastructure and local task metadata without launching autonomous agents. The `swarm` workflow creates the v0.1 multi-agent worktree structure, metadata, planning artifacts, supervised proposal artifacts, and read-only role-aware review/diff inspection. Provider execution exists only for DeepSeek chat completion through `raptor chat`, DeepSeek planning through `raptor swarm`, and DeepSeek implementation proposal generation through `raptor swarm implement`. Persisted read-only agent session metadata and a deny-by-default permission policy foundation are in place, but they remain frozen until after v0.1. Existing task metadata and task or swarm worktree changes can be inspected with `raptor task list`, `raptor task show <id>`, `raptor review <task-id> [role]`, and `raptor diff <task-id> [role]`. Merge preflight, typed confirmation, supervised local merge execution, lifecycle status updates, abandonment, and safe worktree cleanup are in place for single-task metadata.
 
-The next implementation step is `PROMPT 21 - Implement role-aware swarm review and diff`.
+The next implementation step is `PROMPT 22 - Implement raptor test <task-id>`.
