@@ -10,3 +10,6 @@ version.workspace = true
 [lib]
 name = "raptor_tools"
 path = "src/lib.rs"
+
+[dependencies]
+serde_json.workspace = true

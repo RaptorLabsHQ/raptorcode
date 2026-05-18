@@ -18,7 +18,7 @@ Only these items are active before v0.1 is complete, tagged, documented, and lau
 - [x] Swarm DeepSeek planning artifacts
 - [x] Minimal worktree file modification path
 - [x] Role-aware swarm review and diff
-- [ ] `raptor test`
+- [x] `raptor test`
 - [ ] Ratatui dashboard
 - [ ] Premium terminal launch screen shown when user runs `raptor`
 - [ ] DeepSeek API key onboarding prompt and fallback instruction URL
@@ -66,10 +66,10 @@ Complete and in-scope:
 - `raptor swarm implement <task-id> <role>` supervised implementation proposal generation.
 - `RAPTOR_IMPLEMENTATION_PROPOSAL.md` artifacts inside selected role worktrees.
 - `raptor review <task-id> [role]` and `raptor diff <task-id> [role]` inspect swarm role worktrees read-only.
+- `raptor test <task-id>` runs detected or explicit test commands inside validated task or swarm role worktrees.
 
 Incomplete but required:
 
-- `raptor test <task-id>`.
 - Simple Ratatui dashboard.
 - Premium startup screen for plain `raptor`.
 - DeepSeek API key onboarding prompt and help URL.
@@ -150,4 +150,4 @@ The output must be understandable, safe, demo-ready, and aligned with the premiu
 
 ## Next Implementation Prompt
 
-PROMPT 22 - Implement raptor test <task-id>
+PROMPT 23 - Implement simple Ratatui dashboard

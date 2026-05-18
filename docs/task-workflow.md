@@ -10,7 +10,7 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 
 ## Summary
 
-The first single-worktree workflow is `raptor task "description"`. The v0.1 multi-agent workflow is `raptor swarm "description"`. The swarm workflow creates role worktrees, can generate role-specific DeepSeek planning artifacts, can generate one supervised implementation proposal for a selected role, and can inspect swarm role worktrees with read-only review and diff commands. It does not launch autonomous coding agents or modify application source code automatically.
+The first single-worktree workflow is `raptor task "description"`. The v0.1 multi-agent workflow is `raptor swarm "description"`. The swarm workflow creates role worktrees, can generate role-specific DeepSeek planning artifacts, can generate one supervised implementation proposal for a selected role, can inspect swarm role worktrees with read-only review and diff commands, and can run supervised test commands inside validated worktrees. It does not launch autonomous coding agents or modify application source code automatically.
 
 ## Command
 
@@ -33,6 +33,8 @@ cargo run -p raptor-cli -- review <task-id>
 cargo run -p raptor-cli -- review <task-id> frontend-agent
 cargo run -p raptor-cli -- diff <task-id>
 cargo run -p raptor-cli -- diff <task-id> frontend-agent
+cargo run -p raptor-cli -- test <task-id>
+cargo run -p raptor-cli -- test <task-id> -- cargo test
 cargo run -p raptor-cli -- merge <task-id>
 cargo run -p raptor-cli -- merge <task-id> --execute
 ```
@@ -51,6 +53,8 @@ raptor review <task-id>
 raptor review <task-id> frontend-agent
 raptor diff <task-id>
 raptor diff <task-id> frontend-agent
+raptor test <task-id>
+raptor test <task-id> -- cargo test
 raptor merge <task-id>
 raptor merge <task-id> --execute
 ```
@@ -188,6 +192,21 @@ If single-task metadata does not exist, `raptor diff <task-id>`:
 - Allows only the four v0.1 roles.
 - Loads swarm metadata and inspects only the selected role worktree.
 - Rejects unsafe roles, unknown roles, missing metadata, missing worktrees, and unsafe worktree paths.
+
+`raptor test <task-id>`:
+
+- Treats the task id and stored worktree paths as untrusted input.
+- Loads single-task metadata from `.raptor/tasks/<task-id>.toml` when present.
+- If no single-task metadata exists, loads swarm metadata from `.raptor/swarms/<task-id>.toml`.
+- Validates single-task worktrees under `.raptor/worktrees/<task-id>`.
+- Validates swarm role worktrees under `.raptor/worktrees/<task-id>/<role>/`.
+- Runs the selected test command inside each validated target worktree.
+- Auto-detects `cargo test` from `Cargo.toml`, `npm test` from `package.json` `scripts.test`, and `make test` from a `Makefile` `test` target.
+- Accepts explicit test commands after `--`, for example `raptor test <task-id> -- cargo test`.
+- Allows only test-oriented commands and subcommands.
+- Captures stdout, stderr, exit code, target label, worktree path, command source, and pass/fail status.
+- Returns a failed CLI result when any target command fails.
+- Does not install dependencies, call models, execute model output, update metadata, stage, commit, merge, delete, push, or modify application source files automatically.
 
 `raptor merge <task-id>`:
 
@@ -469,6 +488,7 @@ Current layout:
 - Task inspection commands reject unsafe ids and avoid arbitrary file reads.
 - Review and diff commands verify stored worktree paths before invoking read-only git inspection.
 - Merge preflight verifies stored worktree paths before invoking read-only git status inspection.
+- Test execution verifies stored worktree paths before invoking validated test commands.
 - Cleanup verifies stored worktree paths before deleting and removes only the associated validated worktree directory.
 
 ## Current Limits
@@ -479,6 +499,8 @@ Current layout:
 - `raptor swarm` writes only `RAPTOR_PLAN.md` inside assigned role worktrees.
 - `raptor swarm implement` writes only `RAPTOR_IMPLEMENTATION_PROPOSAL.md` inside the selected role worktree.
 - `raptor swarm` and `raptor swarm implement` do not modify application source files inside role worktrees.
+- `raptor test <task-id>` runs detected or explicit test commands in validated task or swarm role worktrees.
+- `raptor test <task-id>` does not install dependencies, call models, execute model output, update metadata, commit, merge, delete worktrees, or push.
 - Task setup and inspection commands do not create commits.
 - No remote pushes are performed.
 - `raptor merge <task-id>` is preflight dry-run only.
@@ -500,4 +522,4 @@ Persisted agent sessions and permission policy were implemented early but are fr
 
 ## Recommended Next Step
 
-PROMPT 22 - Implement raptor test <task-id>
+PROMPT 23 - Implement simple Ratatui dashboard

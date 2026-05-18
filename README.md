@@ -50,15 +50,12 @@ Implemented foundation:
 - `raptor swarm "task description"` multi-agent worktree MVP.
 - `raptor swarm "task description"` DeepSeek planning that writes `RAPTOR_PLAN.md` per role when `DEEPSEEK_API_KEY` is set.
 - `raptor swarm implement <task-id> <role>` supervised implementation proposal generation.
+- `raptor test <task-id>` supervised test execution inside validated task or swarm role worktrees.
 - DeepSeek provider execution through `DEEPSEEK_API_KEY`.
 - Provider metadata catalog for DeepSeek first, plus future OpenAI/Codex, Claude, Gemini, and local model boundaries.
 - Read-only persisted local agent session model for future multi-agent orchestration.
 - Deny-by-default permission policy foundation for future agent tools.
 - Local task, agent, and worktree state under `.raptor/`.
-
-Stubbed commands:
-
-- `raptor test`
 
 ## v0.1 Scope Lock
 
@@ -103,6 +100,10 @@ Current controls:
 - `raptor swarm implement <task-id> <role>` writes only `RAPTOR_IMPLEMENTATION_PROPOSAL.md` inside the selected role worktree.
 - Implementation proposals are AI-generated and must be reviewed before source changes are applied manually.
 - Implementation proposal generation does not execute model output, apply patches, edit application source files, run tests, merge, commit, or push.
+- `raptor test <task-id>` validates task or swarm metadata and runs tests only inside validated worktrees.
+- `raptor test <task-id>` detects `cargo test`, `npm test`, or `make test` when possible, or accepts an explicit test command after `--`.
+- Explicit test commands use structured process arguments, allow only test-oriented subcommands, reject path traversal arguments, and do not use a shell.
+- `raptor test <task-id>` does not install dependencies, call AI models, execute model output, update metadata, edit source files, commit, merge, or push.
 - Agent session creation writes metadata only under `.raptor/agents/`.
 - Agent inspection is read-only and loads only validated `.raptor/agents/<agent-id>.toml` metadata.
 - Agent sessions do not modify source files, execute shell commands, make network requests, or call AI models in this foundation.
@@ -141,6 +142,8 @@ cargo run -p raptor-cli -- review <task-id>
 cargo run -p raptor-cli -- review <task-id> frontend-agent
 cargo run -p raptor-cli -- diff <task-id>
 cargo run -p raptor-cli -- diff <task-id> frontend-agent
+cargo run -p raptor-cli -- test <task-id>
+cargo run -p raptor-cli -- test <task-id> -- cargo test
 cargo run -p raptor-cli -- merge <task-id>
 cargo run -p raptor-cli -- merge <task-id> --execute
 cargo run -p raptor-cli -- swarm "Add GitHub OAuth to this Next.js app"
@@ -168,6 +171,8 @@ raptor review <task-id>
 raptor review <task-id> frontend-agent
 raptor diff <task-id>
 raptor diff <task-id> frontend-agent
+raptor test <task-id>
+raptor test <task-id> -- cargo test
 raptor merge <task-id>
 raptor merge <task-id> --execute
 raptor swarm "Add GitHub OAuth to this Next.js app"
@@ -250,6 +255,8 @@ Task inspection commands are read-only:
 - Successful merge execution records task status as `merged`; merge conflicts record `merge_conflict`; failed preflight does not mark a task merged.
 - `raptor task abandon <id>` marks an unmerged task as `abandoned` without deleting metadata or the worktree.
 - `raptor task cleanup <id>` validates the stored worktree path, prints a cleanup plan, requires `CLEANUP <task-id>`, and deletes only the associated worktree directory.
+
+`raptor test <task-id>` validates the stored single-task worktree path when task metadata exists. If no single-task metadata exists, it loads swarm metadata and runs the selected test command in each validated role worktree. Auto-detection checks `Cargo.toml`, `package.json` with `scripts.test`, and `Makefile` with a `test` target. If detection is not possible, pass an explicit command after `--`, for example `raptor test <task-id> -- cargo test`. RaptorCode does not install dependencies or run commands through a shell.
 
 ## Provider And Agent Foundation
 

@@ -78,6 +78,11 @@ Current provider controls:
 - `raptor swarm implement <task-id> <role>` writes only `RAPTOR_IMPLEMENTATION_PROPOSAL.md` inside the selected role worktree.
 - Implementation proposals are AI-generated and must be reviewed before source changes are applied manually.
 - `raptor swarm implement <task-id> <role>` does not execute model output, run shell commands, apply patches, modify application source files, run tests, merge, commit, or push.
+- `raptor test <task-id>` calls no AI provider and sends no data to models.
+- `raptor test <task-id>` executes only detected or developer-supplied test commands inside validated task or swarm role worktrees.
+- Explicit test commands are structured process arguments, not shell strings.
+- Explicit test commands are limited to test-oriented subcommands and reject path traversal arguments.
+- `raptor test <task-id>` does not install dependencies, execute model output, update metadata, edit source files, commit, merge, or push.
 - No streaming connections, provider SDKs, or additional provider executions are implemented before v0.1.
 
 Current agent controls:
@@ -208,6 +213,21 @@ Known gap: if metadata persistence fails before a task record exists, manual cle
 - List untracked files under changed files; standard git diff output does not include untracked file contents until they are added.
 - Do not write files, update metadata, stage changes, commit, merge, delete worktrees, run tests, call models, execute model output, install dependencies, or push.
 
+## Implemented Test Execution Controls
+
+`raptor test <task-id>` currently applies these supervised test controls:
+
+- Treats task id, stored metadata, stored worktree paths, and explicit command arguments as untrusted input.
+- Loads single-task metadata first; if none exists, loads swarm metadata.
+- Validates single-task worktree paths against `.raptor/worktrees/<task-id>`.
+- Validates swarm role worktree paths against `.raptor/worktrees/<task-id>/<role>/`.
+- Rejects unsafe task ids, path traversal, missing metadata, missing worktrees, unsafe stored paths, invalid roles, unsafe programs, and unsafe arguments.
+- Detects `cargo test` from `Cargo.toml`, `npm test` from `package.json` `scripts.test`, and `make test` from a `Makefile` `test` target.
+- Allows explicit commands after `--` only for test-oriented subcommands such as `cargo test`, `npm test`, `pnpm test`, `yarn test`, `bun test`, `make test`, `go test`, `pytest`, `python -m pytest`, and `uv run pytest`.
+- Runs commands with structured process arguments and sets the current directory to the validated worktree.
+- Captures stdout, stderr, exit code, command source, target label, and pass/fail status.
+- Does not use a shell, run commands from model output, install dependencies automatically, call models, update metadata, edit application source files, stage, commit, merge, delete worktrees, or push.
+
 ## Merge Controls
 
 `raptor merge <task-id>` performs preflight checks and prints a dry-run summary only. `raptor merge <task-id> --execute` performs the same preflight checks, prints the exact confirmation phrase, reads typed confirmation from stdin, and then runs a supervised local git merge from the task branch into the current target branch.
@@ -288,4 +308,4 @@ Auditability requirements:
 
 ## Current Status
 
-The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor chat`, `raptor swarm`, `raptor swarm implement <task-id> <role>`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id> [role]`, `raptor diff <task-id> [role]`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for provider metadata inspection, DeepSeek chat, DeepSeek swarm planning artifacts, swarm implementation proposal artifacts, role-aware swarm review/diff inspection, persisted read-only agent session metadata, permission policy display, task setup, task inspection, lifecycle updates, cleanup, and merge execution. They remain design requirements for future autonomous source modification, test execution, and TUI workflows.
+The repository contains a Rust workspace with an implemented CLI router, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor chat`, `raptor swarm`, `raptor swarm implement <task-id> <role>`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id> [role]`, `raptor diff <task-id> [role]`, `raptor test <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for provider metadata inspection, DeepSeek chat, DeepSeek swarm planning artifacts, swarm implementation proposal artifacts, role-aware swarm review/diff inspection, supervised test execution, persisted read-only agent session metadata, permission policy display, task setup, task inspection, lifecycle updates, cleanup, and merge execution. They remain design requirements for future autonomous source modification and TUI workflows.

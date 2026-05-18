@@ -437,6 +437,23 @@ pub fn diff_swarm_role_worktree(
     })
 }
 
+pub fn validated_task_worktree_path(
+    repository_root: &RepositoryRoot,
+    task_id: &str,
+    stored_worktree_path: &Path,
+) -> Result<PathBuf, GitError> {
+    validate_task_worktree_path(repository_root, task_id, stored_worktree_path)
+}
+
+pub fn validated_swarm_role_worktree_path(
+    repository_root: &RepositoryRoot,
+    swarm_id: &str,
+    role: &str,
+    stored_worktree_path: &Path,
+) -> Result<PathBuf, GitError> {
+    validate_swarm_role_worktree_path(repository_root, swarm_id, role, stored_worktree_path)
+}
+
 pub fn plan_task_worktree_cleanup(
     repository_root: &RepositoryRoot,
     task_id: &str,

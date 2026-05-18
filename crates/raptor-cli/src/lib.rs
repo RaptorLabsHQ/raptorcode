@@ -18,8 +18,9 @@ use raptor_git::{
     create_swarm_worktrees, create_task_worktree, diff_swarm_role_worktree, diff_task_worktree,
     execute_task_merge, execute_task_worktree_cleanup, inspect_repository, inspect_repository_root,
     inspect_swarm_role_worktree, inspect_task_worktree, plan_task_worktree,
-    plan_task_worktree_cleanup, preflight_task_merge, GitError, MergeExecution, MergePreflight,
-    RepositoryRoot, SwarmWorktreePlan, WorktreeCleanupPlan, WorktreeDiff, WorktreeReview,
+    plan_task_worktree_cleanup, preflight_task_merge, validated_swarm_role_worktree_path,
+    validated_task_worktree_path, GitError, MergeExecution, MergePreflight, RepositoryRoot,
+    SwarmWorktreePlan, WorktreeCleanupPlan, WorktreeDiff, WorktreeReview,
 };
 use raptor_providers::{
     CompletionMessage, CompletionRequest, CompletionResponse, DeepSeekProvider, ModelId, Provider,
@@ -34,7 +35,10 @@ use raptor_store::{
     StoredAgentSession, StoredTaskMetadata, SwarmAgentMetadata, SwarmMetadata,
     TaskStatusTransition, TaskStoreError,
 };
-use raptor_tools::command_version;
+use raptor_tools::{
+    command_version, detect_test_command, explicit_test_command, run_test_command,
+    TestCommandOutput,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
@@ -63,7 +67,10 @@ pub enum CliCommand {
         task_id: String,
     },
     Task(TaskCommand),
-    Test,
+    Test {
+        task_id: String,
+        test_command: Option<Vec<String>>,
+    },
     Version,
 }
 
@@ -273,7 +280,24 @@ where
         [arg, ..] if arg == "diff" => Err(CliError::new(
             "diff accepts one task id and optional swarm role",
         )),
-        [arg] if arg == "test" => Ok(CliCommand::Test),
+        [arg] if arg == "test" => Err(CliError::new("test task id is required")),
+        [arg, task_id] if arg == "test" => Ok(CliCommand::Test {
+            task_id: task_id.to_owned(),
+            test_command: None,
+        }),
+        [arg, task_id, separator, command @ ..] if arg == "test" && separator == "--" => {
+            if command.is_empty() {
+                return Err(CliError::new("explicit test command is required after --"));
+            }
+
+            Ok(CliCommand::Test {
+                task_id: task_id.to_owned(),
+                test_command: Some(command.to_vec()),
+            })
+        }
+        [arg, ..] if arg == "test" => Err(CliError::new(
+            "test accepts one task id and optional explicit command after --",
+        )),
         [arg] if arg == "merge" => Err(CliError::new("merge task id is required")),
         [arg, task_id] if arg == "merge" => Ok(CliCommand::Merge(MergeCommand::DryRun {
             task_id: task_id.to_owned(),
@@ -395,7 +419,10 @@ where
         }
         CliCommand::Task(TaskCommand::List) => list_tasks(current_dir),
         CliCommand::Task(TaskCommand::Show { id }) => show_task(current_dir, &id),
-        CliCommand::Test => Ok(render_stub("test")),
+        CliCommand::Test {
+            task_id,
+            test_command,
+        } => test_task(current_dir, &task_id, test_command.as_deref()),
         CliCommand::Version => Ok(render_version()),
     }
 }
@@ -406,7 +433,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat \"message\"\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm \"task description\"\n  raptor swarm implement <task-id> <role>\n  raptor review <task-id> [role]\n  raptor diff <task-id> [role]\n  raptor test\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor --version\n  raptor init\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat \"message\"\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm \"task description\"\n  raptor swarm implement <task-id> <role>\n  raptor review <task-id> [role]\n  raptor diff <task-id> [role]\n  raptor test <task-id> [-- <command>]\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -647,6 +674,16 @@ struct SwarmRoleReview<'a> {
 struct SwarmRoleDiff<'a> {
     agent: &'a SwarmAgentMetadata,
     diff: WorktreeDiff,
+}
+
+struct TestTarget {
+    label: String,
+    worktree_path: PathBuf,
+}
+
+struct TestTargetResult {
+    label: String,
+    output: TestCommandOutput,
 }
 
 fn create_swarm_with_planning_source(
@@ -1208,7 +1245,7 @@ fn render_swarm_implementation_generated(
         .unwrap_or_else(|| "-".to_owned());
 
     format!(
-        "RaptorCode Implementation Proposal Generated\nTask: {}\nRole: {}\nWorktree: {}\nProposal file: {}\nProvider: {}\nModel: {}\nStatus: {}\nNext commands:\n  Inspect proposal file: {}\n  raptor diff {} {}\n  raptor review {} {}\n  raptor test {} after test command exists\nSource code auto-editing: not implemented\nModel output execution: not performed\nPolicy enforcement hooks: not implemented\n",
+        "RaptorCode Implementation Proposal Generated\nTask: {}\nRole: {}\nWorktree: {}\nProposal file: {}\nProvider: {}\nModel: {}\nStatus: {}\nNext commands:\n  Inspect proposal file: {}\n  raptor diff {} {}\n  raptor review {} {}\n  raptor test {}\nSource code auto-editing: not implemented\nModel output execution: not performed\nPolicy enforcement hooks: not implemented\n",
         metadata.id,
         agent.role,
         agent.worktree_path.display(),
@@ -1446,6 +1483,104 @@ pub fn diff_task(
         .map_err(|error| CliError::new(error.to_string()))?;
 
     Ok(render_task_diff(&task, &diff))
+}
+
+pub fn test_task(
+    current_dir: &Path,
+    task_id: &str,
+    explicit_command_parts: Option<&[String]>,
+) -> Result<String, CliError> {
+    let repository_root =
+        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let explicit_command = explicit_command_parts
+        .map(explicit_test_command)
+        .transpose()
+        .map_err(|error| CliError::new(error.to_string()))?;
+    let (mode, targets) = test_targets(&repository_root, task_id)?;
+
+    let mut results = Vec::new();
+    for target in targets {
+        let command = match explicit_command.as_ref() {
+            Some(command) => command.clone(),
+            None => match detect_test_command(&target.worktree_path) {
+                Some(command) => command,
+                None => {
+                    let output = render_test_command_not_detected(task_id, mode, &target);
+                    return Err(CliError::with_output(
+                        "no test command detected; pass an explicit test command after --",
+                        output,
+                    ));
+                }
+            },
+        };
+        let output = run_test_command(&target.worktree_path, &command)
+            .map_err(|error| CliError::new(error.to_string()))?;
+
+        results.push(TestTargetResult {
+            label: target.label,
+            output,
+        });
+    }
+
+    let rendered = render_test_run(task_id, mode, &results);
+
+    if results.iter().all(|result| result.output.success) {
+        Ok(rendered)
+    } else {
+        Err(CliError::with_output("test command failed", rendered))
+    }
+}
+
+fn test_targets(
+    repository_root: &RepositoryRoot,
+    task_id: &str,
+) -> Result<(&'static str, Vec<TestTarget>), CliError> {
+    match read_task_metadata(repository_root.path(), task_id) {
+        Ok(task) => {
+            let worktree_path = task
+                .worktree_path
+                .as_ref()
+                .ok_or_else(|| CliError::new("task metadata is missing worktree_path"))?;
+            let worktree_path =
+                validated_task_worktree_path(repository_root, &task.id, worktree_path)
+                    .map_err(|error| CliError::new(error.to_string()))?;
+
+            Ok((
+                "single-task",
+                vec![TestTarget {
+                    label: task.id,
+                    worktree_path,
+                }],
+            ))
+        }
+        Err(TaskStoreError::NotFound(_)) => {
+            let metadata = read_swarm_metadata(repository_root.path(), task_id)
+                .map_err(|error| CliError::new(error.to_string()))?;
+            let mut targets = Vec::new();
+
+            for agent in &metadata.agents {
+                role_prompt_template(&agent.role)
+                    .map_err(|error| CliError::new(error.to_string()))?;
+                let worktree_path = validated_swarm_role_worktree_path(
+                    repository_root,
+                    &metadata.id,
+                    &agent.role,
+                    &agent.worktree_path,
+                )
+                .map_err(|error| CliError::new(error.to_string()))?;
+                targets.push(TestTarget {
+                    label: agent.role.clone(),
+                    worktree_path,
+                });
+            }
+            if targets.is_empty() {
+                return Err(CliError::new("swarm metadata has no test targets"));
+            }
+
+            Ok(("swarm", targets))
+        }
+        Err(error) => Err(CliError::new(error.to_string())),
+    }
 }
 
 fn review_swarm_task(
@@ -1832,10 +1967,6 @@ fn render_permission_policy(policy: &PermissionPolicy) -> String {
     )
 }
 
-fn render_stub(command: &str) -> String {
-    format!("raptor {command}: not implemented yet\n")
-}
-
 fn render_chat_response(response: &CompletionResponse) -> String {
     let mut output = format!(
         "DeepSeek response\nProvider: {}\nModel: {}\nFinish reason: {}\nUsage: {}\n\n{}\n",
@@ -1905,10 +2036,7 @@ fn render_swarm_created(metadata: &SwarmMetadata, metadata_path: &Path) -> Strin
     output.push_str(&format!("  raptor review {} <role>\n", metadata.id));
     output.push_str(&format!("  raptor diff {}\n", metadata.id));
     output.push_str(&format!("  raptor diff {} <role>\n", metadata.id));
-    output.push_str(&format!(
-        "  raptor test {} after test command exists\n",
-        metadata.id
-    ));
+    output.push_str(&format!("  raptor test {}\n", metadata.id));
     output.push_str("Model calls: performed only for planning when DEEPSEEK_API_KEY is set\n");
     output.push_str("Source file writes in worktrees: RAPTOR_PLAN.md only\n");
     output.push_str("Tests: not run\n");
@@ -1987,6 +2115,51 @@ fn render_task_diff(task: &StoredTaskMetadata, diff: &WorktreeDiff) -> String {
     push_diff_section(&mut output, &diff.staged);
 
     output
+}
+
+fn render_test_run(task_id: &str, mode: &str, results: &[TestTargetResult]) -> String {
+    let passed = results
+        .iter()
+        .filter(|result| result.output.success)
+        .count();
+    let mut output = format!(
+        "RaptorCode Test Run\nTask: {task_id}\nMode: {mode}\nTargets: {}\nSummary: {passed}/{} passed\n",
+        results.len(),
+        results.len()
+    );
+
+    for result in results {
+        output.push_str(&format!(
+            "\nTarget: {}\nWorktree: {}\nCommand: {}\nCommand source: {}\nStatus: {}\nExit code: {}\n",
+            result.label,
+            result.output.worktree_path.display(),
+            result.output.command.display(),
+            result.output.command.source,
+            if result.output.success { "passed" } else { "failed" },
+            display_exit_code(result.output.exit_code)
+        ));
+
+        output.push_str("Stdout:\n");
+        push_command_output_section(&mut output, &result.output.stdout);
+        output.push_str("Stderr:\n");
+        push_command_output_section(&mut output, &result.output.stderr);
+    }
+
+    output.push_str("\nDependency installation: not performed by RaptorCode\n");
+    output.push_str("Model calls: not performed\n");
+    output.push_str("Model output execution: not performed\n");
+    output.push_str("Source file writes by RaptorCode: not performed\n");
+    output.push_str("Merge: not performed\n");
+    output.push_str("Remote push: not performed\n");
+    output
+}
+
+fn render_test_command_not_detected(task_id: &str, mode: &str, target: &TestTarget) -> String {
+    format!(
+        "RaptorCode Test Run\nTask: {task_id}\nMode: {mode}\nTarget: {}\nWorktree: {}\nStatus: blocked_no_test_command_detected\nDetection checked: Cargo.toml, package.json scripts.test, Makefile test target\nExplicit command example: raptor test {task_id} -- cargo test\nDependency installation: not performed by RaptorCode\nModel calls: not performed\nModel output execution: not performed\nSource file writes by RaptorCode: not performed\n",
+        target.label,
+        target.worktree_path.display()
+    )
 }
 
 fn render_swarm_review(
@@ -2204,6 +2377,19 @@ fn push_changed_files_section(output: &mut String, changed_files: &[String]) {
     }
 }
 
+fn push_command_output_section(output: &mut String, command_output: &str) {
+    if command_output.trim().is_empty() {
+        output.push_str("  (none)\n");
+        return;
+    }
+
+    for line in command_output.lines() {
+        output.push_str("  ");
+        output.push_str(line);
+        output.push('\n');
+    }
+}
+
 fn display_optional(value: Option<&str>) -> &str {
     value.filter(|value| !value.is_empty()).unwrap_or("-")
 }
@@ -2221,6 +2407,12 @@ fn display_number_optional(value: Option<u32>) -> String {
         .unwrap_or_else(|| "-".to_owned())
 }
 
+fn display_exit_code(value: Option<i32>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "terminated_by_signal".to_owned())
+}
+
 fn task_status_allows_cleanup(status: &str) -> bool {
     matches!(status, "merged" | "completed" | "abandoned")
 }
@@ -2235,7 +2427,7 @@ fn strip_line_ending(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use raptor_core::TaskId;
+    use raptor_core::{SwarmAgentRole, TaskId};
     use raptor_providers::{ProviderCapabilities, ProviderError};
     use raptor_store::{read_swarm_metadata, read_task_metadata, CONFIG_FILE_NAME};
     use std::cell::Cell;
@@ -2423,6 +2615,33 @@ mod tests {
         );
     }
 
+    fn commit_cargo_fixture(path: &Path) {
+        fs::create_dir_all(path.join("src")).unwrap();
+        fs::write(
+            path.join("Cargo.toml"),
+            "[package]\nname = \"raptor_test_fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .unwrap();
+        fs::write(
+            path.join("src/lib.rs"),
+            "pub fn add(left: i32, right: i32) -> i32 { left + right }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds_numbers() {\n        assert_eq!(add(2, 2), 4);\n    }\n}\n",
+        )
+        .unwrap();
+        run_git(path, &["add", "Cargo.toml", "src/lib.rs"]);
+        run_git(
+            path,
+            &[
+                "-c",
+                "user.name=Raptor Test",
+                "-c",
+                "user.email=raptor@example.invalid",
+                "commit",
+                "-m",
+                "add cargo fixture",
+            ],
+        );
+    }
+
     fn task_worktree_path(repository_root: &Path, task_id: &TaskId) -> PathBuf {
         repository_root
             .join(".raptor")
@@ -2561,11 +2780,7 @@ mod tests {
 
     #[test]
     fn parses_router_commands() {
-        let commands = [
-            ("init", CliCommand::Init),
-            ("test", CliCommand::Test),
-            ("doctor", CliCommand::Doctor),
-        ];
+        let commands = [("init", CliCommand::Init), ("doctor", CliCommand::Doctor)];
 
         for (arg, expected) in commands {
             assert_eq!(parse_args([arg]).unwrap(), expected);
@@ -2685,6 +2900,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_test_task_id_and_explicit_command() {
+        assert_eq!(
+            parse_args(["test", "task-123"]).unwrap(),
+            CliCommand::Test {
+                task_id: "task-123".to_owned(),
+                test_command: None
+            }
+        );
+        assert_eq!(
+            parse_args(["test", "task-123", "--", "cargo", "test", "--quiet"]).unwrap(),
+            CliCommand::Test {
+                task_id: "task-123".to_owned(),
+                test_command: Some(vec![
+                    "cargo".to_owned(),
+                    "test".to_owned(),
+                    "--quiet".to_owned()
+                ])
+            }
+        );
+    }
+
+    #[test]
     fn parses_merge_task_id() {
         assert_eq!(
             parse_args(["merge", "task-123"]).unwrap(),
@@ -2796,6 +3033,19 @@ mod tests {
 
         assert!(review_error.to_string().contains("task id"));
         assert!(diff_error.to_string().contains("task id"));
+    }
+
+    #[test]
+    fn rejects_missing_and_extra_test_arguments() {
+        let missing_error = parse_args(["test"]).unwrap_err();
+        let empty_explicit = parse_args(["test", "task-123", "--"]).unwrap_err();
+        let extra_error = parse_args(["test", "task-123", "cargo", "test"]).unwrap_err();
+
+        assert!(missing_error.to_string().contains("task id"));
+        assert!(empty_explicit.to_string().contains("required after --"));
+        assert!(extra_error
+            .to_string()
+            .contains("optional explicit command"));
     }
 
     #[test]
@@ -4324,6 +4574,251 @@ mod tests {
     }
 
     #[test]
+    fn test_task_detects_and_runs_cargo_tests_in_task_worktree() {
+        let test_dir = TestDir::create("test-task-detect-cargo");
+        initialize_git_repo(&test_dir.path);
+        commit_cargo_fixture(&test_dir.path);
+        let description = "Run task tests";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let worktree_path = task_worktree_path(&test_dir.path, &task_id);
+        let before_source = fs::read_to_string(worktree_path.join("src/lib.rs")).unwrap();
+        let metadata_path = task_metadata_path(&test_dir.path, &task_id);
+        let before_metadata = fs::read_to_string(&metadata_path).unwrap();
+        let output = run(["test", task_id.as_str()], &test_dir.path).unwrap();
+
+        assert!(output.contains("RaptorCode Test Run"));
+        assert!(output.contains("Mode: single-task"));
+        assert!(output.contains("Targets: 1"));
+        assert!(output.contains("Summary: 1/1 passed"));
+        assert!(output.contains("Command: cargo test"));
+        assert!(output.contains("Command source: detected Cargo.toml"));
+        assert!(output.contains("Status: passed"));
+        assert!(output.contains("Dependency installation: not performed"));
+        assert_eq!(fs::read_to_string(metadata_path).unwrap(), before_metadata);
+        assert_eq!(
+            fs::read_to_string(worktree_path.join("src/lib.rs")).unwrap(),
+            before_source
+        );
+    }
+
+    #[test]
+    fn test_task_supports_explicit_test_command() {
+        let test_dir = TestDir::create("test-task-explicit");
+        initialize_git_repo(&test_dir.path);
+        commit_cargo_fixture(&test_dir.path);
+        let description = "Run explicit task tests";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let output = run(
+            ["test", task_id.as_str(), "--", "cargo", "test", "--quiet"],
+            &test_dir.path,
+        )
+        .unwrap();
+
+        assert!(output.contains("Command: cargo test --quiet"));
+        assert!(output.contains("Command source: explicit CLI command"));
+        assert!(output.contains("Summary: 1/1 passed"));
+    }
+
+    #[test]
+    fn test_task_reports_failing_command_with_captured_output() {
+        let test_dir = TestDir::create("test-task-failure");
+        initialize_git_repo(&test_dir.path);
+        commit_cargo_fixture(&test_dir.path);
+        let description = "Run failing task tests";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let error = run(
+            [
+                "test",
+                task_id.as_str(),
+                "--",
+                "cargo",
+                "test",
+                "--manifest-path",
+                "missing-Cargo.toml",
+            ],
+            &test_dir.path,
+        )
+        .unwrap_err();
+        let output = error.output().unwrap();
+
+        assert_eq!(error.to_string(), "test command failed");
+        assert!(output.contains("Status: failed"));
+        assert!(output.contains("Exit code:"));
+        assert!(output.contains("Stderr:"));
+        assert!(output.contains("missing-Cargo.toml"));
+    }
+
+    #[test]
+    fn test_task_rejects_missing_detected_command_and_unsafe_explicit_command() {
+        let test_dir = TestDir::create("test-task-no-command");
+        initialize_git_repo(&test_dir.path);
+        let description = "Run missing test command";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        run(["task", description], &test_dir.path).unwrap();
+        let missing = run(["test", task_id.as_str()], &test_dir.path).unwrap_err();
+        let blocked = run(
+            ["test", task_id.as_str(), "--", "npm", "install"],
+            &test_dir.path,
+        )
+        .unwrap_err();
+        let shell_blocked = run(
+            [
+                "test",
+                task_id.as_str(),
+                "--",
+                "bash",
+                "-lc",
+                "touch SHOULD_NOT_EXIST",
+            ],
+            &test_dir.path,
+        )
+        .unwrap_err();
+        let traversal_blocked = run(
+            [
+                "test",
+                task_id.as_str(),
+                "--",
+                "cargo",
+                "test",
+                "--manifest-path",
+                "../Cargo.toml",
+            ],
+            &test_dir.path,
+        )
+        .unwrap_err();
+
+        assert!(missing.to_string().contains("no test command detected"));
+        assert!(missing
+            .output()
+            .unwrap()
+            .contains("blocked_no_test_command_detected"));
+        assert!(blocked.to_string().contains("not allowed"));
+        assert!(shell_blocked.to_string().contains("allowed test command"));
+        assert!(traversal_blocked
+            .to_string()
+            .contains("safe test command argument"));
+        assert!(!task_worktree_path(&test_dir.path, &task_id)
+            .join("SHOULD_NOT_EXIST")
+            .exists());
+    }
+
+    #[test]
+    fn test_swarm_runs_test_command_in_all_role_worktrees() {
+        let test_dir = TestDir::create("test-swarm-all");
+        initialize_git_repo(&test_dir.path);
+        commit_cargo_fixture(&test_dir.path);
+        let description = "Run swarm tests";
+        let task_id = TaskId::from_description(description).unwrap();
+        let provider = FakeDeepSeekProvider::new("Plan tests.");
+
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&provider),
+        )
+        .unwrap();
+        let metadata_path = swarm_metadata_path(&test_dir.path, &task_id);
+        let before_metadata = fs::read_to_string(&metadata_path).unwrap();
+        let before_sources = SwarmAgentRole::ALL
+            .iter()
+            .map(|role| {
+                let role = role.as_str();
+                (
+                    role,
+                    fs::read_to_string(
+                        swarm_agent_worktree_path(&test_dir.path, &task_id, role)
+                            .join("src/lib.rs"),
+                    )
+                    .unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let output = run(
+            ["test", task_id.as_str(), "--", "cargo", "test", "--quiet"],
+            &test_dir.path,
+        )
+        .unwrap();
+
+        assert!(output.contains("Mode: swarm"));
+        assert!(output.contains("Targets: 4"));
+        assert!(output.contains("Summary: 4/4 passed"));
+        assert!(output.contains("Target: frontend-agent"));
+        assert!(output.contains("Target: backend-agent"));
+        assert!(output.contains("Target: test-agent"));
+        assert!(output.contains("Target: security-agent"));
+        assert_eq!(fs::read_to_string(metadata_path).unwrap(), before_metadata);
+        for (role, before_source) in before_sources {
+            assert_eq!(
+                fs::read_to_string(
+                    swarm_agent_worktree_path(&test_dir.path, &task_id, role).join("src/lib.rs")
+                )
+                .unwrap(),
+                before_source
+            );
+        }
+    }
+
+    #[test]
+    fn test_task_rejects_unsafe_ids_missing_metadata_and_missing_worktrees() {
+        let test_dir = TestDir::create("test-task-rejects");
+        initialize_git_repo(&test_dir.path);
+        commit_cargo_fixture(&test_dir.path);
+        let description = "Reject test worktree";
+        let task_id = TaskId::from_description(description).unwrap();
+
+        let unsafe_error = run(["test", "../secret"], &test_dir.path).unwrap_err();
+        let missing_error = run(["test", "missing-task"], &test_dir.path).unwrap_err();
+
+        run(["task", description], &test_dir.path).unwrap();
+        fs::remove_dir_all(task_worktree_path(&test_dir.path, &task_id)).unwrap();
+        let missing_worktree = run(["test", task_id.as_str()], &test_dir.path).unwrap_err();
+
+        assert!(unsafe_error.to_string().contains("not safe"));
+        assert!(missing_error
+            .to_string()
+            .contains("swarm metadata not found"));
+        assert!(missing_worktree.to_string().contains("worktree not found"));
+    }
+
+    #[test]
+    fn test_swarm_rejects_unsafe_role_worktree_path() {
+        let test_dir = TestDir::create("test-swarm-unsafe-path");
+        initialize_git_repo(&test_dir.path);
+        commit_cargo_fixture(&test_dir.path);
+        let description = "Reject unsafe swarm test path";
+        let task_id = TaskId::from_description(description).unwrap();
+        let provider = FakeDeepSeekProvider::new("Plan first.");
+
+        create_swarm_with_planning_source(
+            &test_dir.path,
+            description,
+            SwarmPlanningSource::Provider(&provider),
+        )
+        .unwrap();
+        replace_swarm_worktree_path_in_metadata(
+            &test_dir.path,
+            &task_id,
+            "security-agent",
+            &test_dir.path.join("outside-security-agent"),
+        );
+
+        let error = run(
+            ["test", task_id.as_str(), "--", "cargo", "test", "--quiet"],
+            &test_dir.path,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("safe project path"));
+    }
+
+    #[test]
     fn merge_preflight_succeeds_with_changed_worktree() {
         let test_dir = TestDir::create("merge-preflight-success");
         initialize_git_repo(&test_dir.path);
@@ -4985,12 +5480,5 @@ mod tests {
         assert!(output.contains("Cleanup result: completed"));
         assert!(!worktree_path.exists());
         assert!(task_metadata_path(&test_dir.path, &task_id).exists());
-    }
-
-    #[test]
-    fn stub_commands_are_clear() {
-        let output = run(["test"], Path::new(".")).unwrap();
-
-        assert_eq!(output, "raptor test: not implemented yet\n");
     }
 }
