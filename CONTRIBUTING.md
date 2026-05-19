@@ -29,4 +29,6 @@ Contributions are accepted under `MIT OR Apache-2.0`, matching the repository li
 
 ## Current Project State
 
-The repository includes a minimal Rust workspace skeleton and a first CLI binary named `raptor`. The V1 CLI, TUI, and orchestrator behavior are not complete.
+The repository includes a Rust workspace and CLI binary named `raptor`. The v0.1 release candidate supports a local-first supervised workflow with DeepSeek chat, role worktrees, planning artifacts, implementation proposal artifacts, read-only review/diff inspection, supervised tests, explicit merge control, and a simple read-only TUI dashboard.
+
+DeepSeek is the only implemented execution provider in v0.1. Do not add Phase 2 providers, MCP, cloud features, desktop UI, team features, plugin systems, marketplace features, policy enforcement hooks, or enterprise policy systems before BOB explicitly reopens that scope.

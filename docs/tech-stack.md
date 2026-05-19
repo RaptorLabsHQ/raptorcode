@@ -18,7 +18,7 @@ Rust is the default implementation language for RaptorCode because the project n
 - Core domain: task ids, task status, task metadata, and worktree information in `raptor-core`.
 - TUI: Rust terminal user interface boundary in `raptor-tui`, using Ratatui and Crossterm for the v0.1 read-only dashboard.
 - Orchestrator: Rust application layer boundary for read-only agent session state, permission policy modeling, v0.1 role templates, and future multi-agent workflow control in `raptor-agent`.
-- Providers: Rust provider abstraction boundary for DeepSeek first, future OpenAI/Codex, future Claude, future Gemini, and future local models in `raptor-providers`.
+- Providers: Rust provider abstraction boundary for DeepSeek execution first. Other provider names are future metadata boundaries only and do not execute in v0.1.
 - Git integration: local git repository inspection, worktree operations, read-only single-task and swarm role worktree status/diff inspection, supervised merge execution, and validated worktree cleanup in `raptor-git`.
 - Store: local configuration, provider enablement parsing, task metadata persistence, swarm metadata persistence and planning status updates, agent metadata persistence, task metadata inspection, and lifecycle status updates in `raptor-store`.
 - Tool diagnostics: local tooling checks plus safe test command detection and execution in `raptor-tools`.
@@ -43,7 +43,8 @@ Before v0.1, the tech stack may grow only to support the launch path:
 - DeepSeek execution.
 - Minimal role-based swarm orchestration.
 - Minimal worktree-scoped file modification.
-- Final README/demo polish.
-- Release notes and v0.1 tag.
+- Final verification.
+- Release notes final review.
+- v0.1 tag after explicit approval.
 
 Do not add provider SDKs, async runtimes, secret-management dependencies, or additional provider implementations before v0.1. `reqwest`, `serde`, and `serde_json` are present only for the DeepSeek chat completion path, test command detection, and tests.

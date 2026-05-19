@@ -22,8 +22,10 @@ Only these items are active before v0.1 is complete, tagged, documented, and lau
 - [x] Ratatui dashboard
 - [x] Premium terminal launch screen shown when user runs `raptor`
 - [x] DeepSeek API key environment detection and fallback instruction URL
-- [ ] README install/demo polish
-- [ ] Release notes
+- [x] README install/demo polish
+- [x] Changelog and release process draft
+- [ ] Final verification
+- [ ] Release notes final review
 - [ ] Tag `v0.1.0`
 
 ## v0.1 Scope Lock
@@ -73,10 +75,11 @@ Complete and in-scope:
 - `raptor tui` opens the simple read-only Ratatui dashboard.
 - Startup detects `DEEPSEEK_API_KEY` and prints the DeepSeek key URL when missing without storing or printing keys.
 
-Incomplete but required:
+Remaining before tag:
 
-- README install/demo polish.
-- Release notes and `v0.1.0` tag.
+- Final verification.
+- Release notes final review.
+- Tag `v0.1.0`.
 
 Implemented early but frozen:
 
@@ -147,4 +150,4 @@ The output must be understandable, safe, demo-ready, and aligned with the premiu
 
 ## Next Implementation Prompt
 
-PROMPT 24 - Final README demo polish and v0.1 release preparation
+PROMPT 25 - Final verification and tag v0.1.0

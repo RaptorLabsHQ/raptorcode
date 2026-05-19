@@ -10,7 +10,7 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 
 ## Supported Versions
 
-No stable release exists yet. Security reports should target the current `main` branch until versioned releases begin.
+No tagged stable release exists yet. Security reports should target the current `main` branch until `v0.1.0` is tagged.
 
 ## Reporting A Vulnerability
 
@@ -33,3 +33,5 @@ For now, report security issues through GitHub issues only if the issue does not
 - Remote agent sandboxing guarantees.
 - Enterprise identity provider integrations.
 - Formal compliance certification.
+- Policy enforcement hooks.
+- Additional execution providers beyond DeepSeek.

@@ -29,7 +29,9 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 - Premium terminal launch screen.
 - DeepSeek API key onboarding.
 - README install/demo polish.
-- Release notes.
+- Changelog and release process draft.
+- Final verification.
+- Release notes final review.
 - Tag `v0.1.0`.
 
 ## v0.1 Scope Lock
@@ -77,10 +79,11 @@ Complete and in-scope for v0.1:
 - Simple read-only `raptor tui` Ratatui dashboard.
 - Startup DeepSeek API key detection and fallback URL.
 
-Incomplete but required for v0.1:
+Remaining before v0.1 tag:
 
-- README install/demo polish.
-- Release notes and `v0.1.0` tag.
+- Final verification.
+- Release notes final review.
+- Tag `v0.1.0`.
 
 Implemented early but beyond strict v0.1 scope:
 
@@ -98,8 +101,9 @@ Code or docs that were pointing toward Phase 2 before v0.1:
 
 Direct blockers for v0.1 launch:
 
-- README install/demo polish is not complete.
-- Release notes and `v0.1.0` tag are not complete.
+- Final verification is not complete.
+- Release notes need final review.
+- `v0.1.0` tag is not created.
 
 ## Definition Of Done
 
@@ -119,5 +123,5 @@ DeepSeek is the only provider execution path before v0.1. Startup checks only wh
 
 ## Near-Term Backlog
 
-- PROMPT 24 - Final README demo polish and v0.1 release preparation.
-- Implement README/demo polish, release notes, and tag preparation only as required for v0.1.
+- PROMPT 25 - Final verification and tag v0.1.0.
+- Run final verification, review release notes, and tag only after BOB explicitly approves tagging.

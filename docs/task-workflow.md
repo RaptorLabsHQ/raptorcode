@@ -522,4 +522,4 @@ Persisted agent sessions and permission policy were implemented early but are fr
 
 ## Recommended Next Step
 
-PROMPT 24 - Final README demo polish and v0.1 release preparation
+PROMPT 25 - Final verification and tag v0.1.0
