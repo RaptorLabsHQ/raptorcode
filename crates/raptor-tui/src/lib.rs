@@ -368,100 +368,183 @@ fn render_compact_startup_banner(options: &StartupBannerOptions) -> String {
         )
     ));
     output.push_str(&format!(
-        "Welcome, {}. Enjoy your coding session. Ship clean.\n",
-        options.user_name
+        "{}\n",
+        paint(
+            options.color_mode,
+            BrandToken::Secondary,
+            "https://raptorlabs.dev"
+        )
     ));
-    output.push_str(&startup_api_key_line(options));
+    output.push_str("by Cyberlink Security\n");
+    output.push_str(&format!(
+        "{}\n",
+        paint(
+            options.color_mode,
+            BrandToken::Primary,
+            "Agentic software engineering at predator speed."
+        )
+    ));
+    output.push_str(&format!("> Welcome, {}.\n", options.user_name));
+    output.push_str("  The Raptor Labs team wishes you an enjoyable coding session\n");
+    output.push_str("  and a clean, successful delivery.\n");
+    push_compact_metadata(options, &mut output);
+    output.push_str(&format!(
+        "{}\n",
+        paint(options.color_mode, BrandToken::BrandRed, "raptor>")
+    ));
     output
 }
 
 fn render_wide_startup_banner(options: &StartupBannerOptions) -> String {
     let width = bounded_width(options.terminal_width, 96);
-    let separator = paint(
-        options.color_mode,
-        BrandToken::SubtleDeepRed,
-        &"-".repeat(width as usize),
-    );
-    let headline = format!("Raptor Code {}", display_version(&options.version));
     let mut output = String::new();
 
-    output.push_str(&separator);
-    output.push('\n');
-    output.push_str(&format!(
-        "  {}  {}\n",
-        paint(
-            options.color_mode,
-            BrandToken::BrandRed,
-            "[ RC ] RAPTOR CODE"
-        ),
-        paint(options.color_mode, BrandToken::Primary, "RAPTOR LABS")
-    ));
-    output.push_str(&format!(
-        "  {}  {}\n\n",
-        paint(
-            options.color_mode,
-            BrandToken::DarkRed,
-            "terminal engineering system"
-        ),
-        paint(options.color_mode, BrandToken::Secondary, RAPTOR_LABS_URL)
-    ));
-    output.push_str(&format!(
-        "  {}\n",
-        paint(options.color_mode, BrandToken::Primary, &headline)
-    ));
-    output.push_str(&format!(
-        "  {}\n\n",
-        paint(
-            options.color_mode,
-            BrandToken::Secondary,
-            "Agentic software engineering at predator speed."
-        )
-    ));
+    push_border(options, &mut output, width, BrandToken::SubtleDeepRed);
+    for (mark, wordmark) in wide_brand_lines() {
+        push_split_brand_line(options, &mut output, width, mark, wordmark);
+    }
+    push_centered_line(
+        options,
+        &mut output,
+        width,
+        "RAPTOR CODE",
+        BrandToken::BrandRed,
+    );
+    push_brand_rule(options, &mut output, width);
+    push_centered_line(
+        options,
+        &mut output,
+        width,
+        "RAPTOR LABS",
+        BrandToken::BrandRed,
+    );
+    push_centered_line(
+        options,
+        &mut output,
+        width,
+        RAPTOR_LABS_URL,
+        BrandToken::Secondary,
+    );
+    push_centered_line(
+        options,
+        &mut output,
+        width,
+        "by Cyberlink Security",
+        BrandToken::Muted,
+    );
+    push_border(options, &mut output, width, BrandToken::SubtleDeepRed);
+    push_product_block(options, &mut output);
     push_greeting(options, &mut output);
     push_metadata(options, &mut output);
     output.push_str(&format!(
-        "\n  {}\n",
-        paint(
-            options.color_mode,
-            BrandToken::Muted,
-            "Type /help for commands"
-        )
+        "{}\n",
+        paint(options.color_mode, BrandToken::BrandRed, "raptor>")
     ));
-    output.push_str(&separator);
-    output.push('\n');
 
     output
 }
 
 fn render_stacked_startup_banner(options: &StartupBannerOptions) -> String {
     let width = bounded_width(options.terminal_width, 78);
-    let separator = paint(
-        options.color_mode,
-        BrandToken::SubtleDeepRed,
-        &"-".repeat(width as usize),
-    );
     let mut output = String::new();
 
-    output.push_str(&separator);
-    output.push('\n');
+    push_border(options, &mut output, width, BrandToken::SubtleDeepRed);
+    for line in stacked_brand_lines() {
+        push_centered_line(options, &mut output, width, line, BrandToken::BrandRed);
+    }
+    push_centered_line(
+        options,
+        &mut output,
+        width,
+        "RAPTOR CODE",
+        BrandToken::BrandRed,
+    );
+    push_brand_rule(options, &mut output, width);
+    push_centered_line(
+        options,
+        &mut output,
+        width,
+        "RAPTOR LABS",
+        BrandToken::BrandRed,
+    );
+    push_centered_line(
+        options,
+        &mut output,
+        width,
+        RAPTOR_LABS_URL,
+        BrandToken::Secondary,
+    );
+    push_centered_line(
+        options,
+        &mut output,
+        width,
+        "by Cyberlink Security",
+        BrandToken::Muted,
+    );
+    push_border(options, &mut output, width, BrandToken::SubtleDeepRed);
+    push_product_block(options, &mut output);
+    push_greeting(options, &mut output);
+    push_metadata(options, &mut output);
     output.push_str(&format!(
-        "  {}\n",
-        paint(
-            options.color_mode,
-            BrandToken::BrandRed,
-            "[ RC ] RAPTOR CODE"
-        )
+        "{}\n",
+        paint(options.color_mode, BrandToken::BrandRed, "raptor>")
     ));
+
+    output
+}
+
+fn wide_brand_lines() -> [(&'static str, &'static str); 11] {
+    [
+        (
+            "   RRRRRR\\       ",
+            "RRRRR    AAA   PPPPP  TTTTTT  OOO   RRRRR",
+        ),
+        (
+            "   RR   RR\\      ",
+            "RR  RR  A   A  PP  PP   TT   O   O  RR  RR",
+        ),
+        (
+            "   RR   RR |     ",
+            "RR  RR  A   A  PP  PP   TT   O   O  RR  RR",
+        ),
+        (
+            "   RRRRRR /      ",
+            "RRRRR   AAAAA  PPPPP    TT   O   O  RRRRR",
+        ),
+        (
+            "   RR  RR\\       ",
+            "RR  RR  A   A  PP       TT   O   O  RR  RR",
+        ),
+        (
+            "   RR   RR\\      ",
+            "RR   RR A   A  PP       TT    OOO   RR   RR",
+        ),
+        ("   RR    RR\\     ", "  CCCCC   OOO   DDDD   EEEEE"),
+        ("   predator AI   ", "  CC     O   O  DD  D  EE"),
+        ("                  ", "  CC     O   O  DD  D  EEEE"),
+        ("                  ", "  CC     O   O  DD  D  EE"),
+        ("                  ", "  CCCCC   OOO   DDDD   EEEEE"),
+    ]
+}
+
+fn stacked_brand_lines() -> [&'static str; 9] {
+    [
+        "RRRRR    AAA   PPPPP  TTTTTT  OOO   RRRRR",
+        "RR  RR  A   A  PP  PP   TT   O   O  RR  RR",
+        "RRRRR   AAAAA  PPPPP    TT   O   O  RRRRR",
+        "RR   RR A   A  PP       TT    OOO   RR   RR",
+        " CCCCC   OOO   DDDD   EEEEE",
+        "CC      O   O  DD  D  EE",
+        "CC      O   O  DD  D  EEEE",
+        "CC      O   O  DD  D  EE",
+        " CCCCC   OOO   DDDD   EEEEE",
+    ]
+}
+
+fn push_product_block(options: &StartupBannerOptions, output: &mut String) {
     output.push_str(&format!(
-        "  {}\n",
-        paint(options.color_mode, BrandToken::Primary, "RAPTOR LABS")
-    ));
-    output.push_str(&format!(
-        "  {}\n\n",
-        paint(options.color_mode, BrandToken::Secondary, RAPTOR_LABS_URL)
-    ));
-    output.push_str(&format!(
-        "  {}\n",
+        "\n  {} {}\n",
+        paint(options.color_mode, BrandToken::BrandRed, "::"),
         paint(
             options.color_mode,
             BrandToken::Primary,
@@ -476,25 +559,12 @@ fn render_stacked_startup_banner(options: &StartupBannerOptions) -> String {
             "Agentic software engineering at predator speed."
         )
     ));
-    push_greeting(options, &mut output);
-    push_metadata(options, &mut output);
-    output.push_str(&format!(
-        "\n  {}\n",
-        paint(
-            options.color_mode,
-            BrandToken::Muted,
-            "Type /help for commands"
-        )
-    ));
-    output.push_str(&separator);
-    output.push('\n');
-
-    output
 }
 
 fn push_greeting(options: &StartupBannerOptions, output: &mut String) {
     output.push_str(&format!(
-        "  {}\n",
+        "  {} {}\n",
+        paint(options.color_mode, BrandToken::BrandRed, ">"),
         paint(
             options.color_mode,
             BrandToken::Primary,
@@ -502,63 +572,212 @@ fn push_greeting(options: &StartupBannerOptions, output: &mut String) {
         )
     ));
     output.push_str(&format!(
+        "  {}\n",
+        paint(
+            options.color_mode,
+            BrandToken::Secondary,
+            "The Raptor Labs team wishes you an enjoyable coding session"
+        )
+    ));
+    output.push_str(&format!(
         "  {}\n\n",
         paint(
             options.color_mode,
             BrandToken::Secondary,
-            "The Raptor Labs team wishes you an enjoyable coding session and a clean, successful delivery."
+            "and a clean, successful delivery."
         )
     ));
 }
 
 fn push_metadata(options: &StartupBannerOptions, output: &mut String) {
-    output.push_str(&format!(
-        "  {} {}\n",
-        paint(
-            options.color_mode,
-            BrandToken::Secondary,
-            "Working directory:"
-        ),
-        options.cwd.display()
-    ));
-    output.push_str(&format!(
-        "  {} {}\n",
-        paint(options.color_mode, BrandToken::Secondary, "Model:"),
+    let width = bounded_width(options.terminal_width, 96);
+    let metadata_width = width.clamp(66, 96);
+
+    push_border(options, output, metadata_width, BrandToken::Muted);
+    push_metadata_row(
+        options,
+        output,
+        metadata_width,
+        "Working directory",
+        &options.cwd.display().to_string(),
+    );
+    push_metadata_row(
+        options,
+        output,
+        metadata_width,
+        "Model",
+        options.model_name.as_deref().unwrap_or("deepseek-chat"),
+    );
+    push_metadata_row(
+        options,
+        output,
+        metadata_width,
+        "Mode",
         options
-            .model_name
+            .mode
             .as_deref()
-            .unwrap_or("DeepSeek / deepseek-chat")
-    ));
-    output.push_str(&format!(
-        "  {} {}\n",
-        paint(options.color_mode, BrandToken::Secondary, "Mode:"),
-        options.mode.as_deref().unwrap_or("Supervised v0.1")
-    ));
-    output.push_str(&startup_api_key_line(options));
+            .unwrap_or("supervised agentic session"),
+    );
+    push_metadata_row(
+        options,
+        output,
+        metadata_width,
+        "DeepSeek API key",
+        api_key_status(options.deepseek_api_key_present),
+    );
+    if !options.deepseek_api_key_present {
+        push_metadata_row(
+            options,
+            output,
+            metadata_width,
+            "Get a key",
+            &options.api_key_url,
+        );
+    }
+    push_metadata_row(
+        options,
+        output,
+        metadata_width,
+        "Type",
+        "/help for commands",
+    );
+    push_border(options, output, metadata_width, BrandToken::Muted);
+    output.push('\n');
 }
 
-fn startup_api_key_line(options: &StartupBannerOptions) -> String {
+fn push_compact_metadata(options: &StartupBannerOptions, output: &mut String) {
+    output.push_str(&format!("Working directory : {}\n", options.cwd.display()));
+    output.push_str(&format!(
+        "Model             : {}\n",
+        options.model_name.as_deref().unwrap_or("deepseek-chat")
+    ));
+    output.push_str(&format!(
+        "Mode              : {}\n",
+        options
+            .mode
+            .as_deref()
+            .unwrap_or("supervised agentic session")
+    ));
     if options.deepseek_api_key_present {
-        format!(
-            "  {} {}\n",
-            paint(
-                options.color_mode,
-                BrandToken::Secondary,
-                "DeepSeek API key:"
-            ),
-            paint(options.color_mode, BrandToken::BrandRed, "detected")
-        )
+        output.push_str("DeepSeek API key  : detected\n");
     } else {
-        format!(
-            "  {} missing\n  Get a DeepSeek API key at {}\n",
-            paint(
-                options.color_mode,
-                BrandToken::Secondary,
-                "DeepSeek API key:"
-            ),
-            options.api_key_url
-        )
+        output.push_str("DeepSeek API key  : missing\n");
+        output.push_str(&format!("Get a key         : {}\n", options.api_key_url));
     }
+    output.push_str("Type              : /help for commands\n");
+}
+
+fn push_split_brand_line(
+    options: &StartupBannerOptions,
+    output: &mut String,
+    width: u16,
+    mark: &str,
+    wordmark: &str,
+) {
+    let inner_width = width.saturating_sub(4) as usize;
+    let left_width = 20;
+    let separator = " | ";
+    let right_width = inner_width.saturating_sub(left_width + separator.len());
+    let left = fit_field(mark, left_width);
+    let right = fit_field(wordmark, right_width);
+
+    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
+    output.push(' ');
+    output.push_str(&paint(options.color_mode, BrandToken::BrandRed, &left));
+    output.push_str(&paint(options.color_mode, BrandToken::Muted, separator));
+    output.push_str(&paint(options.color_mode, BrandToken::Primary, &right));
+    output.push(' ');
+    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
+    output.push('\n');
+}
+
+fn push_centered_line(
+    options: &StartupBannerOptions,
+    output: &mut String,
+    width: u16,
+    value: &str,
+    token: BrandToken,
+) {
+    let inner_width = width.saturating_sub(4) as usize;
+    let value = fit_value(value, inner_width);
+    let left_padding = inner_width.saturating_sub(value.len()) / 2;
+    let right_padding = inner_width.saturating_sub(value.len() + left_padding);
+
+    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
+    output.push(' ');
+    output.push_str(&" ".repeat(left_padding));
+    output.push_str(&paint(options.color_mode, token, &value));
+    output.push_str(&" ".repeat(right_padding));
+    output.push(' ');
+    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
+    output.push('\n');
+}
+
+fn push_metadata_row(
+    options: &StartupBannerOptions,
+    output: &mut String,
+    width: u16,
+    label: &str,
+    value: &str,
+) {
+    let inner_width = width.saturating_sub(4) as usize;
+    let label_width = 17;
+    let separator = " : ";
+    let value_width = inner_width.saturating_sub(label_width + separator.len());
+    let label = fit_field(label, label_width);
+    let value = fit_field(&fit_value(value, value_width), value_width);
+
+    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
+    output.push(' ');
+    output.push_str(&paint(options.color_mode, BrandToken::BrandRed, &label));
+    output.push_str(&paint(options.color_mode, BrandToken::Muted, separator));
+    output.push_str(&paint(options.color_mode, BrandToken::Secondary, &value));
+    output.push(' ');
+    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
+    output.push('\n');
+}
+
+fn push_border(options: &StartupBannerOptions, output: &mut String, width: u16, token: BrandToken) {
+    let width = width as usize;
+    let border = format!("+{}+", "-".repeat(width.saturating_sub(2)));
+    output.push_str(&paint(options.color_mode, token, &border));
+    output.push('\n');
+}
+
+fn push_brand_rule(options: &StartupBannerOptions, output: &mut String, width: u16) {
+    let inner_width = width.saturating_sub(4) as usize;
+    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
+    output.push(' ');
+    output.push_str(&paint(
+        options.color_mode,
+        BrandToken::DarkRed,
+        &"-".repeat(inner_width),
+    ));
+    output.push(' ');
+    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
+    output.push('\n');
+}
+
+fn fit_field(value: &str, width: usize) -> String {
+    let value = fit_value(value, width);
+    format!("{value:<width$}")
+}
+
+fn fit_value(value: &str, width: usize) -> String {
+    let char_count = value.chars().count();
+    if char_count <= width {
+        return value.to_owned();
+    }
+
+    if width <= 3 {
+        return ".".repeat(width);
+    }
+
+    let tail = value
+        .chars()
+        .skip(char_count - (width - 3))
+        .collect::<String>();
+    format!("...{tail}")
 }
 
 fn display_version(version: &str) -> String {
@@ -644,8 +863,8 @@ mod tests {
             cwd: PathBuf::from("/workspace/project"),
             deepseek_api_key_present: false,
             interactive: true,
-            mode: Some("Supervised v0.1".to_owned()),
-            model_name: Some("DeepSeek / deepseek-chat".to_owned()),
+            mode: Some("supervised agentic session".to_owned()),
+            model_name: Some("deepseek-chat".to_owned()),
             terminal_width: 100,
             user_name: "developer".to_owned(),
             version: "0.1.0".to_owned(),
@@ -657,10 +876,19 @@ mod tests {
         let output = render_startup_banner(&startup_options());
 
         assert!(output.contains("RAPTOR LABS"));
+        assert!(output.contains("RAPTOR CODE"));
         assert!(output.contains("Raptor Code v0.1"));
         assert!(output.contains(RAPTOR_LABS_URL));
+        assert!(output.contains("by Cyberlink Security"));
+        assert!(output.contains("Agentic software engineering at predator speed."));
         assert!(output.contains("Welcome, developer."));
+        assert!(output.contains("The Raptor Labs team wishes you an enjoyable coding session"));
+        assert!(output.contains("and a clean, successful delivery."));
         assert!(output.contains("https://platform.deepseek.com/api_keys"));
+        assert!(output.contains("raptor>"));
+        assert!(!output.contains("raptorcode>"));
+        assert!(!output.contains("Sonnet"));
+        assert!(!output.contains("high effort"));
     }
 
     #[test]
@@ -699,7 +927,45 @@ mod tests {
 
         assert!(output.contains("RAPTOR LABS"));
         assert!(!output.contains("████"));
-        assert!(output.contains("Ship clean."));
+        assert!(output.contains("Raptor Code v0.1"));
+        assert!(output.contains("raptor>"));
+        assert!(!output.contains("raptorcode>"));
+    }
+
+    #[test]
+    fn missing_key_message_includes_deepseek_key_url() {
+        let output = render_startup_banner(&startup_options());
+
+        assert!(output.contains("DeepSeek API key"));
+        assert!(output.contains("missing"));
+        assert!(output.contains("Get a key"));
+        assert!(output.contains("https://platform.deepseek.com/api_keys"));
+    }
+
+    #[test]
+    fn detected_key_state_does_not_print_key_value() {
+        let mut options = startup_options();
+        options.deepseek_api_key_present = true;
+
+        let output = render_startup_banner(&options);
+
+        assert!(output.contains("DeepSeek API key"));
+        assert!(output.contains("detected"));
+        assert!(!output.contains("dummy"));
+        assert!(!output.contains("sk-"));
+        assert!(!output.contains("https://platform.deepseek.com/api_keys"));
+    }
+
+    #[test]
+    fn ci_banner_is_minimal_and_script_safe() {
+        let mut options = startup_options();
+        options.ci = true;
+
+        let output = render_startup_banner(&options);
+
+        assert_eq!(output, "Raptor Code v0.1 - Raptor Labs\n");
+        assert!(!output.contains("\x1b["));
+        assert!(!output.contains("raptor>"));
     }
 
     #[test]
