@@ -30,32 +30,48 @@ Use the stable Rust toolchain.
 - Check: `cargo check`
 - Test: `cargo test`
 - Lint: `cargo clippy --all-targets --all-features`
-- Startup screen: `cargo run -p raptor-cli`
-- TUI dashboard command: `cargo run -p raptor-cli -- tui`
-- Version command: `cargo run -p raptor-cli -- --version`
-- Init command: `cargo run -p raptor-cli -- init`
-- Provider list command: `cargo run -p raptor-cli -- provider list`
-- Chat command: `DEEPSEEK_API_KEY=<key> cargo run -p raptor-cli -- chat "Explain this repository"`
-- Agent list command: `cargo run -p raptor-cli -- agent list`
-- Agent show command: `cargo run -p raptor-cli -- agent show <id>`
-- Agent create command: `cargo run -p raptor-cli -- agent create --role worker`
-- Agent policy command: `cargo run -p raptor-cli -- agent policy`
-- Task command: `cargo run -p raptor-cli -- task "describe the supervised task"`
-- Swarm command: `cargo run -p raptor-cli -- swarm "Add GitHub OAuth to this Next.js app"`
-- Swarm implementation proposal command: `cargo run -p raptor-cli -- swarm implement <task-id> frontend-agent`
-- Task list command: `cargo run -p raptor-cli -- task list`
-- Task show command: `cargo run -p raptor-cli -- task show <id>`
-- Task abandon command: `cargo run -p raptor-cli -- task abandon <id>`
-- Task cleanup command: `cargo run -p raptor-cli -- task cleanup <id>`
-- Review command: `cargo run -p raptor-cli -- review <task-id>`
-- Swarm role review command: `cargo run -p raptor-cli -- review <task-id> frontend-agent`
-- Diff command: `cargo run -p raptor-cli -- diff <task-id>`
-- Swarm role diff command: `cargo run -p raptor-cli -- diff <task-id> frontend-agent`
-- Test command: `cargo run -p raptor-cli -- test <task-id>`
-- Explicit test command: `cargo run -p raptor-cli -- test <task-id> -- cargo test`
-- Merge dry-run command: `cargo run -p raptor-cli -- merge <task-id>`
-- Merge execution command: `cargo run -p raptor-cli -- merge <task-id> --execute`
-- Doctor command: `cargo run -p raptor-cli -- doctor`
+
+Install the user-facing command from the repository root:
+
+```bash
+cargo install --path crates/raptor-cli --force
+```
+
+The Cargo package is internally named `raptor-cli`, but the installed binary and public command are `raptor`.
+
+- Startup screen: `raptor`
+- TUI dashboard command: `raptor tui`
+- Help command: `raptor --help`
+- Version command: `raptor --version`
+- Init command: `raptor init`
+- Provider list command: `raptor provider list`
+- Chat command: `DEEPSEEK_API_KEY=<key> raptor chat "Explain this repository"`
+- Agent list command: `raptor agent list`
+- Agent show command: `raptor agent show <id>`
+- Agent create command: `raptor agent create --role worker`
+- Agent policy command: `raptor agent policy`
+- Task command: `raptor task "describe the supervised task"`
+- Swarm command: `raptor swarm "Add GitHub OAuth to this Next.js app"`
+- Swarm implementation proposal command: `raptor swarm implement <task-id> frontend-agent`
+- Task list command: `raptor task list`
+- Task show command: `raptor task show <id>`
+- Task abandon command: `raptor task abandon <id>`
+- Task cleanup command: `raptor task cleanup <id>`
+- Review command: `raptor review <task-id>`
+- Swarm role review command: `raptor review <task-id> frontend-agent`
+- Diff command: `raptor diff <task-id>`
+- Swarm role diff command: `raptor diff <task-id> frontend-agent`
+- Test command: `raptor test <task-id>`
+- Explicit test command: `raptor test <task-id> -- cargo test`
+- Merge dry-run command: `raptor merge <task-id>`
+- Merge execution command: `raptor merge <task-id> --execute`
+- Doctor command: `raptor doctor`
+
+Developer-only Cargo invocation:
+
+```bash
+cargo run -p raptor-cli --bin raptor -- --help
+```
 
 ## Task Workflow Notes
 

@@ -39,12 +39,21 @@ Prerequisites:
 - Stable Rust toolchain.
 - Cargo.
 
-Clone and run:
+Clone and install the `raptor` command:
 
 ```bash
 git clone git@github.com:bobvasic/raptor-code.git
 cd raptor-code
-cargo run -p raptor-cli
+cargo install --path crates/raptor-cli --force
+```
+
+Verify the installed command:
+
+```bash
+raptor --help
+raptor
+raptor doctor
+raptor tui
 ```
 
 Run verification locally:
@@ -76,53 +85,64 @@ RaptorCode does not print, store, commit, or read API keys from `.env` files. If
 Show the v0.1 startup screen:
 
 ```bash
-cargo run -p raptor-cli
+raptor
 ```
 
 Inspect the local environment:
 
 ```bash
-cargo run -p raptor-cli -- doctor
-cargo run -p raptor-cli -- provider list
-cargo run -p raptor-cli -- agent policy
+raptor --help
+raptor doctor
+raptor provider list
+raptor agent policy
 ```
 
 Run DeepSeek chat after setting `DEEPSEEK_API_KEY`:
 
 ```bash
-cargo run -p raptor-cli -- chat "Explain this project"
+raptor chat "Explain this project"
 ```
 
 Create a supervised multi-agent swarm:
 
 ```bash
-cargo run -p raptor-cli -- swarm "Add GitHub OAuth to this Next.js app"
+raptor swarm "Add GitHub OAuth to this Next.js app"
 ```
 
 Generate an implementation proposal for one role:
 
 ```bash
-cargo run -p raptor-cli -- swarm implement <task-id> frontend-agent
+raptor swarm implement <task-id> frontend-agent
 ```
 
 Review, diff, and test the work:
 
 ```bash
-cargo run -p raptor-cli -- review <task-id>
-cargo run -p raptor-cli -- diff <task-id>
-cargo run -p raptor-cli -- test <task-id>
+raptor review <task-id>
+raptor diff <task-id>
+raptor test <task-id>
 ```
 
 Open the read-only dashboard:
 
 ```bash
-cargo run -p raptor-cli -- tui
+raptor tui
 ```
 
-Installed binary equivalents:
+Development from source:
+
+The package is internally named `raptor-cli`, but the installed binary and user command are `raptor`.
+
+```bash
+cargo run -p raptor-cli --bin raptor -- --help
+cargo run -p raptor-cli --bin raptor -- doctor
+```
+
+Installed binary commands:
 
 ```bash
 raptor
+raptor --help
 raptor doctor
 raptor provider list
 raptor agent policy

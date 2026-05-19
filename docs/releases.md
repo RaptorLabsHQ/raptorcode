@@ -28,13 +28,19 @@ Run these before tagging:
 cargo fmt
 cargo clippy --all-targets --all-features
 cargo test
+cargo build -p raptor-cli
+cargo run -p raptor-cli --bin raptor -- --help
 git diff --check
-cargo run -p raptor-cli -- --help
-cargo run -p raptor-cli
-cargo run -p raptor-cli -- doctor
-cargo run -p raptor-cli -- provider list
-cargo run -p raptor-cli -- agent policy
-cargo run -p raptor-cli -- tui
+```
+
+Verify the installed user-facing command from the repository root:
+
+```bash
+cargo install --path crates/raptor-cli --force
+raptor --help
+raptor
+raptor doctor
+raptor tui
 ```
 
 Do not run live DeepSeek commands during release verification unless `DEEPSEEK_API_KEY` is intentionally configured and the release operator confirms the network call is safe.

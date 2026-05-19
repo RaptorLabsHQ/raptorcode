@@ -46,7 +46,7 @@ No Phase 2 feature work is allowed before v0.1. This explicitly excludes advance
 
 The persisted agent sessions and permission policy added in commit `483135d7e8e8d25de726874eaddfaa7338f77fe0` are implemented early but frozen until after v0.1. They should be kept if tests pass and should not be expanded unless BOB explicitly reopens that scope after v0.1.
 
-The v0.1 binary remains `raptor`. A `raptorcode` alias can be considered later only after BOB explicitly approves that naming change.
+The v0.1 binary and user-facing command remain exactly `raptor`. No alternate primary command is active before v0.1.
 
 ## Current v0.1 Status
 

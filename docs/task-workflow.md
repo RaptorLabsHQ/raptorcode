@@ -17,29 +17,12 @@ The first single-worktree workflow is `raptor task "description"`. The v0.1 mult
 Create task infrastructure:
 
 ```bash
-cargo run -p raptor-cli -- task "describe the supervised task"
-cargo run -p raptor-cli -- swarm "Add GitHub OAuth to this Next.js app"
-cargo run -p raptor-cli -- swarm implement <task-id> frontend-agent
+raptor task "describe the supervised task"
+raptor swarm "Add GitHub OAuth to this Next.js app"
+raptor swarm implement <task-id> frontend-agent
 ```
 
 Inspect persisted task metadata:
-
-```bash
-cargo run -p raptor-cli -- task list
-cargo run -p raptor-cli -- task show <id>
-cargo run -p raptor-cli -- task abandon <id>
-cargo run -p raptor-cli -- task cleanup <id>
-cargo run -p raptor-cli -- review <task-id>
-cargo run -p raptor-cli -- review <task-id> frontend-agent
-cargo run -p raptor-cli -- diff <task-id>
-cargo run -p raptor-cli -- diff <task-id> frontend-agent
-cargo run -p raptor-cli -- test <task-id>
-cargo run -p raptor-cli -- test <task-id> -- cargo test
-cargo run -p raptor-cli -- merge <task-id>
-cargo run -p raptor-cli -- merge <task-id> --execute
-```
-
-Installed binary forms:
 
 ```bash
 raptor task "describe the supervised task"
