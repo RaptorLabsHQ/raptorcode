@@ -18,7 +18,7 @@ This document defines the v0.1 release preparation process for RaptorCode.
 - [x] Review final release notes.
 - [x] Tag `v0.1.0`.
 - [x] Push tag to GitHub.
-- [x] Create GitHub release.
+- [ ] Create GitHub release.
 
 ## Final Verification Commands
 
