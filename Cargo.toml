@@ -16,7 +16,7 @@ resolver = "2"
 authors = ["RaptorLabs.dev"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/bobvasic/raptor-code"
+repository = "https://github.com/RaptorLabsHQ/raptor-code"
 rust-version = "1.75"
 version = "0.1.0"
 

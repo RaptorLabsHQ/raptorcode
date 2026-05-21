@@ -4,9 +4,9 @@ RaptorCode is an open-source Rust-native multi-agent coding terminal from Raptor
 
 - Company: Raptor Labs
 - Website: https://raptorlabs.dev
-- Repository: https://github.com/bobvasic/raptor-code
+- Repository: https://github.com/RaptorLabsHQ/raptor-code
 - License: `MIT OR Apache-2.0`
-- Current status: v0.1 release candidate
+- Current status: v0.1.0 released
 
 RaptorCode v0.1 is a local-first supervised MVP. It is not a desktop app, a Warp clone, a full terminal emulator replacement, an enterprise policy platform, or an unsupervised developer replacement.
 
@@ -42,7 +42,7 @@ Prerequisites:
 Clone and install the `raptor` command:
 
 ```bash
-git clone git@github.com:bobvasic/raptor-code.git
+git clone git@github.com:RaptorLabsHQ/raptor-code.git
 cd raptor-code
 cargo install --path crates/raptor-cli --force
 ```
