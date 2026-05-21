@@ -6,9 +6,9 @@ Company: RaptorLabs.dev
 
 All notable RaptorCode changes will be documented in this file.
 
-## v0.1.0 - Release Ready
+## v0.1.0 - Released
 
-v0.1.0 is the first open-source MVP release candidate for RaptorCode.
+v0.1.0 is the first open-source MVP release for RaptorCode.
 
 ### Added
 

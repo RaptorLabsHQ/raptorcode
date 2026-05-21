@@ -14,22 +14,23 @@ This document defines the v0.1 release preparation process for RaptorCode.
 - [x] Confirm README public launch wording.
 - [x] Confirm changelog exists.
 - [x] Confirm release notes draft exists.
-- [ ] Run final verification.
-- [ ] Review final release notes.
-- [ ] Tag `v0.1.0`.
-- [ ] Push tag to GitHub.
-- [ ] Create GitHub release.
+- [x] Run final verification.
+- [x] Review final release notes.
+- [x] Tag `v0.1.0`.
+- [x] Push tag to GitHub.
+- [x] Create GitHub release.
 
 ## Final Verification Commands
 
 Run these before tagging:
 
 ```bash
-cargo fmt
-cargo clippy --all-targets --all-features
-cargo test
-cargo build -p raptor-cli
-cargo run -p raptor-cli --bin raptor -- --help
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo check --all-targets
+cargo test --workspace
+cargo test -p raptor-tui
+CI=true cargo run --quiet -p raptor-cli --bin raptor
 git diff --check
 ```
 
@@ -67,7 +68,7 @@ RaptorCode v0.1.0
 Body:
 
 ```markdown
-RaptorCode v0.1.0 is the first open-source MVP release candidate from Raptor Labs.
+RaptorCode v0.1.0 is the first open-source MVP release from Raptor Labs.
 
 RaptorCode is a Rust-native multi-agent coding terminal for local-first supervised AI coding workflows. It uses isolated git worktrees, DeepSeek-first planning and proposal generation, developer-reviewed diffs, supervised tests, and explicit merge control.
 

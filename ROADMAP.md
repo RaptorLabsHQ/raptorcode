@@ -24,9 +24,9 @@ Only these items are active before v0.1 is complete, tagged, documented, and lau
 - [x] DeepSeek API key environment detection and fallback instruction URL
 - [x] README install/demo polish
 - [x] Changelog and release process draft
-- [ ] Final verification
-- [ ] Release notes final review
-- [ ] Tag `v0.1.0`
+- [x] Final verification
+- [x] Release notes final review
+- [x] Tag `v0.1.0`
 
 ## v0.1 Scope Lock
 
