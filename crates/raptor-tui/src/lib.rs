@@ -18,29 +18,55 @@ use ratatui::{Frame, Terminal};
 pub const CRATE_PURPOSE: &str = "Terminal user interface boundaries for RaptorCode.";
 pub const RAPTOR_LABS_URL: &str = "https://raptorlabs.dev";
 
+const KEY_ART_RAPTOR: [&str; 6] = [
+    "██████╗  █████╗ ██████╗ ████████╗ ██████╗ ██████╗ ",
+    "██╔══██╗██╔══██╗██╔══██╗╚══██╔══╝██╔═══██╗██╔══██╗",
+    "██████╔╝███████║██████╔╝   ██║   ██║   ██║██████╔╝ ",
+    "██╔══██╗██╔══██║██╔═══╝    ██║   ██║   ██║██╔══██╗ ",
+    "██║  ██║██║  ██║██║        ██║   ╚██████╔╝██║  ██║ ",
+    "╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝    ╚═════╝ ╚═╝  ╚═╝",
+];
+
+const KEY_ART_CODE: [&str; 6] = [
+    " ██████╗  ██████╗ ██████╗ ███████╗",
+    "██╔════╝ ██╔═══██╗██╔══██╗██╔════╝",
+    "██║      ██║   ██║██║  ██║█████╗  ",
+    "██║      ██║   ██║██║  ██║██╔══╝  ",
+    "╚██████╗ ╚██████╔╝██████╔╝███████╗",
+    " ╚═════╝  ╚═════╝ ╚═════╝ ╚══════╝",
+];
+
+pub mod theme {
+    pub const RAPTOR_RED: &str = "E63946";
+    pub const RAPTOR_RED_MUTED: &str = "9E2A2F";
+    pub const TEXT: &str = "D7D7D7";
+    pub const DIM: &str = "7A7A7A";
+    pub const ACCENT: &str = "FFFFFF";
+}
+
 pub const BRAND_BACKGROUND_HEX: &str = "0A0A0A";
-pub const BRAND_PRIMARY_TEXT_HEX: &str = "F4F4F4";
-pub const BRAND_SECONDARY_TEXT_HEX: &str = "AAAAA9";
-pub const BRAND_MUTED_TEXT_HEX: &str = "636262";
-pub const BRAND_RED_HEX: &str = "FF1919";
-pub const BRAND_DARK_RED_HEX: &str = "A51D20";
-pub const BRAND_SUBTLE_DEEP_RED_HEX: &str = "261313";
+pub const BRAND_PRIMARY_TEXT_HEX: &str = theme::ACCENT;
+pub const BRAND_SECONDARY_TEXT_HEX: &str = theme::TEXT;
+pub const BRAND_MUTED_TEXT_HEX: &str = theme::DIM;
+pub const BRAND_RED_HEX: &str = theme::RAPTOR_RED;
+pub const BRAND_DARK_RED_HEX: &str = theme::RAPTOR_RED_MUTED;
+pub const BRAND_SUBTLE_DEEP_RED_HEX: &str = theme::RAPTOR_RED_MUTED;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorMode {
     None,
     Ansi16,
+    Ansi256,
     Truecolor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BrandToken {
-    BrandRed,
-    DarkRed,
-    Muted,
-    Primary,
-    Secondary,
-    SubtleDeepRed,
+    Accent,
+    Dim,
+    RaptorRed,
+    RaptorRedMuted,
+    Text,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +77,7 @@ pub struct StartupBannerOptions {
     pub compact: bool,
     pub cwd: PathBuf,
     pub deepseek_api_key_present: bool,
+    pub emoji: bool,
     pub interactive: bool,
     pub mode: Option<String>,
     pub model_name: Option<String>,
@@ -103,6 +130,7 @@ impl StartupBannerOptions {
             compact: true,
             cwd: cwd.into(),
             deepseek_api_key_present: false,
+            emoji: true,
             interactive: false,
             mode: None,
             model_name: None,
@@ -151,12 +179,31 @@ pub fn color_mode_from_environment(interactive: bool, ci: bool) -> ColorMode {
         return ColorMode::None;
     }
 
+    if let Ok(force_color) = env::var("FORCE_COLOR") {
+        let force_color = force_color.trim().to_lowercase();
+        if matches!(force_color.as_str(), "0" | "false" | "off" | "no") {
+            return ColorMode::None;
+        }
+        if matches!(force_color.as_str(), "3" | "truecolor" | "24bit") {
+            return ColorMode::Truecolor;
+        }
+        if matches!(force_color.as_str(), "2" | "256") {
+            return ColorMode::Ansi256;
+        }
+        return ColorMode::Ansi16;
+    }
+
     let colorterm = env::var("COLORTERM").unwrap_or_default().to_lowercase();
     if colorterm.contains("truecolor") || colorterm.contains("24bit") {
-        ColorMode::Truecolor
-    } else {
-        ColorMode::Ansi16
+        return ColorMode::Truecolor;
     }
+
+    let term = env::var("TERM").unwrap_or_default().to_lowercase();
+    if term.contains("256color") {
+        return ColorMode::Ansi256;
+    }
+
+    ColorMode::Ansi16
 }
 
 pub fn terminal_width_from_environment() -> u16 {
@@ -171,7 +218,7 @@ pub fn render_startup_banner(options: &StartupBannerOptions) -> String {
         );
     }
 
-    if options.compact || options.terminal_width < 70 {
+    if options.compact || options.terminal_width < 80 {
         return render_compact_startup_banner(options);
     }
 
@@ -355,417 +402,352 @@ fn draw_dashboard(frame: &mut Frame<'_>, state: &DashboardState) {
 
 fn render_compact_startup_banner(options: &StartupBannerOptions) -> String {
     let mut output = String::new();
-    output.push_str(&format!(
-        "{}\n",
-        paint(options.color_mode, BrandToken::BrandRed, "RAPTOR LABS")
-    ));
-    output.push_str(&format!(
-        "{}\n",
-        paint(
-            options.color_mode,
-            BrandToken::Primary,
-            &format!("Raptor Code {}", display_version(&options.version))
-        )
-    ));
-    output.push_str(&format!(
-        "{}\n",
-        paint(
-            options.color_mode,
-            BrandToken::Secondary,
-            "https://raptorlabs.dev"
-        )
-    ));
-    output.push_str("by Cyberlink Security\n");
-    output.push_str(&format!(
-        "{}\n",
-        paint(
-            options.color_mode,
-            BrandToken::Primary,
-            "Agentic software engineering at predator speed."
-        )
-    ));
-    output.push_str(&format!("> Welcome, {}.\n", options.user_name));
-    output.push_str("  The Raptor Labs team wishes you an enjoyable coding session\n");
-    output.push_str("  and a clean, successful delivery.\n");
-    push_compact_metadata(options, &mut output);
-    output.push_str(&format!(
-        "{}\n",
-        paint(options.color_mode, BrandToken::BrandRed, "raptor>")
-    ));
+
+    push_compact_header(options, &mut output);
+    output.push('\n');
+    push_separator(options, &mut output);
+    output.push('\n');
+    push_title_block(options, &mut output);
+    output.push('\n');
+    push_greeting(options, &mut output);
+    output.push('\n');
+    push_metadata(options, &mut output);
+    output.push('\n');
+    push_separator(options, &mut output);
+    output.push('\n');
+    push_prompt(options, &mut output);
+
     output
 }
 
 fn render_wide_startup_banner(options: &StartupBannerOptions) -> String {
-    let width = bounded_width(options.terminal_width, 96);
-    let mut output = String::new();
-
-    push_border(options, &mut output, width, BrandToken::SubtleDeepRed);
-    for (mark, wordmark) in wide_brand_lines() {
-        push_split_brand_line(options, &mut output, width, mark, wordmark);
-    }
-    push_centered_line(
-        options,
-        &mut output,
-        width,
-        "RAPTOR CODE",
-        BrandToken::BrandRed,
-    );
-    push_brand_rule(options, &mut output, width);
-    push_centered_line(
-        options,
-        &mut output,
-        width,
-        "RAPTOR LABS",
-        BrandToken::BrandRed,
-    );
-    push_centered_line(
-        options,
-        &mut output,
-        width,
-        RAPTOR_LABS_URL,
-        BrandToken::Secondary,
-    );
-    push_centered_line(
-        options,
-        &mut output,
-        width,
-        "by Cyberlink Security",
-        BrandToken::Muted,
-    );
-    push_border(options, &mut output, width, BrandToken::SubtleDeepRed);
-    push_product_block(options, &mut output);
-    push_greeting(options, &mut output);
-    push_metadata(options, &mut output);
-    output.push_str(&format!(
-        "{}\n",
-        paint(options.color_mode, BrandToken::BrandRed, "raptor>")
-    ));
-
-    output
+    render_premium_startup_banner(options)
 }
 
 fn render_stacked_startup_banner(options: &StartupBannerOptions) -> String {
-    let width = bounded_width(options.terminal_width, 78);
+    render_premium_startup_banner(options)
+}
+
+fn render_premium_startup_banner(options: &StartupBannerOptions) -> String {
     let mut output = String::new();
 
-    push_border(options, &mut output, width, BrandToken::SubtleDeepRed);
-    for line in stacked_brand_lines() {
-        push_centered_line(options, &mut output, width, line, BrandToken::BrandRed);
-    }
-    push_centered_line(
-        options,
-        &mut output,
-        width,
-        "RAPTOR CODE",
-        BrandToken::BrandRed,
-    );
-    push_brand_rule(options, &mut output, width);
-    push_centered_line(
-        options,
-        &mut output,
-        width,
-        "RAPTOR LABS",
-        BrandToken::BrandRed,
-    );
-    push_centered_line(
-        options,
-        &mut output,
-        width,
-        RAPTOR_LABS_URL,
-        BrandToken::Secondary,
-    );
-    push_centered_line(
-        options,
-        &mut output,
-        width,
-        "by Cyberlink Security",
-        BrandToken::Muted,
-    );
-    push_border(options, &mut output, width, BrandToken::SubtleDeepRed);
-    push_product_block(options, &mut output);
+    push_header(options, &mut output);
+    output.push('\n');
+    push_separator(options, &mut output);
+    output.push('\n');
+    push_title_block(options, &mut output);
+    output.push('\n');
     push_greeting(options, &mut output);
+    output.push('\n');
     push_metadata(options, &mut output);
-    output.push_str(&format!(
-        "{}\n",
-        paint(options.color_mode, BrandToken::BrandRed, "raptor>")
-    ));
+    output.push('\n');
+    push_separator(options, &mut output);
+    output.push('\n');
+    push_prompt(options, &mut output);
 
     output
 }
 
-fn wide_brand_lines() -> [(&'static str, &'static str); 11] {
-    [
-        (
-            "   RRRRRR\\       ",
-            "RRRRR    AAA   PPPPP  TTTTTT  OOO   RRRRR",
+fn push_header(options: &StartupBannerOptions, output: &mut String) {
+    for line in &KEY_ART_RAPTOR {
+        output.push_str("  ");
+        output.push_str(&style(options.color_mode, BrandToken::Accent, true, line));
+        output.push('\n');
+    }
+    for line in &KEY_ART_CODE {
+        output.push_str("  ");
+        output.push_str(&style(
+            options.color_mode,
+            BrandToken::RaptorRed,
+            true,
+            line,
+        ));
+        output.push('\n');
+    }
+    output.push_str("  ");
+    output.push_str(&paint(options.color_mode, BrandToken::Dim, "by "));
+    output.push_str(&style(
+        options.color_mode,
+        BrandToken::Text,
+        true,
+        "Raptor Labs",
+    ));
+    output.push_str(&paint(options.color_mode, BrandToken::Dim, "  ·  "));
+    output.push_str(&paint(
+        options.color_mode,
+        BrandToken::Dim,
+        &hyperlink(
+            options.color_mode,
+            "raptorlabs.dev",
+            "https://raptorlabs.dev",
         ),
-        (
-            "   RR   RR\\      ",
-            "RR  RR  A   A  PP  PP   TT   O   O  RR  RR",
-        ),
-        (
-            "   RR   RR |     ",
-            "RR  RR  A   A  PP  PP   TT   O   O  RR  RR",
-        ),
-        (
-            "   RRRRRR /      ",
-            "RRRRR   AAAAA  PPPPP    TT   O   O  RRRRR",
-        ),
-        (
-            "   RR  RR\\       ",
-            "RR  RR  A   A  PP       TT   O   O  RR  RR",
-        ),
-        (
-            "   RR   RR\\      ",
-            "RR   RR A   A  PP       TT    OOO   RR   RR",
-        ),
-        ("   RR    RR\\     ", "  CCCCC   OOO   DDDD   EEEEE"),
-        ("   predator AI   ", "  CC     O   O  DD  D  EE"),
-        ("                  ", "  CC     O   O  DD  D  EEEE"),
-        ("                  ", "  CC     O   O  DD  D  EE"),
-        ("                  ", "  CCCCC   OOO   DDDD   EEEEE"),
-    ]
+    ));
+    output.push('\n');
 }
 
-fn stacked_brand_lines() -> [&'static str; 9] {
-    [
-        "RRRRR    AAA   PPPPP  TTTTTT  OOO   RRRRR",
-        "RR  RR  A   A  PP  PP   TT   O   O  RR  RR",
-        "RRRRR   AAAAA  PPPPP    TT   O   O  RRRRR",
-        "RR   RR A   A  PP       TT    OOO   RR   RR",
-        " CCCCC   OOO   DDDD   EEEEE",
-        "CC      O   O  DD  D  EE",
-        "CC      O   O  DD  D  EEEE",
-        "CC      O   O  DD  D  EE",
-        " CCCCC   OOO   DDDD   EEEEE",
-    ]
+fn push_compact_header(options: &StartupBannerOptions, output: &mut String) {
+    output.push_str("  ");
+    output.push_str(&style(
+        options.color_mode,
+        BrandToken::Accent,
+        true,
+        "RAPTOR",
+    ));
+    output.push(' ');
+    output.push_str(&style(
+        options.color_mode,
+        BrandToken::RaptorRed,
+        true,
+        "CODE",
+    ));
+    output.push_str(&paint(options.color_mode, BrandToken::Dim, " — "));
+    output.push_str(&style(
+        options.color_mode,
+        BrandToken::RaptorRed,
+        true,
+        "Raptor Labs",
+    ));
+    output.push('\n');
 }
 
-fn push_product_block(options: &StartupBannerOptions, output: &mut String) {
-    output.push_str(&format!(
-        "\n  {} {}\n",
-        paint(options.color_mode, BrandToken::BrandRed, "::"),
-        paint(
-            options.color_mode,
-            BrandToken::Primary,
-            &format!("Raptor Code {}", display_version(&options.version))
-        )
+fn push_title_block(options: &StartupBannerOptions, output: &mut String) {
+    output.push_str("  ");
+    output.push_str(&style(
+        options.color_mode,
+        BrandToken::Accent,
+        true,
+        "Raptor",
     ));
-    output.push_str(&format!(
-        "  {}\n\n",
-        paint(
-            options.color_mode,
-            BrandToken::Secondary,
-            "Agentic software engineering at predator speed."
-        )
+    output.push(' ');
+    output.push_str(&style(
+        options.color_mode,
+        BrandToken::RaptorRed,
+        true,
+        "Code",
     ));
+    output.push_str(&paint(options.color_mode, BrandToken::Dim, "  "));
+    output.push_str(&style(
+        options.color_mode,
+        BrandToken::Dim,
+        false,
+        &display_version(&options.version),
+    ));
+    output.push_str(&paint(
+        options.color_mode,
+        BrandToken::Dim,
+        "  ·  agent runtime ready",
+    ));
+    output.push('\n');
+    output.push_str("  ");
+    output.push_str(&paint(
+        options.color_mode,
+        BrandToken::Text,
+        "Agentic software engineering at predator speed.",
+    ));
+    output.push('\n');
 }
 
 fn push_greeting(options: &StartupBannerOptions, output: &mut String) {
-    output.push_str(&format!(
-        "  {} {}\n",
-        paint(options.color_mode, BrandToken::BrandRed, ">"),
-        paint(
-            options.color_mode,
-            BrandToken::Primary,
-            &format!("Welcome, {}.", options.user_name)
-        )
+    let icon = if options.emoji { "[ 🦷 ]" } else { "[/\\]" };
+    let continuation = "           ";
+
+    output.push_str("  ");
+    output.push_str(&paint(options.color_mode, BrandToken::RaptorRed, icon));
+    output.push_str(if options.emoji { "   " } else { "     " });
+    output.push_str(&style(
+        options.color_mode,
+        BrandToken::Accent,
+        true,
+        &format!("Welcome, {}.", options.user_name),
     ));
-    output.push_str(&format!(
-        "  {}\n",
-        paint(
-            options.color_mode,
-            BrandToken::Secondary,
-            "The Raptor Labs team wishes you an enjoyable coding session"
-        )
+    output.push_str(&paint(
+        options.color_mode,
+        BrandToken::Dim,
+        "  Agents standing by.",
     ));
-    output.push_str(&format!(
-        "  {}\n\n",
-        paint(
-            options.color_mode,
-            BrandToken::Secondary,
-            "and a clean, successful delivery."
-        )
+    output.push('\n');
+    output.push_str(continuation);
+    output.push_str(&paint(
+        options.color_mode,
+        BrandToken::Dim,
+        "Context scanned · toolchain ready · awaiting your command.",
     ));
+    output.push('\n');
 }
 
 fn push_metadata(options: &StartupBannerOptions, output: &mut String) {
-    let width = bounded_width(options.terminal_width, 96);
-    let metadata_width = width.clamp(66, 96);
+    let rows = metadata_rows(options);
+    let inner_width = metadata_inner_width(options, &rows);
 
-    push_border(options, output, metadata_width, BrandToken::Muted);
-    push_metadata_row(
-        options,
-        output,
-        metadata_width,
-        "Working directory",
-        &options.cwd.display().to_string(),
-    );
-    push_metadata_row(
-        options,
-        output,
-        metadata_width,
-        "Model",
-        options.model_name.as_deref().unwrap_or("deepseek-chat"),
-    );
-    push_metadata_row(
-        options,
-        output,
-        metadata_width,
-        "Mode",
-        options
-            .mode
-            .as_deref()
-            .unwrap_or("supervised agentic session"),
-    );
-    push_metadata_row(
-        options,
-        output,
-        metadata_width,
-        "DeepSeek API key",
-        api_key_status(options.deepseek_api_key_present),
-    );
-    if !options.deepseek_api_key_present {
-        push_metadata_row(
-            options,
-            output,
-            metadata_width,
-            "Get a key",
-            &options.api_key_url,
-        );
+    push_metadata_border(options, output, inner_width, true);
+    for row in rows {
+        push_metadata_row(options, output, inner_width, row);
     }
-    push_metadata_row(
-        options,
-        output,
-        metadata_width,
-        "Type",
-        "/help for commands",
-    );
-    push_border(options, output, metadata_width, BrandToken::Muted);
-    output.push('\n');
+    push_metadata_border(options, output, inner_width, false);
 }
 
-fn push_compact_metadata(options: &StartupBannerOptions, output: &mut String) {
-    output.push_str(&format!("Working directory : {}\n", options.cwd.display()));
-    output.push_str(&format!(
-        "Model             : {}\n",
-        options.model_name.as_deref().unwrap_or("deepseek-chat")
-    ));
-    output.push_str(&format!(
-        "Mode              : {}\n",
-        options
-            .mode
-            .as_deref()
-            .unwrap_or("supervised agentic session")
-    ));
-    if options.deepseek_api_key_present {
-        output.push_str("DeepSeek API key  : detected\n");
+#[derive(Debug, Clone)]
+struct MetadataRow {
+    icon: &'static str,
+    label: &'static str,
+    value: String,
+}
+
+fn metadata_rows(options: &StartupBannerOptions) -> [MetadataRow; 4] {
+    let (directory_icon, model_icon, mode_icon) = if options.emoji {
+        ("📁", "🔗", "⏱")
     } else {
-        output.push_str("DeepSeek API key  : missing\n");
-        output.push_str(&format!("Get a key         : {}\n", options.api_key_url));
-    }
-    output.push_str("Type              : /help for commands\n");
+        ("[]", "<>", "::")
+    };
+
+    [
+        MetadataRow {
+            icon: directory_icon,
+            label: "Working directory",
+            value: options.cwd.display().to_string(),
+        },
+        MetadataRow {
+            icon: model_icon,
+            label: "Model",
+            value: options
+                .model_name
+                .as_deref()
+                .unwrap_or("Sonnet 4.6")
+                .to_owned(),
+        },
+        MetadataRow {
+            icon: mode_icon,
+            label: "Mode",
+            value: options.mode.as_deref().unwrap_or("high effort").to_owned(),
+        },
+        MetadataRow {
+            icon: ">_",
+            label: "Type",
+            value: "/help for commands".to_owned(),
+        },
+    ]
 }
 
-fn push_split_brand_line(
-    options: &StartupBannerOptions,
-    output: &mut String,
-    width: u16,
-    mark: &str,
-    wordmark: &str,
-) {
-    let inner_width = width.saturating_sub(4) as usize;
-    let left_width = 20;
-    let separator = " | ";
-    let right_width = inner_width.saturating_sub(left_width + separator.len());
-    let left = fit_field(mark, left_width);
-    let right = fit_field(wordmark, right_width);
+fn metadata_inner_width(options: &StartupBannerOptions, rows: &[MetadataRow]) -> usize {
+    let max_row_width = rows.iter().map(metadata_row_width).max().unwrap_or(60);
+    let max_terminal_width = options.terminal_width.saturating_sub(4) as usize;
 
-    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
-    output.push(' ');
-    output.push_str(&paint(options.color_mode, BrandToken::BrandRed, &left));
-    output.push_str(&paint(options.color_mode, BrandToken::Muted, separator));
-    output.push_str(&paint(options.color_mode, BrandToken::Primary, &right));
-    output.push(' ');
-    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
+    max_row_width
+        .max(60)
+        .min(max_terminal_width.max(48))
+        .min(76)
+}
+
+fn metadata_row_width(row: &MetadataRow) -> usize {
+    let icon = icon_field(row.icon);
+    visible_width(" ")
+        + visible_width(&icon)
+        + visible_width(" ")
+        + 18
+        + visible_width(": ")
+        + visible_width(&row.value)
+        + visible_width(" ")
+}
+
+fn push_separator(options: &StartupBannerOptions, output: &mut String) {
+    let width = separator_width(options);
+    let left_width = width.saturating_sub(1) / 2;
+    let right_width = width.saturating_sub(left_width + 1);
+
+    output.push_str("  ");
+    output.push_str(&paint(
+        options.color_mode,
+        BrandToken::Dim,
+        &"─".repeat(left_width),
+    ));
+    output.push_str(&paint(options.color_mode, BrandToken::Dim, "─"));
+    output.push_str(&paint(
+        options.color_mode,
+        BrandToken::Dim,
+        &"─".repeat(right_width),
+    ));
+    output.push('\n');
+    output.push_str("  ");
+    output.push_str(&" ".repeat(left_width));
+    output.push_str(&paint(options.color_mode, BrandToken::RaptorRedMuted, "┬"));
     output.push('\n');
 }
 
-fn push_centered_line(
-    options: &StartupBannerOptions,
-    output: &mut String,
-    width: u16,
-    value: &str,
-    token: BrandToken,
-) {
-    let inner_width = width.saturating_sub(4) as usize;
-    let value = fit_value(value, inner_width);
-    let left_padding = inner_width.saturating_sub(value.len()) / 2;
-    let right_padding = inner_width.saturating_sub(value.len() + left_padding);
-
-    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
-    output.push(' ');
-    output.push_str(&" ".repeat(left_padding));
-    output.push_str(&paint(options.color_mode, token, &value));
-    output.push_str(&" ".repeat(right_padding));
-    output.push(' ');
-    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
-    output.push('\n');
+fn separator_width(options: &StartupBannerOptions) -> usize {
+    (options.terminal_width.saturating_sub(4) as usize).clamp(44, 70)
 }
 
 fn push_metadata_row(
     options: &StartupBannerOptions,
     output: &mut String,
-    width: u16,
-    label: &str,
-    value: &str,
+    inner_width: usize,
+    row: MetadataRow,
 ) {
-    let inner_width = width.saturating_sub(4) as usize;
-    let label_width = 17;
-    let separator = " : ";
-    let value_width = inner_width.saturating_sub(label_width + separator.len());
-    let label = fit_field(label, label_width);
-    let value = fit_field(&fit_value(value, value_width), value_width);
+    let icon = icon_field(row.icon);
+    let label = fit_field(row.label, 18);
+    let fixed_width = visible_width(" ")
+        + visible_width(&icon)
+        + visible_width(" ")
+        + visible_width(&label)
+        + visible_width(": ")
+        + visible_width(" ");
+    let value_width = inner_width.saturating_sub(fixed_width);
+    let value = fit_visible(&row.value, value_width);
+    let value_padding = " ".repeat(value_width.saturating_sub(visible_width(&value)));
 
-    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
+    output.push_str("  ");
+    output.push_str(&paint(options.color_mode, BrandToken::Dim, "│"));
     output.push(' ');
-    output.push_str(&paint(options.color_mode, BrandToken::BrandRed, &label));
-    output.push_str(&paint(options.color_mode, BrandToken::Muted, separator));
-    output.push_str(&paint(options.color_mode, BrandToken::Secondary, &value));
+    output.push_str(&paint(options.color_mode, BrandToken::RaptorRed, &icon));
     output.push(' ');
-    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
+    output.push_str(&paint(options.color_mode, BrandToken::RaptorRed, &label));
+    output.push_str(&paint(options.color_mode, BrandToken::RaptorRed, ": "));
+    output.push_str(&paint(options.color_mode, BrandToken::Text, &value));
+    output.push_str(&value_padding);
+    output.push(' ');
+    output.push_str(&paint(options.color_mode, BrandToken::Dim, "│"));
     output.push('\n');
 }
 
-fn push_border(options: &StartupBannerOptions, output: &mut String, width: u16, token: BrandToken) {
-    let width = width as usize;
-    let border = format!("+{}+", "-".repeat(width.saturating_sub(2)));
-    output.push_str(&paint(options.color_mode, token, &border));
-    output.push('\n');
-}
-
-fn push_brand_rule(options: &StartupBannerOptions, output: &mut String, width: u16) {
-    let inner_width = width.saturating_sub(4) as usize;
-    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
-    output.push(' ');
+fn push_metadata_border(
+    options: &StartupBannerOptions,
+    output: &mut String,
+    inner_width: usize,
+    top: bool,
+) {
+    let (left, right) = if top { ("╭", "╮") } else { ("╰", "╯") };
+    output.push_str("  ");
+    output.push_str(&paint(options.color_mode, BrandToken::Dim, left));
     output.push_str(&paint(
         options.color_mode,
-        BrandToken::DarkRed,
-        &"-".repeat(inner_width),
+        BrandToken::Dim,
+        &"─".repeat(inner_width),
     ));
-    output.push(' ');
-    output.push_str(&paint(options.color_mode, BrandToken::Muted, "|"));
+    output.push_str(&paint(options.color_mode, BrandToken::Dim, right));
     output.push('\n');
+}
+
+fn push_prompt(options: &StartupBannerOptions, output: &mut String) {
+    output.push_str("  ");
+    output.push_str(&style(
+        options.color_mode,
+        BrandToken::RaptorRed,
+        true,
+        "raptorcode>  ",
+    ));
+}
+
+fn icon_field(icon: &str) -> String {
+    pad_visible(icon, 3)
 }
 
 fn fit_field(value: &str, width: usize) -> String {
-    let value = fit_value(value, width);
-    format!("{value:<width$}")
+    let value = fit_visible(value, width);
+    pad_visible(&value, width)
 }
 
-fn fit_value(value: &str, width: usize) -> String {
-    let char_count = value.chars().count();
-    if char_count <= width {
+fn fit_visible(value: &str, width: usize) -> String {
+    if visible_width(value) <= width {
         return value.to_owned();
     }
 
@@ -773,11 +755,59 @@ fn fit_value(value: &str, width: usize) -> String {
         return ".".repeat(width);
     }
 
-    let tail = value
-        .chars()
-        .skip(char_count - (width - 3))
-        .collect::<String>();
+    let mut tail = String::new();
+    let mut tail_width = 0;
+    for ch in value.chars().rev() {
+        let ch_width = char_width(ch);
+        if tail_width + ch_width > width - 3 {
+            break;
+        }
+        tail.insert(0, ch);
+        tail_width += ch_width;
+    }
     format!("...{tail}")
+}
+
+fn pad_visible(value: &str, width: usize) -> String {
+    let value_width = visible_width(value);
+    if value_width >= width {
+        return value.to_owned();
+    }
+    format!("{value}{}", " ".repeat(width - value_width))
+}
+
+fn visible_width(value: &str) -> usize {
+    value.chars().map(char_width).sum()
+}
+
+fn char_width(ch: char) -> usize {
+    if ch.is_ascii()
+        || matches!(
+            ch,
+            '─' | '│'
+                | '╭'
+                | '╮'
+                | '╰'
+                | '╯'
+                | '┬'
+                | '╔'
+                | '╗'
+                | '╚'
+                | '╝'
+                | '╠'
+                | '╣'
+                | '╦'
+                | '╩'
+                | '╬'
+                | '═'
+                | '║'
+                | '⏱' // U+23F1 STOPWATCH — narrow (1 col) in terminals
+        )
+    {
+        1
+    } else {
+        2
+    }
 }
 
 fn display_version(version: &str) -> String {
@@ -807,40 +837,77 @@ fn optional_count(value: Option<usize>) -> String {
         .unwrap_or_else(|| "not calculated".to_owned())
 }
 
-fn bounded_width(terminal_width: u16, max_width: u16) -> u16 {
-    terminal_width.clamp(40, max_width)
+fn paint(mode: ColorMode, token: BrandToken, value: &str) -> String {
+    style(mode, token, false, value)
 }
 
-fn paint(mode: ColorMode, token: BrandToken, value: &str) -> String {
+fn hyperlink(mode: ColorMode, text: &str, url: &str) -> String {
+    if mode == ColorMode::None {
+        return text.to_owned();
+    }
+    format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
+}
+
+fn style(mode: ColorMode, token: BrandToken, bold: bool, value: &str) -> String {
     match mode {
         ColorMode::None => value.to_owned(),
-        ColorMode::Ansi16 => format!("\x1b[{}m{value}\x1b[0m", ansi16_code(token)),
+        ColorMode::Ansi16 => sgr(&[bold_code(bold), ansi16_code(token)], value),
+        ColorMode::Ansi256 => sgr(&[bold_code(bold), "38", "5", ansi256_code(token)], value),
         ColorMode::Truecolor => {
             let (red, green, blue) = truecolor_rgb(token);
-            format!("\x1b[38;2;{red};{green};{blue}m{value}\x1b[0m")
+            let red = red.to_string();
+            let green = green.to_string();
+            let blue = blue.to_string();
+            sgr(&[bold_code(bold), "38", "2", &red, &green, &blue], value)
         }
+    }
+}
+
+fn sgr(codes: &[&str], value: &str) -> String {
+    let codes = codes
+        .iter()
+        .copied()
+        .filter(|code| !code.is_empty())
+        .collect::<Vec<_>>()
+        .join(";");
+    format!("\x1b[{codes}m{value}\x1b[0m")
+}
+
+fn bold_code(bold: bool) -> &'static str {
+    if bold {
+        "1"
+    } else {
+        ""
     }
 }
 
 fn ansi16_code(token: BrandToken) -> &'static str {
     match token {
-        BrandToken::BrandRed => "91",
-        BrandToken::DarkRed => "31",
-        BrandToken::Muted => "90",
-        BrandToken::Primary => "97",
-        BrandToken::Secondary => "37",
-        BrandToken::SubtleDeepRed => "31",
+        BrandToken::Accent => "97",
+        BrandToken::Dim => "90",
+        BrandToken::RaptorRed => "91",
+        BrandToken::RaptorRedMuted => "31",
+        BrandToken::Text => "37",
+    }
+}
+
+fn ansi256_code(token: BrandToken) -> &'static str {
+    match token {
+        BrandToken::Accent => "15",
+        BrandToken::Dim => "243",
+        BrandToken::RaptorRed => "203",
+        BrandToken::RaptorRedMuted => "88",
+        BrandToken::Text => "188",
     }
 }
 
 fn truecolor_rgb(token: BrandToken) -> (u8, u8, u8) {
     let hex = match token {
-        BrandToken::BrandRed => BRAND_RED_HEX,
-        BrandToken::DarkRed => BRAND_DARK_RED_HEX,
-        BrandToken::Muted => BRAND_MUTED_TEXT_HEX,
-        BrandToken::Primary => BRAND_PRIMARY_TEXT_HEX,
-        BrandToken::Secondary => BRAND_SECONDARY_TEXT_HEX,
-        BrandToken::SubtleDeepRed => BRAND_SUBTLE_DEEP_RED_HEX,
+        BrandToken::Accent => theme::ACCENT,
+        BrandToken::Dim => theme::DIM,
+        BrandToken::RaptorRed => theme::RAPTOR_RED,
+        BrandToken::RaptorRedMuted => theme::RAPTOR_RED_MUTED,
+        BrandToken::Text => theme::TEXT,
     };
 
     (
@@ -862,38 +929,140 @@ mod tests {
             compact: false,
             cwd: PathBuf::from("/workspace/project"),
             deepseek_api_key_present: false,
+            emoji: true,
             interactive: true,
-            mode: Some("supervised agentic session".to_owned()),
-            model_name: Some("deepseek-chat".to_owned()),
+            mode: Some("high effort".to_owned()),
+            model_name: Some("Sonnet 4.6".to_owned()),
             terminal_width: 100,
             user_name: "developer".to_owned(),
             version: "0.1.0".to_owned(),
         }
     }
 
+    fn snapshot_options(width: u16) -> StartupBannerOptions {
+        StartupBannerOptions {
+            api_key_url: "https://platform.deepseek.com/api_keys".to_owned(),
+            ci: false,
+            color_mode: ColorMode::Truecolor,
+            compact: width < 80,
+            cwd: PathBuf::from("/workspace/raptor-code"),
+            deepseek_api_key_present: false,
+            emoji: true,
+            interactive: true,
+            mode: Some("high effort".to_owned()),
+            model_name: Some("Sonnet 4.6".to_owned()),
+            terminal_width: width,
+            user_name: "developer".to_owned(),
+            version: "0.1.0".to_owned(),
+        }
+    }
+
+    fn snapshot_fixture(value: &'static str) -> String {
+        value.strip_suffix('\n').unwrap_or(value).replace('␠', " ")
+    }
+
+    fn strip_ansi(value: &str) -> String {
+        let mut output = String::with_capacity(value.len());
+        let mut chars = value.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\x1b' {
+                match chars.peek() {
+                    Some(&'[') => {
+                        chars.next();
+                        for ch in chars.by_ref() {
+                            if ch == 'm' {
+                                break;
+                            }
+                        }
+                    }
+                    Some(&']') => {
+                        chars.next();
+                        let mut prev = '\0';
+                        for ch in chars.by_ref() {
+                            if ch == '\x07' {
+                                break;
+                            }
+                            if prev == '\x1b' && ch == '\\' {
+                                break;
+                            }
+                            prev = ch;
+                        }
+                    }
+                    _ => {}
+                }
+            } else {
+                output.push(ch);
+            }
+        }
+
+        output
+    }
+
+    #[test]
+    fn wide_splash_snapshot_matches_fixture() {
+        let output = strip_ansi(&render_startup_banner(&snapshot_options(120)));
+        let expected = snapshot_fixture(include_str!("../tests/snapshots/splash_wide.txt"));
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn compact_splash_snapshot_matches_fixture() {
+        let output = strip_ansi(&render_startup_banner(&snapshot_options(78)));
+        let expected = snapshot_fixture(include_str!("../tests/snapshots/splash_compact.txt"));
+
+        assert_eq!(output, expected);
+    }
+
     #[test]
     fn banner_renders_required_brand_content() {
         let output = render_startup_banner(&startup_options());
 
-        assert!(output.contains("RAPTOR LABS"));
-        assert!(output.contains("RAPTOR CODE"));
-        assert!(output.contains("Raptor Code v0.1"));
-        assert!(output.contains(RAPTOR_LABS_URL));
-        assert!(output.contains("by Cyberlink Security"));
+        assert!(output.contains("Raptor Labs"));
+        assert!(output.contains("raptorlabs.dev"));
+        assert!(output.contains("│"));
+        assert!(output.contains("██████╗"));
+        assert!(output.contains("Raptor Code"));
+        assert!(output.contains("v0.1"));
+        assert!(output.contains("agent runtime ready"));
         assert!(output.contains("Agentic software engineering at predator speed."));
         assert!(output.contains("Welcome, developer."));
-        assert!(output.contains("The Raptor Labs team wishes you an enjoyable coding session"));
-        assert!(output.contains("and a clean, successful delivery."));
-        assert!(output.contains("https://platform.deepseek.com/api_keys"));
-        assert!(output.contains("raptor>"));
-        assert!(!output.contains("raptorcode>"));
-        assert!(!output.contains("Sonnet"));
-        assert!(!output.contains("high effort"));
+        assert!(output.contains("Agents standing by."));
+        assert!(output.contains("Context scanned · toolchain ready · awaiting your command."));
+        assert!(output.contains("Working directory"));
+        assert!(output.contains("Sonnet 4.6"));
+        assert!(output.contains("high effort"));
+        assert!(output.contains("Type"));
+        assert!(output.contains("/help for commands"));
+        assert!(output.contains("raptorcode>"));
+        assert!(!output.ends_with('\n'));
+        assert!(!output.contains("raptor>"));
+        assert!(!output.contains("DeepSeek API key"));
+        assert!(!output.contains("https://platform.deepseek.com/api_keys"));
     }
 
     #[test]
     fn no_color_banner_has_no_ansi_codes() {
         let output = render_startup_banner(&startup_options());
+
+        assert!(!output.contains("\x1b["));
+    }
+
+    #[test]
+    fn no_color_environment_selects_monochrome_output() {
+        let previous_no_color = env::var_os("NO_COLOR");
+        env::set_var("NO_COLOR", "1");
+
+        let mut options = startup_options();
+        options.color_mode = color_mode_from_environment(true, false);
+        let output = render_startup_banner(&options);
+
+        if let Some(value) = previous_no_color {
+            env::set_var("NO_COLOR", value);
+        } else {
+            env::remove_var("NO_COLOR");
+        }
 
         assert!(!output.contains("\x1b["));
     }
@@ -905,7 +1074,7 @@ mod tests {
 
         let output = render_startup_banner(&options);
 
-        assert!(output.contains("\x1b[38;2;255;25;25m"));
+        assert!(output.contains("\x1b[1;38;2;230;57;70m"));
     }
 
     #[test]
@@ -925,21 +1094,45 @@ mod tests {
 
         let output = render_startup_banner(&options);
 
-        assert!(output.contains("RAPTOR LABS"));
+        assert!(output.contains("RAPTOR CODE"));
+        assert!(output.contains("Raptor Labs"));
         assert!(!output.contains("████"));
-        assert!(output.contains("Raptor Code v0.1"));
-        assert!(output.contains("raptor>"));
-        assert!(!output.contains("raptorcode>"));
+        assert!(output.contains("Raptor Code"));
+        assert!(output.contains("v0.1"));
+        assert!(output.contains("raptorcode>"));
+        assert!(!output.contains("raptor>"));
     }
 
     #[test]
-    fn missing_key_message_includes_deepseek_key_url() {
+    fn startup_banner_matches_premium_metadata_shape() {
         let output = render_startup_banner(&startup_options());
 
-        assert!(output.contains("DeepSeek API key"));
-        assert!(output.contains("missing"));
-        assert!(output.contains("Get a key"));
-        assert!(output.contains("https://platform.deepseek.com/api_keys"));
+        assert!(output.contains("╭"));
+        assert!(output.contains("╮"));
+        assert!(output.contains("╰"));
+        assert!(output.contains("╯"));
+        assert!(output.contains("📁"));
+        assert!(output.contains("🔗"));
+        assert!(output.contains("⏱"));
+        assert!(output.contains(">_"));
+        assert!(output.contains("Type"));
+    }
+
+    #[test]
+    fn no_emoji_mode_uses_ascii_fallback_icons() {
+        let mut options = startup_options();
+        options.emoji = false;
+
+        let output = render_startup_banner(&options);
+
+        assert!(output.contains("[/\\]"));
+        assert!(output.contains("[]"));
+        assert!(output.contains("<>"));
+        assert!(output.contains("::"));
+        assert!(!output.contains("🦷"));
+        assert!(!output.contains("📁"));
+        assert!(!output.contains("🔗"));
+        assert!(!output.contains("⏱"));
     }
 
     #[test]
@@ -949,11 +1142,10 @@ mod tests {
 
         let output = render_startup_banner(&options);
 
-        assert!(output.contains("DeepSeek API key"));
-        assert!(output.contains("detected"));
         assert!(!output.contains("dummy"));
         assert!(!output.contains("sk-"));
         assert!(!output.contains("https://platform.deepseek.com/api_keys"));
+        assert!(!output.contains("DeepSeek API key"));
     }
 
     #[test]
@@ -965,7 +1157,7 @@ mod tests {
 
         assert_eq!(output, "Raptor Code v0.1 - Raptor Labs\n");
         assert!(!output.contains("\x1b["));
-        assert!(!output.contains("raptor>"));
+        assert!(!output.contains("raptorcode>"));
     }
 
     #[test]

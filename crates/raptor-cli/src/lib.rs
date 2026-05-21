@@ -463,12 +463,13 @@ pub fn startup_banner_options(
         api_key_url: DEEPSEEK_API_KEY_URL.to_owned(),
         ci,
         color_mode,
-        compact: terminal_width < 70,
+        compact: terminal_width < 80,
         cwd: current_dir.to_path_buf(),
         deepseek_api_key_present: std::env::var_os(DEEPSEEK_API_KEY_ENV).is_some(),
+        emoji: emoji_environment_enabled(),
         interactive,
-        mode: Some("supervised agentic session".to_owned()),
-        model_name: Some(SWARM_MODEL_ID.to_owned()),
+        mode: Some("high effort".to_owned()),
+        model_name: Some("Sonnet 4.6".to_owned()),
         terminal_width,
         user_name: "developer".to_owned(),
         version: version().to_owned(),
@@ -546,6 +547,17 @@ pub fn ci_environment_enabled() -> bool {
     std::env::var("CI")
         .map(|value| value.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
+}
+
+pub fn emoji_environment_enabled() -> bool {
+    std::env::var("RAPTORCODE_NO_EMOJI")
+        .map(|value| {
+            !matches!(
+                value.trim().to_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(true)
 }
 
 pub fn render_version() -> String {

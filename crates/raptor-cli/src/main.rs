@@ -3,7 +3,12 @@ use std::io::{self, IsTerminal};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let args = env::args().skip(1).collect::<Vec<_>>();
+    let mut args = env::args().skip(1).collect::<Vec<_>>();
+    let no_emoji = args.iter().any(|arg| arg == "--no-emoji");
+    if no_emoji {
+        args.retain(|arg| arg != "--no-emoji");
+    }
+
     let current_dir = match env::current_dir() {
         Ok(current_dir) => current_dir,
         Err(error) => {
@@ -15,8 +20,11 @@ fn main() -> ExitCode {
     let stdin = io::stdin();
     let stdin_interactive = stdin.is_terminal();
     let stdout_interactive = io::stdout().is_terminal();
-    let startup_options =
+    let mut startup_options =
         raptor_cli::runtime_startup_banner_options(&current_dir, stdout_interactive);
+    if no_emoji {
+        startup_options.emoji = false;
+    }
 
     if args.len() == 1
         && args[0] == "tui"
