@@ -567,10 +567,136 @@ pub fn startup_banner_options(
         emoji: emoji_environment_enabled(),
         interactive,
         mode: Some("high effort".to_owned()),
-        model_name: Some("Sonnet 4.6".to_owned()),
+        model_name: Some("DeepSeek".to_owned()),
         terminal_width,
         user_name: "developer".to_owned(),
         version: version().to_owned(),
+    }
+}
+
+fn format_model_display_name(id: &str) -> String {
+    let stripped = id.strip_prefix("deepseek-").unwrap_or(id);
+    let parts: Vec<String> = stripped
+        .split('-')
+        .map(|part| {
+            if part.starts_with('v') && part[1..].chars().all(|c| c.is_ascii_digit()) {
+                part.to_ascii_uppercase()
+            } else {
+                let mut chars = part.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                }
+            }
+        })
+        .collect();
+    format!("DeepSeek {}", parts.join(" "))
+}
+
+fn pick_latest_model(models: &[String]) -> Option<String> {
+    models
+        .iter()
+        .filter(|m| m.starts_with("deepseek"))
+        .max_by_key(|m| {
+            let ver = m
+                .find("-v")
+                .and_then(|p| m[p + 2..].split('-').next().and_then(|s| s.parse::<i32>().ok()))
+                .unwrap_or(0)
+                * 100;
+            let tier = if m.contains("pro") { 20 }
+                else if m.contains("reasoner") { 15 }
+                else if m.contains("chat") { 10 }
+                else if m.contains("flash") { 5 }
+                else { 1 };
+            ver + tier
+        })
+        .cloned()
+}
+
+fn describe_tool_call(name: &str, args_json: &str) -> String {
+    let args = serde_json::from_str::<serde_json::Value>(args_json).unwrap_or(serde_json::Value::Null);
+    match name {
+        "run_command" => describe_shell_command(args["command"].as_str().unwrap_or("")),
+        "write_file" => format!("Writing {}", args["path"].as_str().unwrap_or("file")),
+        "read_file" => format!("Reading {}", args["path"].as_str().unwrap_or("file")),
+        "list_directory" => format!("Listing {}", args["path"].as_str().unwrap_or(".")),
+        "create_directory" => format!("Creating dir {}", args["path"].as_str().unwrap_or(".")),
+        "change_directory" => format!("Navigating to {}", args["path"].as_str().unwrap_or(".")),
+        _ => format!("Running {name}"),
+    }
+}
+
+fn describe_shell_command(cmd: &str) -> String {
+    let cmd = cmd.trim();
+    // Skip "cd /path && " prefixes to surface the real command
+    let effective = cmd.rfind(" && ").map(|i| cmd[i + 4..].trim()).unwrap_or(cmd);
+    let parts: Vec<&str> = effective.split_whitespace().collect();
+    let base = parts.first().copied().unwrap_or("");
+
+    match base {
+        "npm" => match parts.get(1).copied().unwrap_or("") {
+            "install" | "i" => {
+                let pkgs: Vec<&str> = parts[2..].iter().filter(|s| !s.starts_with('-')).copied().collect();
+                if pkgs.is_empty() { "Installing npm dependencies".to_owned() }
+                else { format!("Installing: {}", pkgs[..pkgs.len().min(3)].join(", ")) }
+            }
+            "run" => format!("Running script: {}", parts.get(2).copied().unwrap_or("...")),
+            "create" => format!("Scaffolding: {}", parts.get(2).copied().unwrap_or("project")),
+            "build" => "Building project (npm)".to_owned(),
+            "test" => "Running tests (npm)".to_owned(),
+            "start" => "Starting dev server".to_owned(),
+            sub => format!("npm {sub}"),
+        },
+        "npx" => format!("Running: {}", parts.get(1).copied().unwrap_or("npx")),
+        "pnpm" | "yarn" | "bun" => {
+            let sub = parts.get(1).copied().unwrap_or("");
+            let tool = base;
+            match sub {
+                "install" | "i" | "add" => format!("Installing deps ({tool})"),
+                "build" => format!("Building ({tool})"),
+                "run" => format!("Running script ({tool}): {}", parts.get(2).copied().unwrap_or("...")),
+                _ => format!("{tool} {sub}"),
+            }
+        }
+        "cargo" => match parts.get(1).copied().unwrap_or("") {
+            "build" => "Compiling Rust project".to_owned(),
+            "test" => "Running Rust tests".to_owned(),
+            "install" => format!("Installing crate: {}", parts.get(2).copied().unwrap_or("...")),
+            "run" => "Running Rust binary".to_owned(),
+            sub => format!("cargo {sub}"),
+        },
+        "git" => match parts.get(1).copied().unwrap_or("") {
+            "clone" => "Cloning repository".to_owned(),
+            "add" => "Staging changes".to_owned(),
+            "commit" => "Committing changes".to_owned(),
+            "push" => "Pushing to remote".to_owned(),
+            "pull" => "Pulling latest changes".to_owned(),
+            "status" => "Checking git status".to_owned(),
+            "init" => "Initializing git repository".to_owned(),
+            sub => format!("git {sub}"),
+        },
+        "mkdir" => format!("Creating directories: {}", parts[1..].join(" ")),
+        "cp" => "Copying files".to_owned(),
+        "mv" => "Moving files".to_owned(),
+        "rm" => "Removing files".to_owned(),
+        "touch" => format!("Creating file: {}", parts.get(1).copied().unwrap_or("...")),
+        "cat" | "tee" if effective.contains('>') => "Writing file content".to_owned(),
+        "cat" => format!("Reading: {}", parts.get(1).copied().unwrap_or("...")),
+        "find" => "Searching filesystem".to_owned(),
+        "grep" | "rg" => "Searching file contents".to_owned(),
+        "ls" => format!("Listing: {}", parts.get(1).copied().unwrap_or(".")),
+        "python" | "python3" => format!("Running Python: {}", parts.get(1).copied().unwrap_or("script")),
+        "node" => format!("Running Node: {}", parts.get(1).copied().unwrap_or("script")),
+        "pip" | "pip3" => match parts.get(1).copied().unwrap_or("") {
+            "install" => format!("Installing Python pkg: {}", parts.get(2).copied().unwrap_or("...")),
+            sub => format!("pip {sub}"),
+        },
+        "chmod" | "chown" => "Setting permissions".to_owned(),
+        "echo" | "printf" if effective.contains('>') => "Writing file content".to_owned(),
+        _ => {
+            let preview: String = effective.chars().take(55).collect();
+            if effective.len() > 55 { format!("{preview}...") } else { preview }
+        }
     }
 }
 
@@ -760,7 +886,20 @@ pub fn run_interactive_chat(
 ) -> Result<(), CliError> {
     use std::io::Write as _;
 
-    print!("{}", render_startup_banner(startup_options));
+    // Resolve latest DeepSeek model for the banner if we have a saved key
+    let mut banner_options = startup_options.clone();
+    if let Some(saved_key) = resolve_deepseek_api_key() {
+        if let Ok(temp_provider) = DeepSeekProvider::new(saved_key) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            thread::spawn(move || { let _ = tx.send(temp_provider.list_models()); });
+            if let Ok(Ok(models)) = rx.recv_timeout(Duration::from_secs(3)) {
+                if let Some(best) = pick_latest_model(&models) {
+                    banner_options.model_name = Some(format_model_display_name(&best));
+                }
+            }
+        }
+    }
+    print!("{}", render_startup_banner(&banner_options));
     std::io::stdout().flush().ok();
 
     let (mut api_key, is_new_key) = match resolve_deepseek_api_key() {
@@ -1382,18 +1521,23 @@ fn execute_tool_call(working_dir: &mut PathBuf, name: &str, arguments: &str) -> 
             let Some(cmd) = args["command"].as_str() else {
                 return "error: missing command argument".to_owned();
             };
+            let cmd = cmd.to_owned();
             let cmd_dir = if let Some(dir_str) = args["working_dir"].as_str() {
                 resolve_tool_path(working_dir, dir_str)
             } else {
                 working_dir.clone()
             };
-            match std::process::Command::new("sh")
-                .arg("-c")
-                .arg(cmd)
-                .current_dir(&cmd_dir)
-                .output()
-            {
-                Ok(out) => {
+            let (tx, rx) = std::sync::mpsc::channel();
+            thread::spawn(move || {
+                let result = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&cmd)
+                    .current_dir(&cmd_dir)
+                    .output();
+                let _ = tx.send(result);
+            });
+            match rx.recv_timeout(Duration::from_secs(120)) {
+                Ok(Ok(out)) => {
                     let stdout_str = String::from_utf8_lossy(&out.stdout);
                     let stderr_str = String::from_utf8_lossy(&out.stderr);
                     let mut result = String::new();
@@ -1420,7 +1564,8 @@ fn execute_tool_call(working_dir: &mut PathBuf, name: &str, arguments: &str) -> 
                         result
                     }
                 }
-                Err(e) => format!("error: {e}"),
+                Ok(Err(e)) => format!("error: {e}"),
+                Err(_) => "error: command timed out after 120s; try breaking it into smaller steps".to_owned(),
             }
         }
         unknown => format!("error: unknown tool: {unknown}"),
@@ -1528,7 +1673,7 @@ fn run_agent_loop(
                     println!("  {C_DIM}→ {}({args_preview}{ellipsis}){C_RESET}", call.name);
                     std::io::stdout().flush().ok();
 
-                    let spinner = Spinner::start(format!("Running: {}...", call.name));
+                    let spinner = Spinner::start(describe_tool_call(&call.name, &call.arguments));
                     let result = execute_tool_call(working_dir, &call.name, &call.arguments);
                     spinner.stop();
 

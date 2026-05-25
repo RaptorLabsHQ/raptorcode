@@ -1,7 +1,7 @@
 # RaptorCode Roadmap
 
 Date: 2026-05-18
-Author: Tim
+Author: Bob Vasic
 Company: RaptorLabs.dev
 
 RaptorCode is an open-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
@@ -118,7 +118,7 @@ After the launch screen, v0.1 onboards the developer to DeepSeek by detecting `D
 - Policy enforcement hooks.
 - Additional model providers beyond DeepSeek execution.
 - OpenAI provider implementation.
-- Claude provider implementation.
+- OpenRouter provider implementation.
 - Gemini provider implementation.
 - Ollama provider implementation.
 - Desktop terminal.

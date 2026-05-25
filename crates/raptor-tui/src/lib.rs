@@ -612,7 +612,7 @@ fn metadata_rows(options: &StartupBannerOptions) -> [MetadataRow; 4] {
             value: options
                 .model_name
                 .as_deref()
-                .unwrap_or("Sonnet 4.6")
+                .unwrap_or("DeepSeek")
                 .to_owned(),
         },
         MetadataRow {
@@ -932,7 +932,7 @@ mod tests {
             emoji: true,
             interactive: true,
             mode: Some("high effort".to_owned()),
-            model_name: Some("Sonnet 4.6".to_owned()),
+            model_name: Some("DeepSeek".to_owned()),
             terminal_width: 100,
             user_name: "developer".to_owned(),
             version: "0.1.0".to_owned(),
@@ -950,7 +950,7 @@ mod tests {
             emoji: true,
             interactive: true,
             mode: Some("high effort".to_owned()),
-            model_name: Some("Sonnet 4.6".to_owned()),
+            model_name: Some("DeepSeek".to_owned()),
             terminal_width: width,
             user_name: "developer".to_owned(),
             version: "0.1.0".to_owned(),
@@ -1031,7 +1031,7 @@ mod tests {
         assert!(output.contains("Agents standing by."));
         assert!(output.contains("Context scanned · toolchain ready · awaiting your command."));
         assert!(output.contains("Working directory"));
-        assert!(output.contains("Sonnet 4.6"));
+        assert!(output.contains("DeepSeek"));
         assert!(output.contains("high effort"));
         assert!(output.contains("Type"));
         assert!(output.contains("/help for commands"));

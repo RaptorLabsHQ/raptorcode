@@ -1,7 +1,7 @@
 # Contributing To RaptorCode
 
 Date: 2026-05-15
-Author: Tim
+Author: Bob Vasic
 Company: RaptorLabs.dev
 
 RaptorCode is an open-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.

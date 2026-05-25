@@ -1,7 +1,7 @@
 # Release Process
 
 Date: 2026-05-19
-Author: Tim
+Author: Bob Vasic
 Company: RaptorLabs.dev
 
 This document defines the v0.1 release preparation process for RaptorCode.
@@ -94,5 +94,5 @@ Safety:
 Known limitations:
 - v0.1 is not a full terminal emulator replacement.
 - No desktop app, cloud sync, team features, marketplace, MCP, or enterprise policy engine exists.
-- OpenAI, Claude, Gemini, Ollama, and LM Studio execution providers are not implemented.
+- OpenAI, OpenRouter, Gemini, Ollama, and LM Studio execution providers are not implemented.
 ```

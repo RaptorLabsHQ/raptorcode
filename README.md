@@ -28,7 +28,7 @@ RaptorCode v0.1 focuses on:
 - Supervised merge preflight and explicit local merge execution.
 - Read-only provider, agent, policy, and diagnostic inspection commands.
 
-DeepSeek is the only implemented execution provider before v0.1. Other provider names may appear only as future metadata boundaries; OpenAI, Claude, Gemini, Ollama, LM Studio, MCP, cloud, desktop, team, marketplace, and enterprise systems are not implemented in v0.1.
+DeepSeek is the only implemented execution provider before v0.1. Other provider names may appear only as future metadata boundaries; OpenAI, OpenRouter, Gemini, Ollama, LM Studio, MCP, cloud, desktop, team, marketplace, and enterprise systems are not implemented in v0.1.
 
 ## Install From Source
 
@@ -215,7 +215,7 @@ RaptorCode v0.1 does not include:
 
 - Fully autonomous coding loops.
 - Automatic patch application.
-- OpenAI, Claude, Gemini, Ollama, or LM Studio execution providers.
+- OpenAI, OpenRouter, Gemini, Ollama, or LM Studio execution providers.
 - MCP.
 - Desktop UI.
 - Cloud sync.

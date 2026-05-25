@@ -787,8 +787,8 @@ impl ProviderCatalog {
                 ProviderCapabilities::network_chat(),
             ),
             ProviderDefinition::new(
-                ProviderId::new("claude").expect("built-in provider id is valid"),
-                "Claude",
+                ProviderId::new("openrouter").expect("built-in provider id is valid"),
+                "OpenRouter",
                 None,
                 Vec::new(),
                 ProviderCapabilities::network_chat(),
@@ -973,7 +973,7 @@ mod tests {
 
         assert_eq!(ids[0], "deepseek");
         assert!(ids.contains(&"openai"));
-        assert!(ids.contains(&"claude"));
+        assert!(ids.contains(&"openrouter"));
         assert!(ids.contains(&"gemini"));
         assert!(ids.contains(&"local"));
     }

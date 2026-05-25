@@ -1,7 +1,7 @@
 # Changelog
 
 Date: 2026-05-19
-Author: Tim
+Author: Bob Vasic
 Company: RaptorLabs.dev
 
 All notable RaptorCode changes will be documented in this file.
@@ -46,7 +46,7 @@ v0.1.0 is the first open-source MVP release for RaptorCode.
 ### Known Limitations
 
 - v0.1 is a local-first supervised MVP, not a full terminal emulator replacement.
-- No OpenAI, Claude, Gemini, Ollama, or LM Studio execution providers are implemented.
+- No OpenAI, OpenRouter, Gemini, Ollama, or LM Studio execution providers are implemented.
 - No MCP, plugin system, cloud sync, desktop UI, team features, or marketplace exists.
 - No enterprise policy engine or compliance certification exists.
 - Persisted agent sessions and permission policy modeling are early local foundations and are frozen until after v0.1.
