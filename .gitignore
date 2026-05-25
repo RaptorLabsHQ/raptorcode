@@ -1,7 +1,2 @@
 /.raptor/
 /target/
-
-# Local-only agent/operator notes. These files may contain private workflow,
-# business strategy, or personal operating instructions.
-/AGENTS.md
-/COMPLETE_PROJECT_TECHNICAL_BLUEPRINT_SPECIFICATIONS_GUIDELINES_ROADMAP.md
