@@ -3,6 +3,9 @@ use std::fmt::{Display, Formatter};
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, OnceLock, atomic::{AtomicBool, Ordering}};
+use std::thread;
+use std::time::Duration;
 
 use raptor_agent::{
     build_role_planning_prompt, role_prompt_template, AgentId, AgentRole, AgentSession,
@@ -812,6 +815,7 @@ pub fn run_interactive_chat(
             "{AGENT_SYSTEM_PROMPT}\n\nCurrent working directory: {}",
             current_dir.display()
         )),
+        reasoning_content: None,
         tool_calls: None,
         tool_call_id: None,
     };
@@ -972,6 +976,7 @@ pub fn run_interactive_chat(
             agent_history.push(AgentMessage {
                 role: "user".to_owned(),
                 content: Some(input.clone()),
+                reasoning_content: None,
                 tool_calls: None,
                 tool_call_id: None,
             });
@@ -989,6 +994,7 @@ pub fn run_interactive_chat(
                     agent_history.push(AgentMessage {
                         role: "assistant".to_owned(),
                         content: Some(content),
+                        reasoning_content: None,
                         tool_calls: None,
                         tool_call_id: None,
                     });
@@ -1421,6 +1427,81 @@ fn execute_tool_call(working_dir: &mut PathBuf, name: &str, arguments: &str) -> 
     }
 }
 
+const HACKING_QUOTES_RAW: &str = include_str!("../../../assets/200_hacking_quotes.md");
+
+static HACKING_QUOTES: OnceLock<Vec<String>> = OnceLock::new();
+
+fn hacking_quotes() -> &'static [String] {
+    HACKING_QUOTES.get_or_init(|| {
+        HACKING_QUOTES_RAW
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                let dot_pos = line.find(". ")?;
+                let prefix = &line[..dot_pos];
+                if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+                    let text = line[dot_pos + 2..].trim();
+                    if !text.is_empty() { Some(text.to_owned()) } else { None }
+                } else {
+                    None
+                }
+            })
+            .collect()
+    })
+}
+
+fn random_quote() -> &'static str {
+    let quotes = hacking_quotes();
+    if quotes.is_empty() {
+        return "The best way to predict the future is to invent it";
+    }
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as usize)
+        .unwrap_or(42);
+    &quotes[seed % quotes.len()]
+}
+
+struct Spinner {
+    stop_flag: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Spinner {
+    fn start(thinking: impl Into<String>) -> Self {
+        let thinking = thinking.into();
+        let quote = random_quote().to_owned();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop_flag);
+
+        let handle = thread::spawn(move || {
+            print!("\n\n\x1b[2A");
+            std::io::stdout().flush().ok();
+            let mut dot_idx = 0usize;
+            while !flag.load(Ordering::Relaxed) {
+                let dots = match dot_idx % 3 { 0 => ".", 1 => "..", _ => "..." };
+                print!(
+                    "\r\x1b[K{C_DIM}{thinking}{C_RESET}\n\r\x1b[K{C_RED}{quote}{dots}{C_RESET}\x1b[1A\r"
+                );
+                std::io::stdout().flush().ok();
+                dot_idx += 1;
+                thread::sleep(Duration::from_millis(400));
+            }
+            print!("\r\x1b[K\n\r\x1b[K\x1b[1A\r");
+            std::io::stdout().flush().ok();
+        });
+
+        Spinner { stop_flag, handle: Some(handle) }
+    }
+
+    fn stop(mut self) {
+        self.stop_flag.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            h.join().ok();
+        }
+    }
+}
+
 fn run_agent_loop(
     working_dir: &mut PathBuf,
     provider: &DeepSeekProvider,
@@ -1428,18 +1509,18 @@ fn run_agent_loop(
     history: &mut Vec<AgentMessage>,
     tools: &[ToolDefinition],
 ) -> Result<String, CliError> {
-    use std::io::Write as _;
-
     for _ in 0..25 {
-        match provider.complete_agent_step(model_id, history, tools) {
-            Ok(AgentStepResult::Text(content)) => return Ok(content),
-            Ok(AgentStepResult::ToolCalls(calls)) => {
-                history.push(AgentMessage {
-                    role: "assistant".to_owned(),
-                    content: None,
-                    tool_calls: Some(calls.clone()),
-                    tool_call_id: None,
-                });
+        let spinner = Spinner::start("Thinking...");
+        let step = provider.complete_agent_step(model_id, history, tools);
+        spinner.stop();
+
+        match step {
+            Ok((assistant_msg, AgentStepResult::Text(content))) => {
+                drop(assistant_msg);
+                return Ok(content);
+            }
+            Ok((assistant_msg, AgentStepResult::ToolCalls(calls))) => {
+                history.push(assistant_msg);
 
                 for call in &calls {
                     let args_preview: String = call.arguments.chars().take(60).collect();
@@ -1447,7 +1528,9 @@ fn run_agent_loop(
                     println!("  {C_DIM}→ {}({args_preview}{ellipsis}){C_RESET}", call.name);
                     std::io::stdout().flush().ok();
 
+                    let spinner = Spinner::start(format!("Running: {}...", call.name));
                     let result = execute_tool_call(working_dir, &call.name, &call.arguments);
+                    spinner.stop();
 
                     let preview: String = result
                         .lines()
@@ -1465,6 +1548,7 @@ fn run_agent_loop(
                     history.push(AgentMessage {
                         role: "tool".to_owned(),
                         content: Some(result),
+                        reasoning_content: None,
                         tool_calls: None,
                         tool_call_id: Some(call.id.clone()),
                     });

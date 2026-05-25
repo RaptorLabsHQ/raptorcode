@@ -126,6 +126,7 @@ pub struct ToolCall {
 pub struct AgentMessage {
     pub role: String,
     pub content: Option<String>,
+    pub reasoning_content: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
     pub tool_call_id: Option<String>,
 }
@@ -188,6 +189,8 @@ struct DeepSeekAgentRequestMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<DeepSeekAgentToolCallSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
@@ -235,6 +238,7 @@ struct DeepSeekAgentChoice {
 #[derive(Deserialize)]
 struct DeepSeekAgentResponseMessage {
     content: Option<String>,
+    reasoning_content: Option<String>,
     tool_calls: Option<Vec<DeepSeekAgentToolCallResponse>>,
 }
 
@@ -499,12 +503,13 @@ impl DeepSeekProvider {
         model_id: &ModelId,
         messages: &[AgentMessage],
         tools: &[ToolDefinition],
-    ) -> Result<AgentStepResult, ProviderError> {
+    ) -> Result<(AgentMessage, AgentStepResult), ProviderError> {
         let request_messages: Vec<DeepSeekAgentRequestMessage> = messages
             .iter()
             .map(|m| DeepSeekAgentRequestMessage {
                 role: m.role.clone(),
                 content: m.content.clone(),
+                reasoning_content: m.reasoning_content.clone(),
                 tool_calls: m.tool_calls.as_ref().map(|calls| {
                     calls
                         .iter()
@@ -564,13 +569,15 @@ impl DeepSeekProvider {
             ProviderError::MalformedResponse("missing choices[0] in agent response".to_owned())
         })?;
 
+        let reasoning_content = choice.message.reasoning_content.clone();
+
         if choice.finish_reason.as_deref() == Some("tool_calls") {
-            let tool_calls = choice.message.tool_calls.ok_or_else(|| {
+            let raw_calls = choice.message.tool_calls.ok_or_else(|| {
                 ProviderError::MalformedResponse(
                     "finish_reason=tool_calls but no tool_calls in message".to_owned(),
                 )
             })?;
-            let calls = tool_calls
+            let calls: Vec<ToolCall> = raw_calls
                 .into_iter()
                 .map(|tc| ToolCall {
                     id: tc.id,
@@ -578,10 +585,24 @@ impl DeepSeekProvider {
                     arguments: tc.function.arguments,
                 })
                 .collect();
-            Ok(AgentStepResult::ToolCalls(calls))
+            let assistant_msg = AgentMessage {
+                role: "assistant".to_owned(),
+                content: None,
+                reasoning_content,
+                tool_calls: Some(calls.clone()),
+                tool_call_id: None,
+            };
+            Ok((assistant_msg, AgentStepResult::ToolCalls(calls)))
         } else {
-            let content = choice.message.content.unwrap_or_default();
-            Ok(AgentStepResult::Text(content))
+            let content = choice.message.content.clone().unwrap_or_default();
+            let assistant_msg = AgentMessage {
+                role: "assistant".to_owned(),
+                content: Some(content.clone()),
+                reasoning_content,
+                tool_calls: None,
+                tool_call_id: None,
+            };
+            Ok((assistant_msg, AgentStepResult::Text(content)))
         }
     }
 
