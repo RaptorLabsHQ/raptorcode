@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs;
-use std::io::BufRead;
+use std::io::{BufRead, Write};
 use std::path::{Component, Path, PathBuf};
 
 use raptor_agent::{
@@ -142,6 +142,89 @@ const C_GREEN_BOLD: &str = "\x1b[1;32m";
 const C_GREEN: &str = "\x1b[32m";
 const C_YELLOW_BOLD: &str = "\x1b[1;33m";
 const C_CYAN: &str = "\x1b[36m";
+
+struct MenuItem {
+    label: String,
+    sublabel: Option<String>,
+    enabled: bool,
+}
+
+fn render_menu_lines(items: &[MenuItem], cursor: usize, raw_mode: bool) {
+    use std::io::Write as _;
+    let nl: &str = if raw_mode { "\r\n" } else { "\n" };
+    for (i, item) in items.iter().enumerate() {
+        let selected = i == cursor;
+        if selected && item.enabled {
+            print!("  {C_GREEN_BOLD}❯{C_RESET}  {C_BOLD}{}{C_RESET}", item.label);
+        } else if item.enabled {
+            print!("     {}", item.label);
+        } else {
+            print!("     {C_DIM}{}{C_RESET}", item.label);
+        }
+        if let Some(ref sub) = item.sublabel {
+            print!("  {C_DIM}{sub}{C_RESET}");
+        }
+        print!("{nl}");
+    }
+    std::io::stdout().flush().ok();
+}
+
+fn interactive_select(items: &[MenuItem]) -> Option<usize> {
+    use crossterm::{
+        event::{self, Event, KeyCode, KeyModifiers},
+        terminal::{disable_raw_mode, enable_raw_mode},
+    };
+
+    let enabled: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, it)| it.enabled)
+        .map(|(i, _)| i)
+        .collect();
+
+    if enabled.is_empty() {
+        return None;
+    }
+
+    let mut cursor_idx = 0usize;
+    render_menu_lines(items, enabled[cursor_idx], false);
+
+    if enable_raw_mode().is_err() {
+        return enabled.first().copied();
+    }
+
+    let result = loop {
+        match event::read() {
+            Ok(Event::Key(key)) => match key.code {
+                KeyCode::Up if cursor_idx > 0 => {
+                    cursor_idx -= 1;
+                    print!("\x1b[{}A\r", items.len());
+                    std::io::stdout().flush().ok();
+                    render_menu_lines(items, enabled[cursor_idx], true);
+                }
+                KeyCode::Down if cursor_idx + 1 < enabled.len() => {
+                    cursor_idx += 1;
+                    print!("\x1b[{}A\r", items.len());
+                    std::io::stdout().flush().ok();
+                    render_menu_lines(items, enabled[cursor_idx], true);
+                }
+                KeyCode::Enter => break Some(enabled[cursor_idx]),
+                KeyCode::Esc => break None,
+                KeyCode::Char('c')
+                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    break None
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    };
+
+    disable_raw_mode().ok();
+    println!();
+    result
+}
 
 impl CliError {
     fn new(message: impl Into<String>) -> Self {
@@ -677,7 +760,7 @@ pub fn run_interactive_chat(
     print!("{}", render_startup_banner(startup_options));
     std::io::stdout().flush().ok();
 
-    let (api_key, is_new_key) = match resolve_deepseek_api_key() {
+    let (mut api_key, is_new_key) = match resolve_deepseek_api_key() {
         Some(key) => (key, false),
         None => {
             let key = prompt_provider_and_api_key()?;
@@ -685,7 +768,7 @@ pub fn run_interactive_chat(
         }
     };
 
-    let provider =
+    let mut provider =
         DeepSeekProvider::new(&api_key).map_err(|error| CliError::new(error.to_string()))?;
 
     if is_new_key {
@@ -700,31 +783,40 @@ pub fn run_interactive_chat(
     let agent_mode = prompt_file_access_consent(current_dir);
 
     if agent_mode {
-        println!("  {C_GREEN_BOLD}✓  Agentic mode enabled.{C_RESET}  {C_DIM}Files will be written to the current directory.{C_RESET}");
+        println!("  {C_GREEN_BOLD}✓  Agentic mode enabled.{C_RESET}  {C_DIM}Full file system and shell access granted.{C_RESET}");
     } else {
         println!("  {C_DIM}Chat mode active.{C_RESET}  No files will be modified.");
     }
 
-    println!();
-    println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}");
-    println!("  {C_RED_BOLD}RaptorCode AI Agent{C_RESET}  {C_DIM}│{C_RESET}  DeepSeek / deepseek-chat");
-    println!("  Type your request and press Enter to send.");
-    println!("  {C_DIM}/help for commands   Ctrl+D or /exit to quit{C_RESET}");
-    println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}\n");
-
-    let model_id = provider
+    let mut model_id = provider
         .default_model()
         .cloned()
         .ok_or_else(|| CliError::new("DeepSeek provider has no default model"))?;
 
+    println!();
+    println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}");
+    println!(
+        "  {C_RED_BOLD}RaptorCode AI Agent{C_RESET}  {C_DIM}│{C_RESET}  DeepSeek / {}",
+        model_id.as_str()
+    );
+    println!("  Type your request and press Enter to send.");
+    println!("  {C_DIM}/help · /api · /model · Ctrl+D or /exit to quit{C_RESET}");
+    println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}\n");
+
     let tools = build_agent_tools();
-    let agent_system = AgentMessage {
+    let mut agent_working_dir = current_dir.to_path_buf();
+
+    let make_agent_system = |_model: &ModelId| AgentMessage {
         role: "system".to_owned(),
-        content: Some(AGENT_SYSTEM_PROMPT.to_owned()),
+        content: Some(format!(
+            "{AGENT_SYSTEM_PROMPT}\n\nCurrent working directory: {}",
+            current_dir.display()
+        )),
         tool_calls: None,
         tool_call_id: None,
     };
-    let mut agent_history: Vec<AgentMessage> = vec![agent_system.clone()];
+
+    let mut agent_history: Vec<AgentMessage> = vec![make_agent_system(&model_id)];
     let mut chat_history: Vec<CompletionMessage> =
         vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
 
@@ -751,7 +843,7 @@ pub fn run_interactive_chat(
             continue;
         }
 
-        match input.as_str() {
+        match input.to_lowercase().as_str() {
             "/exit" | "/quit" => {
                 println!("Goodbye.");
                 break;
@@ -761,9 +853,114 @@ pub fn run_interactive_chat(
                 continue;
             }
             "/clear" => {
-                agent_history = vec![agent_system.clone()];
+                agent_history = vec![make_agent_system(&model_id)];
                 chat_history = vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
                 println!("Conversation cleared.\n");
+                continue;
+            }
+            "/api" => {
+                println!();
+                println!("  {C_BOLD}API Key Settings{C_RESET}  {C_DIM}↑/↓ · Enter{C_RESET}");
+                println!();
+                let api_items = vec![
+                    MenuItem {
+                        label: "Change API Key".to_owned(),
+                        sublabel: None,
+                        enabled: true,
+                    },
+                    MenuItem {
+                        label: "Show current API Key".to_owned(),
+                        sublabel: None,
+                        enabled: true,
+                    },
+                    MenuItem {
+                        label: "Cancel".to_owned(),
+                        sublabel: None,
+                        enabled: true,
+                    },
+                ];
+                match interactive_select(&api_items) {
+                    Some(0) => {
+                        match prompt_provider_and_api_key() {
+                            Ok(new_key) => {
+                                print!("\n  {C_DIM}⟳  Testing connection...{C_RESET}");
+                                std::io::stdout().flush().ok();
+                                match DeepSeekProvider::new(&new_key) {
+                                    Ok(new_prov) => match test_deepseek_connection(&new_prov) {
+                                        Ok(()) => {
+                                            match write_stored_deepseek_api_key(&new_key) {
+                                                Ok(()) => {
+                                                    provider = new_prov;
+                                                    api_key = new_key;
+                                                    println!("\n  {C_GREEN_BOLD}✓  API key updated and saved.{C_RESET}");
+                                                }
+                                                Err(e) => eprintln!("\n  failed to save key: {e}"),
+                                            }
+                                        }
+                                        Err(e) => eprintln!("\n  {C_RED}✗  {e}{C_RESET}"),
+                                    },
+                                    Err(e) => eprintln!("\n  {C_RED}✗  {e}{C_RESET}"),
+                                }
+                            }
+                            Err(e) => eprintln!("  {e}"),
+                        }
+                    }
+                    Some(1) => {
+                        let masked = if api_key.len() > 12 {
+                            format!("{}...{}", &api_key[..8], &api_key[api_key.len() - 4..])
+                        } else {
+                            "***".to_owned()
+                        };
+                        println!("  {C_DIM}Current API key:{C_RESET} {C_CYAN}{masked}{C_RESET}");
+                    }
+                    _ => {}
+                }
+                println!();
+                continue;
+            }
+            "/model" => {
+                println!();
+                print!("  {C_DIM}Fetching available models...{C_RESET}");
+                std::io::stdout().flush().ok();
+                let model_list = match provider.list_models() {
+                    Ok(models) if !models.is_empty() => {
+                        println!(" done\r");
+                        models
+                    }
+                    _ => {
+                        println!(" using defaults\r");
+                        vec![
+                            "deepseek-chat".to_owned(),
+                            "deepseek-reasoner".to_owned(),
+                        ]
+                    }
+                };
+                println!();
+                println!("  {C_BOLD}Select model{C_RESET}  {C_DIM}↑/↓ · Enter{C_RESET}");
+                println!();
+                let model_items: Vec<MenuItem> = model_list
+                    .iter()
+                    .map(|m| MenuItem {
+                        label: m.clone(),
+                        sublabel: if m.as_str() == model_id.as_str() {
+                            Some("current".to_owned())
+                        } else {
+                            None
+                        },
+                        enabled: true,
+                    })
+                    .collect();
+                if let Some(idx) = interactive_select(&model_items) {
+                    if let Ok(new_model) = ModelId::new(&model_list[idx]) {
+                        model_id = new_model;
+                        agent_history = vec![make_agent_system(&model_id)];
+                        println!(
+                            "  {C_GREEN_BOLD}✓  Model: {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}",
+                            model_id.as_str()
+                        );
+                    }
+                }
+                println!();
                 continue;
             }
             _ => {}
@@ -779,7 +976,13 @@ pub fn run_interactive_chat(
                 tool_call_id: None,
             });
 
-            match run_agent_loop(current_dir, &provider, &model_id, &mut agent_history, &tools) {
+            match run_agent_loop(
+                &mut agent_working_dir,
+                &provider,
+                &model_id,
+                &mut agent_history,
+                &tools,
+            ) {
                 Ok(content) => {
                     let content = content.trim().to_owned();
                     println!("{content}\n");
@@ -794,7 +997,9 @@ pub fn run_interactive_chat(
                     let msg = error.to_string();
                     eprintln!("Error: {msg}\n");
                     if msg.contains("authentication") {
-                        eprintln!("Delete ~/.raptor/.credentials or set DEEPSEEK_API_KEY to reset.");
+                        eprintln!(
+                            "Delete ~/.raptor/.credentials or set DEEPSEEK_API_KEY to reset."
+                        );
                         break;
                     }
                 }
@@ -864,24 +1069,31 @@ fn prompt_provider_and_api_key() -> Result<String, CliError> {
     println!("{C_RED_BOLD}  ╚═══════════════════════════════════════════════════╝{C_RESET}");
     println!();
     println!("  {C_DIM}Connect RaptorCode to an AI provider to start coding.{C_RESET}");
+    println!("  {C_DIM}↑/↓ to navigate · Enter to select{C_RESET}");
     println!();
-    println!("  {C_YELLOW_BOLD}[1]{C_RESET}  {C_BOLD}DeepSeek API{C_RESET}  {C_DIM}─  deepseek-chat · platform.deepseek.com{C_RESET}");
-    println!();
-    print!("  {C_DIM}Enter selection{C_RESET} [{C_YELLOW_BOLD}1{C_RESET}]: ");
-    std::io::stdout().flush().ok();
 
-    let mut selection = String::new();
-    std::io::stdin()
-        .read_line(&mut selection)
-        .map_err(|error| CliError::new(format!("failed to read input: {error}")))?;
+    let items = vec![
+        MenuItem {
+            label: "DeepSeek API  ─  deepseek-chat · platform.deepseek.com".to_owned(),
+            sublabel: None,
+            enabled: true,
+        },
+        MenuItem {
+            label: "OpenRouter Key  [Coming Soon]".to_owned(),
+            sublabel: None,
+            enabled: false,
+        },
+        MenuItem {
+            label: "Gemini API Key  [Coming Soon]".to_owned(),
+            sublabel: None,
+            enabled: false,
+        },
+    ];
 
-    let selection = selection.trim();
-    if !selection.is_empty() && selection != "1" {
-        return Err(CliError::new(
-            "invalid selection; only option [1] DeepSeek API is available",
-        ));
-    }
+    interactive_select(&items)
+        .ok_or_else(|| CliError::new("provider selection cancelled"))?;
 
+    // Only DeepSeek is selectable for now
     println!();
     println!("  {C_BOLD}DeepSeek API{C_RESET} selected.");
     println!("  Get your API key at: {C_CYAN}{DEEPSEEK_API_KEY_URL}{C_RESET}");
@@ -966,18 +1178,20 @@ fn user_credentials_path() -> Option<PathBuf> {
 }
 
 fn render_interactive_help() -> String {
-    "\nRaptorCode commands:\n  /help or ?   Show this help\n  /clear       Clear conversation history\n  /exit        Exit\n  /quit        Exit\n\nJust type your coding request and press Enter.\n\n".to_owned()
+    format!(
+        "\n{C_BOLD}RaptorCode commands:{C_RESET}\n  /help or ?   Show this help\n  /clear       Clear conversation history\n  /api         Change or view API key\n  /model       Select AI model\n  /exit        Exit\n  /quit        Exit\n\nJust type your coding request and press Enter.\n\n"
+    )
 }
 
-fn prompt_file_access_consent(current_dir: &Path) -> bool {
+fn prompt_file_access_consent(_current_dir: &Path) -> bool {
     use std::io::Write as _;
 
     println!();
     println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}");
-    println!("  {C_YELLOW_BOLD}⚠  Agentic File Access{C_RESET}");
+    println!("  {C_YELLOW_BOLD}⚡  Agentic Mode{C_RESET}");
     println!();
-    println!("  Allow RaptorCode to read and write files in:");
-    println!("  {C_CYAN}{}{C_RESET}", current_dir.display());
+    println!("  Allow RaptorCode to execute shell commands and modify files?");
+    println!("  {C_DIM}Grants access to the full file system as your user.{C_RESET}");
     println!();
     print!("  Grant permission? [{C_GREEN_BOLD}y{C_RESET}/{C_DIM}N{C_RESET}]: ");
     std::io::stdout().flush().ok();
@@ -991,40 +1205,24 @@ fn prompt_file_access_consent(current_dir: &Path) -> bool {
     answer == "y" || answer == "yes"
 }
 
-fn validate_agent_path(working_dir: &Path, path_str: &str) -> Result<PathBuf, CliError> {
+fn resolve_tool_path(working_dir: &PathBuf, path_str: &str) -> PathBuf {
     let path = Path::new(path_str);
-
     if path.is_absolute() {
-        return Err(CliError::new(format!("absolute path not allowed: {path_str}")));
+        path.to_path_buf()
+    } else {
+        working_dir.join(path)
     }
-
-    for component in path.components() {
-        match component {
-            Component::ParentDir => {
-                return Err(CliError::new(format!("path traversal not allowed: {path_str}")));
-            }
-            Component::Normal(name) => {
-                let s = name.to_string_lossy();
-                if matches!(s.as_ref(), ".git" | ".raptor" | "target" | "node_modules") {
-                    return Err(CliError::new(format!("access to {s} is not allowed")));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    Ok(working_dir.join(path))
 }
 
 fn build_agent_tools() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "write_file".to_owned(),
-            description: "Write content to a file. Creates the file and any parent directories if needed. Overwrites existing content.".to_owned(),
+            description: "Write content to a file. Creates the file and any parent directories if needed. Absolute and relative paths both accepted.".to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Relative path to the file" },
+                    "path": { "type": "string", "description": "Path to the file (absolute or relative to cwd)" },
                     "content": { "type": "string", "description": "File content to write" }
                 },
                 "required": ["path", "content"]
@@ -1032,22 +1230,22 @@ fn build_agent_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "read_file".to_owned(),
-            description: "Read the contents of a file.".to_owned(),
+            description: "Read the contents of a file. Absolute and relative paths both accepted.".to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Relative path to the file" }
+                    "path": { "type": "string", "description": "Path to the file" }
                 },
                 "required": ["path"]
             }),
         },
         ToolDefinition {
             name: "list_directory".to_owned(),
-            description: "List files and directories at a path.".to_owned(),
+            description: "List files and directories. Supports absolute paths, relative paths, and .. traversal.".to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Relative path to list (default: current directory)" }
+                    "path": { "type": "string", "description": "Path to list (default: current working directory)" }
                 },
                 "required": []
             }),
@@ -1058,15 +1256,38 @@ fn build_agent_tools() -> Vec<ToolDefinition> {
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Relative path to the directory to create" }
+                    "path": { "type": "string", "description": "Path to the directory to create" }
                 },
                 "required": ["path"]
+            }),
+        },
+        ToolDefinition {
+            name: "change_directory".to_owned(),
+            description: "Change the current working directory. Affects all subsequent tool calls. Supports absolute paths and .. traversal.".to_owned(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Directory to change to (absolute or relative)" }
+                },
+                "required": ["path"]
+            }),
+        },
+        ToolDefinition {
+            name: "run_command".to_owned(),
+            description: "Execute a shell command and return its output. Use for git, npm, cargo, find, grep, or any other system operation.".to_owned(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "Shell command to run" },
+                    "working_dir": { "type": "string", "description": "Directory to run the command in (default: current working directory)" }
+                },
+                "required": ["command"]
             }),
         },
     ]
 }
 
-fn execute_tool_call(working_dir: &Path, name: &str, arguments: &str) -> String {
+fn execute_tool_call(working_dir: &mut PathBuf, name: &str, arguments: &str) -> String {
     let args: serde_json::Value = match serde_json::from_str(arguments) {
         Ok(v) => v,
         Err(e) => return format!("error: bad tool arguments: {e}"),
@@ -1080,17 +1301,14 @@ fn execute_tool_call(working_dir: &Path, name: &str, arguments: &str) -> String 
             let Some(content) = args["content"].as_str() else {
                 return "error: missing content argument".to_owned();
             };
-            let target = match validate_agent_path(working_dir, path_str) {
-                Ok(p) => p,
-                Err(e) => return format!("error: {e}"),
-            };
+            let target = resolve_tool_path(working_dir, path_str);
             if let Some(parent) = target.parent() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
                     return format!("error: failed to create directories: {e}");
                 }
             }
             match std::fs::write(&target, content) {
-                Ok(()) => format!("wrote {} bytes to {path_str}", content.len()),
+                Ok(()) => format!("wrote {} bytes to {}", content.len(), target.display()),
                 Err(e) => format!("error: {e}"),
             }
         }
@@ -1098,10 +1316,7 @@ fn execute_tool_call(working_dir: &Path, name: &str, arguments: &str) -> String 
             let Some(path_str) = args["path"].as_str() else {
                 return "error: missing path argument".to_owned();
             };
-            let target = match validate_agent_path(working_dir, path_str) {
-                Ok(p) => p,
-                Err(e) => return format!("error: {e}"),
-            };
+            let target = resolve_tool_path(working_dir, path_str);
             match std::fs::read_to_string(&target) {
                 Ok(content) => content,
                 Err(e) => format!("error: {e}"),
@@ -1109,10 +1324,7 @@ fn execute_tool_call(working_dir: &Path, name: &str, arguments: &str) -> String 
         }
         "list_directory" => {
             let path_str = args["path"].as_str().unwrap_or(".");
-            let target = match validate_agent_path(working_dir, path_str) {
-                Ok(p) => p,
-                Err(e) => return format!("error: {e}"),
-            };
+            let target = resolve_tool_path(working_dir, path_str);
             match std::fs::read_dir(&target) {
                 Ok(entries) => {
                     let mut names: Vec<String> = entries
@@ -1128,9 +1340,9 @@ fn execute_tool_call(working_dir: &Path, name: &str, arguments: &str) -> String 
                         .collect();
                     names.sort();
                     if names.is_empty() {
-                        "(empty)".to_owned()
+                        format!("(empty) — {}", target.display())
                     } else {
-                        names.join("\n")
+                        format!("{}\n---\n{}", target.display(), names.join("\n"))
                     }
                 }
                 Err(e) => format!("error: {e}"),
@@ -1140,12 +1352,68 @@ fn execute_tool_call(working_dir: &Path, name: &str, arguments: &str) -> String 
             let Some(path_str) = args["path"].as_str() else {
                 return "error: missing path argument".to_owned();
             };
-            let target = match validate_agent_path(working_dir, path_str) {
-                Ok(p) => p,
-                Err(e) => return format!("error: {e}"),
-            };
+            let target = resolve_tool_path(working_dir, path_str);
             match std::fs::create_dir_all(&target) {
-                Ok(()) => format!("created {path_str}"),
+                Ok(()) => format!("created {}", target.display()),
+                Err(e) => format!("error: {e}"),
+            }
+        }
+        "change_directory" => {
+            let Some(path_str) = args["path"].as_str() else {
+                return "error: missing path argument".to_owned();
+            };
+            let target = resolve_tool_path(working_dir, path_str);
+            match target.canonicalize() {
+                Ok(canonical) if canonical.is_dir() => {
+                    *working_dir = canonical;
+                    format!("cwd: {}", working_dir.display())
+                }
+                Ok(_) => format!("error: not a directory: {path_str}"),
+                Err(e) => format!("error: {e}"),
+            }
+        }
+        "run_command" => {
+            let Some(cmd) = args["command"].as_str() else {
+                return "error: missing command argument".to_owned();
+            };
+            let cmd_dir = if let Some(dir_str) = args["working_dir"].as_str() {
+                resolve_tool_path(working_dir, dir_str)
+            } else {
+                working_dir.clone()
+            };
+            match std::process::Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .current_dir(&cmd_dir)
+                .output()
+            {
+                Ok(out) => {
+                    let stdout_str = String::from_utf8_lossy(&out.stdout);
+                    let stderr_str = String::from_utf8_lossy(&out.stderr);
+                    let mut result = String::new();
+                    if !stdout_str.is_empty() {
+                        result.push_str(stdout_str.trim_end());
+                    }
+                    if !stderr_str.is_empty() {
+                        if !result.is_empty() {
+                            result.push('\n');
+                        }
+                        result.push_str(&format!("[stderr] {}", stderr_str.trim_end()));
+                    }
+                    if result.len() > 4000 {
+                        result.truncate(4000);
+                        result.push_str("\n...[truncated]");
+                    }
+                    if result.is_empty() {
+                        if out.status.success() {
+                            "ok (no output)".to_owned()
+                        } else {
+                            format!("exited with code {}", out.status.code().unwrap_or(-1))
+                        }
+                    } else {
+                        result
+                    }
+                }
                 Err(e) => format!("error: {e}"),
             }
         }
@@ -1154,7 +1422,7 @@ fn execute_tool_call(working_dir: &Path, name: &str, arguments: &str) -> String 
 }
 
 fn run_agent_loop(
-    working_dir: &Path,
+    working_dir: &mut PathBuf,
     provider: &DeepSeekProvider,
     model_id: &ModelId,
     history: &mut Vec<AgentMessage>,
@@ -1186,7 +1454,7 @@ fn run_agent_loop(
                         .next()
                         .unwrap_or("done")
                         .chars()
-                        .take(60)
+                        .take(70)
                         .collect();
                     if result.starts_with("error:") {
                         println!("  {C_RED}✗ {preview}{C_RESET}");

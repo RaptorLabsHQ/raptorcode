@@ -250,6 +250,16 @@ struct DeepSeekAgentToolCallFunctionResponse {
     arguments: String,
 }
 
+#[derive(Deserialize)]
+struct DeepSeekModelsListResponse {
+    data: Vec<DeepSeekModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct DeepSeekModelEntry {
+    id: String,
+}
+
 pub struct DeepSeekProvider {
     api_key: String,
     client: reqwest::blocking::Client,
@@ -573,6 +583,30 @@ impl DeepSeekProvider {
             let content = choice.message.content.unwrap_or_default();
             Ok(AgentStepResult::Text(content))
         }
+    }
+
+    pub fn list_models(&self) -> Result<Vec<String>, ProviderError> {
+        let response = self
+            .client
+            .get("https://api.deepseek.com/models")
+            .bearer_auth(&self.api_key)
+            .send()
+            .map_err(|e| ProviderError::HttpTransport(e.to_string()))?;
+        let status = response.status().as_u16();
+        let body = response
+            .text()
+            .map_err(|e| ProviderError::HttpTransport(e.to_string()))?;
+
+        if status != 200 {
+            return Err(map_deepseek_error_status(status, &body));
+        }
+
+        let parsed: DeepSeekModelsListResponse =
+            serde_json::from_str(&body).map_err(|e| {
+                ProviderError::MalformedResponse(format!("failed to parse models list: {e}"))
+            })?;
+
+        Ok(parsed.data.into_iter().map(|m| m.id).collect())
     }
 }
 

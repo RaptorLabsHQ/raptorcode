@@ -16,6 +16,7 @@ raptor-store.workspace = true
 raptor-tools.workspace = true
 raptor-tui.workspace = true
 serde_json.workspace = true
+crossterm.workspace = true
 
 [lib]
 name = "raptor_cli"
