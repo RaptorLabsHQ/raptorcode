@@ -41,6 +41,20 @@ fn main() -> ExitCode {
         };
     }
 
+    if args.is_empty()
+        && stdin_interactive
+        && stdout_interactive
+        && !raptor_cli::ci_environment_enabled()
+    {
+        return match raptor_cli::run_interactive_chat(&current_dir, &startup_options) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     let result = if stdin_interactive {
         let mut stdin = stdin.lock();
 

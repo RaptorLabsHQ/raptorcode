@@ -131,6 +131,16 @@ const SWARM_IMPLEMENTATION_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervis
 const RAPTOR_PLAN_FILE_NAME: &str = "RAPTOR_PLAN.md";
 const RAPTOR_IMPLEMENTATION_PROPOSAL_FILE_NAME: &str = "RAPTOR_IMPLEMENTATION_PROPOSAL.md";
 
+const C_RESET: &str = "\x1b[0m";
+const C_BOLD: &str = "\x1b[1m";
+const C_DIM: &str = "\x1b[2m";
+const C_RED: &str = "\x1b[91m";
+const C_RED_BOLD: &str = "\x1b[1;91m";
+const C_GREEN_BOLD: &str = "\x1b[1;32m";
+const C_GREEN: &str = "\x1b[32m";
+const C_YELLOW_BOLD: &str = "\x1b[1;33m";
+const C_CYAN: &str = "\x1b[36m";
+
 impl CliError {
     fn new(message: impl Into<String>) -> Self {
         Self {
@@ -654,6 +664,254 @@ pub fn chat_with_provider(message: &str, provider: &dyn Provider) -> Result<Stri
         .map_err(|error| CliError::new(error.to_string()))?;
 
     Ok(render_chat_response(&response))
+}
+
+pub fn run_interactive_chat(
+    _current_dir: &Path,
+    startup_options: &StartupBannerOptions,
+) -> Result<(), CliError> {
+    use std::io::Write as _;
+
+    print!("{}", render_startup_banner(startup_options));
+    std::io::stdout().flush().ok();
+
+    let (api_key, is_new_key) = match resolve_deepseek_api_key() {
+        Some(key) => (key, false),
+        None => {
+            let key = prompt_provider_and_api_key()?;
+            (key, true)
+        }
+    };
+
+    let provider =
+        DeepSeekProvider::new(&api_key).map_err(|error| CliError::new(error.to_string()))?;
+
+    if is_new_key {
+        println!("\n  {C_DIM}⟳  Testing connection to DeepSeek API...{C_RESET}");
+        std::io::stdout().flush().ok();
+        test_deepseek_connection(&provider)?;
+        write_stored_deepseek_api_key(&api_key)?;
+        println!("  {C_GREEN_BOLD}✓  Connection established.{C_RESET}{C_DIM}  API key saved to ~/.raptor/.credentials{C_RESET}");
+        println!("  {C_GREEN_BOLD}✓  Ready to code.{C_RESET}");
+    }
+
+    println!();
+    println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}");
+    println!("  {C_RED_BOLD}RaptorCode AI Agent{C_RESET}  {C_DIM}│{C_RESET}  DeepSeek / deepseek-chat");
+    println!("  Type your request and press Enter to send.");
+    println!("  {C_DIM}/help for commands   Ctrl+D or /exit to quit{C_RESET}");
+    println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}\n");
+
+    let mut history: Vec<CompletionMessage> = vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
+
+    loop {
+        print!("{C_RED_BOLD}>{C_RESET} ");
+        std::io::stdout().flush().ok();
+
+        let mut input = String::new();
+        match std::io::stdin().read_line(&mut input) {
+            Ok(0) => {
+                println!("\nGoodbye.");
+                break;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("input error: {error}");
+                break;
+            }
+        }
+
+        let input = input.trim().to_owned();
+
+        if input.is_empty() {
+            continue;
+        }
+
+        match input.as_str() {
+            "/exit" | "/quit" => {
+                println!("Goodbye.");
+                break;
+            }
+            "/help" | "?" => {
+                print!("{}", render_interactive_help());
+                continue;
+            }
+            "/clear" => {
+                history = vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
+                println!("Conversation cleared.\n");
+                continue;
+            }
+            _ => {}
+        }
+
+        history.push(CompletionMessage::user(&input));
+
+        let model_id = provider
+            .default_model()
+            .cloned()
+            .ok_or_else(|| CliError::new("DeepSeek provider has no default model"))?;
+        let request = CompletionRequest::new(provider.id().clone(), model_id, history.clone());
+
+        println!();
+
+        match provider.complete(request) {
+            Ok(response) => {
+                let content = response.content.trim().to_owned();
+                println!("{}\n", content);
+                history.push(CompletionMessage::assistant(&content));
+            }
+            Err(ProviderError::MissingApiKey) | Err(ProviderError::AuthenticationFailed(_)) => {
+                history.pop();
+                eprintln!("Authentication failed. Your API key may be invalid.");
+                eprintln!("Delete ~/.raptor/.credentials or set DEEPSEEK_API_KEY to reset.\n");
+                break;
+            }
+            Err(error) => {
+                history.pop();
+                eprintln!("Error: {error}\n");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn test_deepseek_connection(provider: &DeepSeekProvider) -> Result<(), CliError> {
+    let model_id = provider
+        .default_model()
+        .cloned()
+        .ok_or_else(|| CliError::new("DeepSeek provider has no default model"))?;
+    let request = CompletionRequest::new(
+        provider.id().clone(),
+        model_id,
+        vec![
+            CompletionMessage::system("You are a connection test assistant."),
+            CompletionMessage::user("Reply with only the single word: ready"),
+        ],
+    );
+    provider
+        .complete(request)
+        .map(|_| ())
+        .map_err(|error| match error {
+            ProviderError::MissingApiKey | ProviderError::AuthenticationFailed(_) => {
+                CliError::new("API key is invalid or not authorized. Please check your key at https://platform.deepseek.com/api_keys")
+            }
+            other => CliError::new(format!("connection test failed: {other}")),
+        })
+}
+
+fn prompt_provider_and_api_key() -> Result<String, CliError> {
+    use std::io::Write as _;
+
+    println!();
+    println!("{C_RED_BOLD}  ╔═══════════════════════════════════════════════════╗{C_RESET}");
+    println!("{C_RED_BOLD}  ║{C_RESET}  {C_BOLD}⚡  CONFIGURE AI PROVIDER{C_RESET}                       {C_RED_BOLD}║{C_RESET}");
+    println!("{C_RED_BOLD}  ╚═══════════════════════════════════════════════════╝{C_RESET}");
+    println!();
+    println!("  {C_DIM}Connect RaptorCode to an AI provider to start coding.{C_RESET}");
+    println!();
+    println!("  {C_YELLOW_BOLD}[1]{C_RESET}  {C_BOLD}DeepSeek API{C_RESET}  {C_DIM}─  deepseek-chat · platform.deepseek.com{C_RESET}");
+    println!();
+    print!("  {C_DIM}Enter selection{C_RESET} [{C_YELLOW_BOLD}1{C_RESET}]: ");
+    std::io::stdout().flush().ok();
+
+    let mut selection = String::new();
+    std::io::stdin()
+        .read_line(&mut selection)
+        .map_err(|error| CliError::new(format!("failed to read input: {error}")))?;
+
+    let selection = selection.trim();
+    if !selection.is_empty() && selection != "1" {
+        return Err(CliError::new(
+            "invalid selection; only option [1] DeepSeek API is available",
+        ));
+    }
+
+    println!();
+    println!("  {C_BOLD}DeepSeek API{C_RESET} selected.");
+    println!("  Get your API key at: {C_CYAN}{DEEPSEEK_API_KEY_URL}{C_RESET}");
+    println!();
+    print!("  {C_RED_BOLD}Paste your DeepSeek API key:{C_RESET} ");
+    std::io::stdout().flush().ok();
+
+    let mut key = String::new();
+    std::io::stdin()
+        .read_line(&mut key)
+        .map_err(|error| CliError::new(format!("failed to read input: {error}")))?;
+
+    let key = key.trim().to_owned();
+
+    if key.is_empty() {
+        return Err(CliError::new(
+            "API key is required; run raptor again to enter your key",
+        ));
+    }
+
+    if key.len() < 8 || key.contains(char::is_whitespace) {
+        return Err(CliError::new(
+            "API key appears invalid — please check and run raptor again",
+        ));
+    }
+
+    Ok(key)
+}
+
+fn resolve_deepseek_api_key() -> Option<String> {
+    if let Ok(key) = std::env::var(DEEPSEEK_API_KEY_ENV) {
+        let key = key.trim().to_owned();
+        if !key.is_empty() {
+            return Some(key);
+        }
+    }
+    read_stored_deepseek_api_key()
+}
+
+fn read_stored_deepseek_api_key() -> Option<String> {
+    let path = user_credentials_path()?;
+    let content = std::fs::read_to_string(path).ok()?;
+    let key = content.trim().to_owned();
+    if key.is_empty() {
+        None
+    } else {
+        Some(key)
+    }
+}
+
+fn write_stored_deepseek_api_key(key: &str) -> Result<(), CliError> {
+    let dir =
+        user_raptor_dir().ok_or_else(|| CliError::new("cannot determine home directory"))?;
+    std::fs::create_dir_all(&dir).map_err(|error| {
+        CliError::new(format!("failed to create {}: {error}", dir.display()))
+    })?;
+    let path = dir.join(".credentials");
+    std::fs::write(&path, key)
+        .map_err(|error| CliError::new(format!("failed to write credentials: {error}")))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(
+            |error| {
+                CliError::new(format!(
+                    "failed to set credentials file permissions: {error}"
+                ))
+            },
+        )?;
+    }
+
+    Ok(())
+}
+
+fn user_raptor_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".raptor"))
+}
+
+fn user_credentials_path() -> Option<PathBuf> {
+    user_raptor_dir().map(|dir| dir.join(".credentials"))
+}
+
+fn render_interactive_help() -> String {
+    "\nRaptorCode commands:\n  /help or ?   Show this help\n  /clear       Clear conversation history\n  /exit        Exit\n  /quit        Exit\n\nJust type your coding request and press Enter.\n\n".to_owned()
 }
 
 pub fn create_agent(

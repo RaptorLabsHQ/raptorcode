@@ -294,6 +294,13 @@ impl CompletionMessage {
             content: content.into(),
         }
     }
+
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: CompletionMessageRole::Assistant,
+            content: content.into(),
+        }
+    }
 }
 
 impl CompletionMessageRole {
