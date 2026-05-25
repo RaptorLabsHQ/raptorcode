@@ -30,6 +30,29 @@ RaptorCode v0.1 focuses on:
 
 DeepSeek is the only implemented execution provider before v0.1. Other provider names may appear only as future metadata boundaries; OpenAI, OpenRouter, Gemini, Ollama, LM Studio, MCP, cloud, desktop, team, marketplace, and enterprise systems are not implemented in v0.1.
 
+## Install From `.deb`
+
+Download the Debian package from a RaptorCode release, then install it:
+
+```bash
+sudo apt install ./raptor-code_0.1.0_amd64.deb
+```
+
+Verify the installed commands:
+
+```bash
+raptor --help
+raptorcode --help
+```
+
+Build the Debian package locally from the repository root:
+
+```bash
+./scripts/package-deb.sh
+```
+
+The package is written to `dist/`.
+
 ## Install From Source
 
 Prerequisites:

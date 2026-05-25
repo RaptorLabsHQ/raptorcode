@@ -34,6 +34,14 @@ CI=true cargo run --quiet -p raptor-cli --bin raptor
 git diff --check
 ```
 
+Build the Linux Debian installer before publishing release assets:
+
+```bash
+./scripts/package-deb.sh
+dpkg-deb --info dist/raptor-code_0.1.0_amd64.deb
+dpkg-deb --contents dist/raptor-code_0.1.0_amd64.deb
+```
+
 Verify the installed user-facing command from the repository root:
 
 ```bash
