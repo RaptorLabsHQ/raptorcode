@@ -274,6 +274,7 @@ Phase 2 work is intentionally separated from the v0.1 release path.
 
 ## Documentation
 
+- [**Persistent Context Handover — RaptorCode's Memory System**](docs/persistent-context-handover.md) ⬅ unique capability
 - [Architecture](docs/architecture.md)
 - [Security Design](docs/security.md)
 - [Task Workflow](docs/task-workflow.md)
