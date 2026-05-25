@@ -108,6 +108,34 @@ pub enum ProviderError {
     RateLimited(String),
 }
 
+#[derive(Debug, Clone)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentMessage {
+    pub role: String,
+    pub content: Option<String>,
+    pub tool_calls: Option<Vec<ToolCall>>,
+    pub tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum AgentStepResult {
+    Text(String),
+    ToolCalls(Vec<ToolCall>),
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DeepSeekChatRequest {
     pub model: String,
@@ -144,6 +172,82 @@ struct DeepSeekUsage {
     completion_tokens: Option<u32>,
     prompt_tokens: Option<u32>,
     total_tokens: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct DeepSeekAgentRequest {
+    model: String,
+    messages: Vec<DeepSeekAgentRequestMessage>,
+    tools: Vec<DeepSeekAgentToolSpec>,
+    stream: bool,
+}
+
+#[derive(Serialize)]
+struct DeepSeekAgentRequestMessage {
+    role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<DeepSeekAgentToolCallSpec>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DeepSeekAgentToolSpec {
+    #[serde(rename = "type")]
+    tool_type: String,
+    function: DeepSeekAgentFunctionSpec,
+}
+
+#[derive(Serialize)]
+struct DeepSeekAgentFunctionSpec {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct DeepSeekAgentToolCallSpec {
+    id: String,
+    #[serde(rename = "type")]
+    tool_type: String,
+    function: DeepSeekAgentToolCallFunctionSpec,
+}
+
+#[derive(Serialize)]
+struct DeepSeekAgentToolCallFunctionSpec {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Deserialize)]
+struct DeepSeekAgentResponse {
+    choices: Vec<DeepSeekAgentChoice>,
+}
+
+#[derive(Deserialize)]
+struct DeepSeekAgentChoice {
+    finish_reason: Option<String>,
+    message: DeepSeekAgentResponseMessage,
+}
+
+#[derive(Deserialize)]
+struct DeepSeekAgentResponseMessage {
+    content: Option<String>,
+    tool_calls: Option<Vec<DeepSeekAgentToolCallResponse>>,
+}
+
+#[derive(Deserialize)]
+struct DeepSeekAgentToolCallResponse {
+    id: String,
+    function: DeepSeekAgentToolCallFunctionResponse,
+}
+
+#[derive(Deserialize)]
+struct DeepSeekAgentToolCallFunctionResponse {
+    name: String,
+    arguments: String,
 }
 
 pub struct DeepSeekProvider {
@@ -378,6 +482,97 @@ impl DeepSeekProvider {
             definition: deepseek_definition(),
             endpoint: endpoint.into(),
         })
+    }
+
+    pub fn complete_agent_step(
+        &self,
+        model_id: &ModelId,
+        messages: &[AgentMessage],
+        tools: &[ToolDefinition],
+    ) -> Result<AgentStepResult, ProviderError> {
+        let request_messages: Vec<DeepSeekAgentRequestMessage> = messages
+            .iter()
+            .map(|m| DeepSeekAgentRequestMessage {
+                role: m.role.clone(),
+                content: m.content.clone(),
+                tool_calls: m.tool_calls.as_ref().map(|calls| {
+                    calls
+                        .iter()
+                        .map(|c| DeepSeekAgentToolCallSpec {
+                            id: c.id.clone(),
+                            tool_type: "function".to_owned(),
+                            function: DeepSeekAgentToolCallFunctionSpec {
+                                name: c.name.clone(),
+                                arguments: c.arguments.clone(),
+                            },
+                        })
+                        .collect()
+                }),
+                tool_call_id: m.tool_call_id.clone(),
+            })
+            .collect();
+
+        let tool_specs: Vec<DeepSeekAgentToolSpec> = tools
+            .iter()
+            .map(|t| DeepSeekAgentToolSpec {
+                tool_type: "function".to_owned(),
+                function: DeepSeekAgentFunctionSpec {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    parameters: t.parameters.clone(),
+                },
+            })
+            .collect();
+
+        let request_body = DeepSeekAgentRequest {
+            model: model_id.as_str().to_owned(),
+            messages: request_messages,
+            tools: tool_specs,
+            stream: false,
+        };
+
+        let response = self
+            .client
+            .post(&self.endpoint)
+            .bearer_auth(&self.api_key)
+            .json(&request_body)
+            .send()
+            .map_err(|e| ProviderError::HttpTransport(e.to_string()))?;
+        let status = response.status().as_u16();
+        let body = response
+            .text()
+            .map_err(|e| ProviderError::HttpTransport(e.to_string()))?;
+
+        if status != 200 {
+            return Err(map_deepseek_error_status(status, &body));
+        }
+
+        let parsed: DeepSeekAgentResponse = serde_json::from_str(&body).map_err(|e| {
+            ProviderError::MalformedResponse(format!("failed to parse agent response: {e}"))
+        })?;
+        let choice = parsed.choices.into_iter().next().ok_or_else(|| {
+            ProviderError::MalformedResponse("missing choices[0] in agent response".to_owned())
+        })?;
+
+        if choice.finish_reason.as_deref() == Some("tool_calls") {
+            let tool_calls = choice.message.tool_calls.ok_or_else(|| {
+                ProviderError::MalformedResponse(
+                    "finish_reason=tool_calls but no tool_calls in message".to_owned(),
+                )
+            })?;
+            let calls = tool_calls
+                .into_iter()
+                .map(|tc| ToolCall {
+                    id: tc.id,
+                    name: tc.function.name,
+                    arguments: tc.function.arguments,
+                })
+                .collect();
+            Ok(AgentStepResult::ToolCalls(calls))
+        } else {
+            let content = choice.message.content.unwrap_or_default();
+            Ok(AgentStepResult::Text(content))
+        }
     }
 }
 

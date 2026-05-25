@@ -679,6 +679,7 @@ dependencies = [
  "raptor-store",
  "raptor-tools",
  "raptor-tui",
+ "serde_json",
 ]
 
 [[package]]

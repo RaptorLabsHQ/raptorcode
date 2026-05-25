@@ -23,8 +23,9 @@ use raptor_git::{
     SwarmWorktreePlan, WorktreeCleanupPlan, WorktreeDiff, WorktreeReview,
 };
 use raptor_providers::{
-    CompletionMessage, CompletionRequest, CompletionResponse, DeepSeekProvider, ModelId, Provider,
-    ProviderCatalog, ProviderConfiguration, ProviderError, ProviderId, ProviderSummary, TokenUsage,
+    AgentMessage, AgentStepResult, CompletionMessage, CompletionRequest, CompletionResponse,
+    DeepSeekProvider, ModelId, Provider, ProviderCatalog, ProviderConfiguration, ProviderError,
+    ProviderId, ProviderSummary, ToolDefinition, TokenUsage,
     DEEPSEEK_API_KEY_ENV, DEEPSEEK_API_KEY_URL,
 };
 use raptor_store::{
@@ -126,6 +127,7 @@ const SWARM_PROVIDER_ID: &str = "deepseek";
 const SWARM_PROVIDER_DISPLAY: &str = "DeepSeek";
 const SWARM_MODEL_ID: &str = "deepseek-chat";
 const CHAT_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised coding assistant. Answer the developer's message directly. Do not claim to modify files, run commands, install dependencies, commit, merge, or push.";
+const AGENT_SYSTEM_PROMPT: &str = "You are RaptorCode, an autonomous coding agent. When asked to build or create files, use your tools to write them directly to the working directory — do not print code to the terminal. Use write_file to create or update files, read_file to check existing content, list_directory to explore the project, and create_directory for new folders. After completing a task, summarize what files you created or modified.";
 const SWARM_PLANNING_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised v0.1 planning assistant for Raptor Labs. Produce role-specific implementation planning only. Do not modify files, execute commands, apply patches, run tests, claim work was completed, or propose Phase 2 features. DeepSeek is the only provider in scope before v0.1.";
 const SWARM_IMPLEMENTATION_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised v0.1 implementation proposal assistant for Raptor Labs. Produce a safe, reviewable implementation proposal only. Do not claim files were modified. Do not execute commands. Do not apply patches. Do not instruct RaptorCode to modify source files automatically. DeepSeek is the only provider in scope before v0.1.";
 const RAPTOR_PLAN_FILE_NAME: &str = "RAPTOR_PLAN.md";
@@ -667,7 +669,7 @@ pub fn chat_with_provider(message: &str, provider: &dyn Provider) -> Result<Stri
 }
 
 pub fn run_interactive_chat(
-    _current_dir: &Path,
+    current_dir: &Path,
     startup_options: &StartupBannerOptions,
 ) -> Result<(), CliError> {
     use std::io::Write as _;
@@ -695,6 +697,14 @@ pub fn run_interactive_chat(
         println!("  {C_GREEN_BOLD}✓  Ready to code.{C_RESET}");
     }
 
+    let agent_mode = prompt_file_access_consent(current_dir);
+
+    if agent_mode {
+        println!("  {C_GREEN_BOLD}✓  Agentic mode enabled.{C_RESET}  {C_DIM}Files will be written to the current directory.{C_RESET}");
+    } else {
+        println!("  {C_DIM}Chat mode active.{C_RESET}  No files will be modified.");
+    }
+
     println!();
     println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}");
     println!("  {C_RED_BOLD}RaptorCode AI Agent{C_RESET}  {C_DIM}│{C_RESET}  DeepSeek / deepseek-chat");
@@ -702,7 +712,21 @@ pub fn run_interactive_chat(
     println!("  {C_DIM}/help for commands   Ctrl+D or /exit to quit{C_RESET}");
     println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}\n");
 
-    let mut history: Vec<CompletionMessage> = vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
+    let model_id = provider
+        .default_model()
+        .cloned()
+        .ok_or_else(|| CliError::new("DeepSeek provider has no default model"))?;
+
+    let tools = build_agent_tools();
+    let agent_system = AgentMessage {
+        role: "system".to_owned(),
+        content: Some(AGENT_SYSTEM_PROMPT.to_owned()),
+        tool_calls: None,
+        tool_call_id: None,
+    };
+    let mut agent_history: Vec<AgentMessage> = vec![agent_system.clone()];
+    let mut chat_history: Vec<CompletionMessage> =
+        vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
 
     loop {
         print!("{C_RED_BOLD}>{C_RESET} ");
@@ -737,38 +761,69 @@ pub fn run_interactive_chat(
                 continue;
             }
             "/clear" => {
-                history = vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
+                agent_history = vec![agent_system.clone()];
+                chat_history = vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
                 println!("Conversation cleared.\n");
                 continue;
             }
             _ => {}
         }
 
-        history.push(CompletionMessage::user(&input));
-
-        let model_id = provider
-            .default_model()
-            .cloned()
-            .ok_or_else(|| CliError::new("DeepSeek provider has no default model"))?;
-        let request = CompletionRequest::new(provider.id().clone(), model_id, history.clone());
-
         println!();
 
-        match provider.complete(request) {
-            Ok(response) => {
-                let content = response.content.trim().to_owned();
-                println!("{}\n", content);
-                history.push(CompletionMessage::assistant(&content));
+        if agent_mode {
+            agent_history.push(AgentMessage {
+                role: "user".to_owned(),
+                content: Some(input.clone()),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+
+            match run_agent_loop(current_dir, &provider, &model_id, &mut agent_history, &tools) {
+                Ok(content) => {
+                    let content = content.trim().to_owned();
+                    println!("{content}\n");
+                    agent_history.push(AgentMessage {
+                        role: "assistant".to_owned(),
+                        content: Some(content),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    });
+                }
+                Err(error) => {
+                    let msg = error.to_string();
+                    eprintln!("Error: {msg}\n");
+                    if msg.contains("authentication") {
+                        eprintln!("Delete ~/.raptor/.credentials or set DEEPSEEK_API_KEY to reset.");
+                        break;
+                    }
+                }
             }
-            Err(ProviderError::MissingApiKey) | Err(ProviderError::AuthenticationFailed(_)) => {
-                history.pop();
-                eprintln!("Authentication failed. Your API key may be invalid.");
-                eprintln!("Delete ~/.raptor/.credentials or set DEEPSEEK_API_KEY to reset.\n");
-                break;
-            }
-            Err(error) => {
-                history.pop();
-                eprintln!("Error: {error}\n");
+        } else {
+            chat_history.push(CompletionMessage::user(&input));
+
+            let request = CompletionRequest::new(
+                provider.id().clone(),
+                model_id.clone(),
+                chat_history.clone(),
+            );
+
+            match provider.complete(request) {
+                Ok(response) => {
+                    let content = response.content.trim().to_owned();
+                    println!("{content}\n");
+                    chat_history.push(CompletionMessage::assistant(&content));
+                }
+                Err(ProviderError::MissingApiKey) | Err(ProviderError::AuthenticationFailed(_)) => {
+                    chat_history.pop();
+                    eprintln!("Authentication failed. Your API key may be invalid.");
+                    eprintln!("Delete ~/.raptor/.credentials or set DEEPSEEK_API_KEY to reset.\n");
+                    break;
+                }
+                Err(error) => {
+                    chat_history.pop();
+                    eprintln!("Error: {error}\n");
+                }
             }
         }
     }
@@ -912,6 +967,251 @@ fn user_credentials_path() -> Option<PathBuf> {
 
 fn render_interactive_help() -> String {
     "\nRaptorCode commands:\n  /help or ?   Show this help\n  /clear       Clear conversation history\n  /exit        Exit\n  /quit        Exit\n\nJust type your coding request and press Enter.\n\n".to_owned()
+}
+
+fn prompt_file_access_consent(current_dir: &Path) -> bool {
+    use std::io::Write as _;
+
+    println!();
+    println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}");
+    println!("  {C_YELLOW_BOLD}⚠  Agentic File Access{C_RESET}");
+    println!();
+    println!("  Allow RaptorCode to read and write files in:");
+    println!("  {C_CYAN}{}{C_RESET}", current_dir.display());
+    println!();
+    print!("  Grant permission? [{C_GREEN_BOLD}y{C_RESET}/{C_DIM}N{C_RESET}]: ");
+    std::io::stdout().flush().ok();
+
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).is_err() {
+        return false;
+    }
+
+    let answer = answer.trim().to_lowercase();
+    answer == "y" || answer == "yes"
+}
+
+fn validate_agent_path(working_dir: &Path, path_str: &str) -> Result<PathBuf, CliError> {
+    let path = Path::new(path_str);
+
+    if path.is_absolute() {
+        return Err(CliError::new(format!("absolute path not allowed: {path_str}")));
+    }
+
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                return Err(CliError::new(format!("path traversal not allowed: {path_str}")));
+            }
+            Component::Normal(name) => {
+                let s = name.to_string_lossy();
+                if matches!(s.as_ref(), ".git" | ".raptor" | "target" | "node_modules") {
+                    return Err(CliError::new(format!("access to {s} is not allowed")));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(working_dir.join(path))
+}
+
+fn build_agent_tools() -> Vec<ToolDefinition> {
+    vec![
+        ToolDefinition {
+            name: "write_file".to_owned(),
+            description: "Write content to a file. Creates the file and any parent directories if needed. Overwrites existing content.".to_owned(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative path to the file" },
+                    "content": { "type": "string", "description": "File content to write" }
+                },
+                "required": ["path", "content"]
+            }),
+        },
+        ToolDefinition {
+            name: "read_file".to_owned(),
+            description: "Read the contents of a file.".to_owned(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative path to the file" }
+                },
+                "required": ["path"]
+            }),
+        },
+        ToolDefinition {
+            name: "list_directory".to_owned(),
+            description: "List files and directories at a path.".to_owned(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative path to list (default: current directory)" }
+                },
+                "required": []
+            }),
+        },
+        ToolDefinition {
+            name: "create_directory".to_owned(),
+            description: "Create a directory and any missing parent directories.".to_owned(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative path to the directory to create" }
+                },
+                "required": ["path"]
+            }),
+        },
+    ]
+}
+
+fn execute_tool_call(working_dir: &Path, name: &str, arguments: &str) -> String {
+    let args: serde_json::Value = match serde_json::from_str(arguments) {
+        Ok(v) => v,
+        Err(e) => return format!("error: bad tool arguments: {e}"),
+    };
+
+    match name {
+        "write_file" => {
+            let Some(path_str) = args["path"].as_str() else {
+                return "error: missing path argument".to_owned();
+            };
+            let Some(content) = args["content"].as_str() else {
+                return "error: missing content argument".to_owned();
+            };
+            let target = match validate_agent_path(working_dir, path_str) {
+                Ok(p) => p,
+                Err(e) => return format!("error: {e}"),
+            };
+            if let Some(parent) = target.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    return format!("error: failed to create directories: {e}");
+                }
+            }
+            match std::fs::write(&target, content) {
+                Ok(()) => format!("wrote {} bytes to {path_str}", content.len()),
+                Err(e) => format!("error: {e}"),
+            }
+        }
+        "read_file" => {
+            let Some(path_str) = args["path"].as_str() else {
+                return "error: missing path argument".to_owned();
+            };
+            let target = match validate_agent_path(working_dir, path_str) {
+                Ok(p) => p,
+                Err(e) => return format!("error: {e}"),
+            };
+            match std::fs::read_to_string(&target) {
+                Ok(content) => content,
+                Err(e) => format!("error: {e}"),
+            }
+        }
+        "list_directory" => {
+            let path_str = args["path"].as_str().unwrap_or(".");
+            let target = match validate_agent_path(working_dir, path_str) {
+                Ok(p) => p,
+                Err(e) => return format!("error: {e}"),
+            };
+            match std::fs::read_dir(&target) {
+                Ok(entries) => {
+                    let mut names: Vec<String> = entries
+                        .filter_map(|e| e.ok())
+                        .map(|e| {
+                            let name = e.file_name().to_string_lossy().into_owned();
+                            if e.path().is_dir() {
+                                format!("{name}/")
+                            } else {
+                                name
+                            }
+                        })
+                        .collect();
+                    names.sort();
+                    if names.is_empty() {
+                        "(empty)".to_owned()
+                    } else {
+                        names.join("\n")
+                    }
+                }
+                Err(e) => format!("error: {e}"),
+            }
+        }
+        "create_directory" => {
+            let Some(path_str) = args["path"].as_str() else {
+                return "error: missing path argument".to_owned();
+            };
+            let target = match validate_agent_path(working_dir, path_str) {
+                Ok(p) => p,
+                Err(e) => return format!("error: {e}"),
+            };
+            match std::fs::create_dir_all(&target) {
+                Ok(()) => format!("created {path_str}"),
+                Err(e) => format!("error: {e}"),
+            }
+        }
+        unknown => format!("error: unknown tool: {unknown}"),
+    }
+}
+
+fn run_agent_loop(
+    working_dir: &Path,
+    provider: &DeepSeekProvider,
+    model_id: &ModelId,
+    history: &mut Vec<AgentMessage>,
+    tools: &[ToolDefinition],
+) -> Result<String, CliError> {
+    use std::io::Write as _;
+
+    for _ in 0..25 {
+        match provider.complete_agent_step(model_id, history, tools) {
+            Ok(AgentStepResult::Text(content)) => return Ok(content),
+            Ok(AgentStepResult::ToolCalls(calls)) => {
+                history.push(AgentMessage {
+                    role: "assistant".to_owned(),
+                    content: None,
+                    tool_calls: Some(calls.clone()),
+                    tool_call_id: None,
+                });
+
+                for call in &calls {
+                    let args_preview: String = call.arguments.chars().take(60).collect();
+                    let ellipsis = if call.arguments.len() > 60 { "…" } else { "" };
+                    println!("  {C_DIM}→ {}({args_preview}{ellipsis}){C_RESET}", call.name);
+                    std::io::stdout().flush().ok();
+
+                    let result = execute_tool_call(working_dir, &call.name, &call.arguments);
+
+                    let preview: String = result
+                        .lines()
+                        .next()
+                        .unwrap_or("done")
+                        .chars()
+                        .take(60)
+                        .collect();
+                    if result.starts_with("error:") {
+                        println!("  {C_RED}✗ {preview}{C_RESET}");
+                    } else {
+                        println!("  {C_GREEN}✓ {preview}{C_RESET}");
+                    }
+
+                    history.push(AgentMessage {
+                        role: "tool".to_owned(),
+                        content: Some(result),
+                        tool_calls: None,
+                        tool_call_id: Some(call.id.clone()),
+                    });
+                }
+
+                println!();
+            }
+            Err(ProviderError::MissingApiKey) | Err(ProviderError::AuthenticationFailed(_)) => {
+                return Err(CliError::new("authentication failed; check your API key"));
+            }
+            Err(error) => return Err(CliError::new(format!("agent error: {error}"))),
+        }
+    }
+
+    Err(CliError::new("agent reached the 25-step iteration limit"))
 }
 
 pub fn create_agent(
