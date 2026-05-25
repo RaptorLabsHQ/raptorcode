@@ -1654,7 +1654,7 @@ fn run_agent_loop(
     history: &mut Vec<AgentMessage>,
     tools: &[ToolDefinition],
 ) -> Result<String, CliError> {
-    for _ in 0..25 {
+    for _ in 0..100 {
         let spinner = Spinner::start("Thinking...");
         let step = provider.complete_agent_step(model_id, history, tools);
         spinner.stop();
@@ -1708,7 +1708,7 @@ fn run_agent_loop(
         }
     }
 
-    Err(CliError::new("agent reached the 25-step iteration limit"))
+    Ok("⏸  Step limit reached. All progress is saved — type **continue** to resume where I left off.".to_owned())
 }
 
 pub fn create_agent(
