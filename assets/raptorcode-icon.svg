@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">RaptorCode icon</title>
+  <desc id="desc">Abstract RaptorCode mark with a dark shield, red glow, and silver code talon.</desc>
+  <defs>
+    <radialGradient id="coreGlow" cx="62%" cy="35%" r="68%">
+      <stop offset="0" stop-color="#ff2b1f"/>
+      <stop offset="0.22" stop-color="#7b0507"/>
+      <stop offset="0.62" stop-color="#160304"/>
+      <stop offset="1" stop-color="#050505"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="88" y1="58" x2="424" y2="454" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f7f7f7"/>
+      <stop offset="0.22" stop-color="#6f747a"/>
+      <stop offset="0.55" stop-color="#ff1f1f"/>
+      <stop offset="1" stop-color="#202428"/>
+    </linearGradient>
+    <linearGradient id="metal" x1="148" y1="108" x2="356" y2="414" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.34" stop-color="#d9dde1"/>
+      <stop offset="0.66" stop-color="#8b9299"/>
+      <stop offset="1" stop-color="#ffffff"/>
+    </linearGradient>
+    <linearGradient id="redEdge" x1="118" y1="354" x2="392" y2="146" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff1f1f"/>
+      <stop offset="0.48" stop-color="#ff4a24"/>
+      <stop offset="1" stop-color="#9b0508"/>
+    </linearGradient>
+    <filter id="softShadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#000000" flood-opacity="0.58"/>
+    </filter>
+    <filter id="redGlow" x="-35%" y="-35%" width="170%" height="170%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="1 0 0 0 0.95 0 0.08 0 0 0.02 0 0 0.08 0 0.02 0 0 0 0.72 0"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="shieldClip">
+      <path d="M256 42 418 104v122c0 109-62 192-162 244C156 418 94 335 94 226V104L256 42Z"/>
+    </clipPath>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="#050505"/>
+  <g filter="url(#softShadow)">
+    <path d="M256 36 430 102v127c0 118-69 207-174 260C151 436 82 347 82 229V102L256 36Z" fill="url(#rim)"/>
+    <path d="M256 58 407 115v111c0 101-59 177-151 226-92-49-151-125-151-226V115L256 58Z" fill="url(#coreGlow)"/>
+  </g>
+
+  <g clip-path="url(#shieldClip)" opacity="0.32">
+    <path d="M72 156h74l37 64-37 64H72L35 220l37-64Zm140 0h74l37 64-37 64h-74l-37-64 37-64Zm140 0h74l37 64-37 64h-74l-37-64 37-64ZM2 278h74l37 64-37 64H2l-37-64 37-64Zm140 0h74l37 64-37 64h-74l-37-64 37-64Zm140 0h74l37 64-37 64h-74l-37-64 37-64Z" fill="none" stroke="#ff2a1f" stroke-width="2.5"/>
+  </g>
+
+  <circle cx="326" cy="144" r="58" fill="#ff211c" opacity="0.28" filter="url(#redGlow)"/>
+
+  <g filter="url(#redGlow)">
+    <path d="M144 178c30-44 70-66 121-66 58 0 104 37 104 89 0 45-31 77-77 85l91 101h-67l-82-96h-29v96h-61V178Zm61 48h58c26 0 43-13 43-34 0-20-17-33-43-33h-43c-7 0-12 5-15 19v48Z" fill="url(#metal)"/>
+    <path d="M143 184c20-38 54-58 101-62-23 12-38 29-46 51l-9 28h-50l4-17Z" fill="#ffffff"/>
+    <path d="M278 244c41-3 67-20 77-52 4 54-24 90-84 103l-22-28 29-23Z" fill="url(#redEdge)"/>
+    <path d="M132 333 82 280l50-53h44l-50 53 50 53h-44Zm248 0 50-53-50-53h-44l50 53-50 53h44Z" fill="#eef1f4"/>
+  </g>
+
+  <path d="M256 58 407 115v111c0 101-59 177-151 226-92-49-151-125-151-226V115L256 58Z" fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="3"/>
+  <path d="M256 58 407 115v111c0 101-59 177-151 226-92-49-151-125-151-226V115L256 58Z" fill="none" stroke="#ff211c" stroke-opacity="0.42" stroke-width="1.5"/>
+</svg>

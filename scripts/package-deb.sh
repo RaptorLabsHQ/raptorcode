@@ -31,6 +31,8 @@ rm -rf "$PACKAGE_ROOT"
 mkdir -p \
   "$PACKAGE_ROOT/DEBIAN" \
   "$PACKAGE_ROOT/usr/bin" \
+  "$PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps" \
+  "$PACKAGE_ROOT/usr/share/metainfo" \
   "$PACKAGE_ROOT/usr/share/doc/$PACKAGE_NAME" \
   "$OUTPUT_DIR"
 
@@ -41,6 +43,10 @@ done
 install -m 0644 "$ROOT_DIR/README.md" "$PACKAGE_ROOT/usr/share/doc/$PACKAGE_NAME/README.md"
 install -m 0644 "$ROOT_DIR/CHANGELOG.md" "$PACKAGE_ROOT/usr/share/doc/$PACKAGE_NAME/CHANGELOG.md"
 install -m 0644 "$ROOT_DIR/LICENSE" "$PACKAGE_ROOT/usr/share/doc/$PACKAGE_NAME/LICENSE"
+install -m 0644 "$ROOT_DIR/assets/raptorcode-icon.svg" "$PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/dev.raptorlabs.raptorcode.svg"
+install -m 0644 "$ROOT_DIR/packaging/dev.raptorlabs.raptorcode.metainfo.xml" "$PACKAGE_ROOT/usr/share/metainfo/dev.raptorlabs.raptorcode.metainfo.xml"
+
+INSTALLED_SIZE="$(du -sk "$PACKAGE_ROOT/usr" | awk '{ print $1 }')"
 
 cat >"$PACKAGE_ROOT/DEBIAN/control" <<CONTROL
 Package: $PACKAGE_NAME
@@ -50,6 +56,7 @@ Priority: optional
 Architecture: $ARCH
 Maintainer: Bob Vasic <17962121+bobvasic@users.noreply.github.com>
 Depends: libc6 (>= 2.31), ca-certificates, git
+Installed-Size: $INSTALLED_SIZE
 Homepage: https://raptorlabs.dev
 Vcs-Git: https://github.com/RaptorLabsHQ/raptor-code.git
 Description: Rust-native autonomous AI coding agent CLI

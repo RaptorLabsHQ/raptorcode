@@ -38,6 +38,8 @@ Build the Linux Debian installer before publishing release assets:
 
 ```bash
 ./scripts/package-deb.sh
+appstreamcli validate --no-net --pedantic packaging/dev.raptorlabs.raptorcode.metainfo.xml
+appstreamcli validate-tree --no-net target/debian/raptor-code_0.1.0_amd64/usr
 dpkg-deb --info dist/raptor-code_0.1.0_amd64.deb
 dpkg-deb --contents dist/raptor-code_0.1.0_amd64.deb
 ```
