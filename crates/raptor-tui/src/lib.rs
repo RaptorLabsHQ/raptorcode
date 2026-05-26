@@ -51,7 +51,6 @@ pub const BRAND_MUTED_TEXT_HEX: &str = theme::DIM;
 pub const BRAND_RED_HEX: &str = theme::RAPTOR_RED;
 pub const BRAND_DARK_RED_HEX: &str = theme::RAPTOR_RED_MUTED;
 pub const BRAND_SUBTLE_DEEP_RED_HEX: &str = theme::RAPTOR_RED_MUTED;
-pub const PROMPT_INPUT_LABEL: &str = "raptorcode>  ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorMode {
@@ -413,10 +412,7 @@ fn render_compact_startup_banner(options: &StartupBannerOptions) -> String {
     push_greeting(options, &mut output);
     output.push('\n');
     push_metadata(options, &mut output);
-    output.push('\n');
-    push_separator(options, &mut output);
-    output.push('\n');
-    push_prompt(options, &mut output);
+    trim_trailing_newline(&mut output);
 
     output
 }
@@ -441,10 +437,7 @@ fn render_premium_startup_banner(options: &StartupBannerOptions) -> String {
     push_greeting(options, &mut output);
     output.push('\n');
     push_metadata(options, &mut output);
-    output.push('\n');
-    push_separator(options, &mut output);
-    output.push('\n');
-    push_prompt(options, &mut output);
+    trim_trailing_newline(&mut output);
 
     output
 }
@@ -484,6 +477,12 @@ fn push_header(options: &StartupBannerOptions, output: &mut String) {
         ),
     ));
     output.push('\n');
+}
+
+fn trim_trailing_newline(output: &mut String) {
+    if output.ends_with('\n') {
+        output.pop();
+    }
 }
 
 fn push_compact_header(options: &StartupBannerOptions, output: &mut String) {
@@ -726,14 +725,6 @@ fn push_metadata_border(
     ));
     output.push_str(&paint(options.color_mode, BrandToken::Dim, right));
     output.push('\n');
-}
-
-fn push_prompt(options: &StartupBannerOptions, output: &mut String) {
-    output.push_str(&render_prompt_input_box(
-        options.terminal_width,
-        options.color_mode,
-        PROMPT_INPUT_LABEL,
-    ));
 }
 
 pub fn render_prompt_input_box(terminal_width: u16, color_mode: ColorMode, label: &str) -> String {
@@ -1077,12 +1068,7 @@ mod tests {
         assert!(output.contains("high effort"));
         assert!(output.contains("Type"));
         assert!(output.contains("/help for commands"));
-        assert!(output.contains("┌"));
-        assert!(output.contains("┐"));
-        assert!(output.contains("└"));
-        assert!(output.contains("┘"));
-        assert!(output.contains("│ raptorcode>"));
-        assert!(output.contains("raptorcode>"));
+        assert!(!output.contains("raptorcode>"));
         assert!(!output.ends_with('\n'));
         assert!(!output.contains("raptor>"));
         assert!(!output.contains("DeepSeek API key"));
@@ -1146,9 +1132,20 @@ mod tests {
         assert!(!output.contains("████"));
         assert!(output.contains("Raptor Code"));
         assert!(output.contains("v0.1"));
-        assert!(output.contains("│ raptorcode>"));
-        assert!(output.contains("raptorcode>"));
+        assert!(!output.contains("raptorcode>"));
         assert!(!output.contains("raptor>"));
+    }
+
+    #[test]
+    fn prompt_input_box_wraps_live_input_label() {
+        let output = render_prompt_input_box(100, ColorMode::None, ">  ");
+
+        assert!(output.contains("┌"));
+        assert!(output.contains("┐"));
+        assert!(output.contains("│ >"));
+        assert!(output.contains("└"));
+        assert!(output.contains("┘"));
+        assert_eq!(prompt_input_cursor_column(">  "), 7);
     }
 
     #[test]

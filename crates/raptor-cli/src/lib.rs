@@ -1233,7 +1233,7 @@ fn read_boxed_agent_prompt_line(color_mode: ColorMode) -> std::io::Result<Option
     stdout.flush()?;
     execute!(
         stdout,
-        cursor::MoveUp(2),
+        cursor::MoveUp(1),
         cursor::MoveToColumn(prompt_input_cursor_column(AGENT_INPUT_LABEL))
     )?;
     stdout.flush()?;

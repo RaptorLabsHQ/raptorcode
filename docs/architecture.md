@@ -47,7 +47,7 @@ Rules before v0.1:
 - No additional model provider implementation before v0.1.
 - No desktop terminal before v0.1.
 
-The launch UX is part of v0.1. Running plain `raptor` shows a premium Raptor Labs / Raptor Code terminal startup screen before the developer prompt becomes ready. The startup splash and live interactive agent prompt mark the command entry area with a sharp-corner terminal rectangle so the user input target is visually explicit. The launch UX detects whether `DEEPSEEK_API_KEY` exists and directs missing-key users to `https://platform.deepseek.com/api_keys` without printing, prompting for persistence, or storing API keys.
+The launch UX is part of v0.1. Running plain `raptor` shows a premium Raptor Labs / Raptor Code terminal startup screen before the developer prompt becomes ready. The live interactive agent prompt marks the command entry area with a sharp-corner terminal rectangle so the user input target is visually explicit. The launch UX detects whether `DEEPSEEK_API_KEY` exists and directs missing-key users to `https://platform.deepseek.com/api_keys` without printing, prompting for persistence, or storing API keys.
 
 ## Current Implementation
 
