@@ -30,9 +30,9 @@ use raptor_git::{
 };
 use raptor_providers::{
     AgentMessage, AgentStepResult, CompletionMessage, CompletionRequest, CompletionResponse,
-    DeepSeekProvider, ModelId, Provider, ProviderCatalog, ProviderConfiguration, ProviderError,
-    ProviderId, ProviderSummary, TokenUsage, ToolDefinition, DEEPSEEK_API_KEY_ENV,
-    DEEPSEEK_API_KEY_URL,
+    DeepSeekProvider, DeepSeekReasoningEffort, DeepSeekRequestOptions, DeepSeekThinkingMode,
+    ModelId, Provider, ProviderCatalog, ProviderConfiguration, ProviderError, ProviderId,
+    ProviderSummary, TokenUsage, ToolDefinition, DEEPSEEK_API_KEY_ENV, DEEPSEEK_API_KEY_URL,
 };
 use raptor_store::{
     init_project_config, list_agent_sessions, list_swarm_metadata, list_task_metadata,
@@ -982,18 +982,26 @@ pub fn run_interactive_chat(
         .default_model()
         .cloned()
         .ok_or_else(|| CliError::new("DeepSeek provider has no default model"))?;
+    let mut request_options =
+        DeepSeekRequestOptions::default().with_reasoning_effort(if agent_mode {
+            DeepSeekReasoningEffort::Max
+        } else {
+            DeepSeekReasoningEffort::High
+        });
 
     println!();
     println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}");
     let workflow_label = format!(
-        "{} · Agentic Coding",
-        format_model_display_name(model_id.as_str())
+        "{} · Agentic Coding · {} · {}",
+        format_model_display_name(model_id.as_str()),
+        request_options.thinking_mode.label(),
+        request_options.reasoning_effort.label()
     );
     println!(
         "  {C_RED_BOLD}RaptorCode Engineering Agent{C_RESET}  {C_DIM}│{C_RESET}  {workflow_label}"
     );
     println!("  Type your request and press Enter to send.");
-    println!("  {C_DIM}/help · /api · /model · Ctrl+D or /exit to quit{C_RESET}");
+    println!("  {C_DIM}/help · /api · /model · /thinking · /effort · /balance · Ctrl+D or /exit{C_RESET}");
     println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}\n");
 
     let tools = build_agent_tools();
@@ -1044,6 +1052,68 @@ pub fn run_interactive_chat(
                 agent_history = vec![make_agent_system(&model_id)];
                 chat_history = vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
                 println!("Conversation cleared.\n");
+                continue;
+            }
+            "/thinking" => {
+                request_options.thinking_mode = match request_options.thinking_mode {
+                    DeepSeekThinkingMode::Enabled => DeepSeekThinkingMode::Disabled,
+                    DeepSeekThinkingMode::Disabled => DeepSeekThinkingMode::Enabled,
+                };
+                agent_history = vec![make_agent_system(&model_id)];
+                chat_history = vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
+                println!(
+                    "  {C_GREEN_BOLD}✓  DeepSeek {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}\n",
+                    request_options.thinking_mode.label()
+                );
+                continue;
+            }
+            "/effort" => {
+                request_options.reasoning_effort = match request_options.reasoning_effort {
+                    DeepSeekReasoningEffort::High => DeepSeekReasoningEffort::Max,
+                    DeepSeekReasoningEffort::Max => DeepSeekReasoningEffort::High,
+                };
+                agent_history = vec![make_agent_system(&model_id)];
+                chat_history = vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
+                println!(
+                    "  {C_GREEN_BOLD}✓  DeepSeek {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}\n",
+                    request_options.reasoning_effort.label()
+                );
+                continue;
+            }
+            "/balance" => {
+                println!();
+                print!("  {C_DIM}Fetching DeepSeek balance...{C_RESET}");
+                std::io::stdout().flush().ok();
+                match provider.get_user_balance() {
+                    Ok(balance) => {
+                        println!(" done\r");
+                        println!(
+                            "  {C_BOLD}DeepSeek balance{C_RESET}  {}",
+                            if balance.is_available {
+                                format!("{C_GREEN_BOLD}available{C_RESET}")
+                            } else {
+                                format!("{C_RED_BOLD}unavailable{C_RESET}")
+                            }
+                        );
+                        if balance.balance_infos.is_empty() {
+                            println!("  {C_DIM}No balance rows returned.{C_RESET}");
+                        }
+                        for info in balance.balance_infos {
+                            println!(
+                                "  {C_DIM}{}:{C_RESET} total={} granted={} topped_up={}",
+                                info.currency,
+                                info.total_balance,
+                                info.granted_balance,
+                                info.topped_up_balance
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        println!();
+                        eprintln!("  {C_RED}✗  {error}{C_RESET}");
+                    }
+                }
+                println!();
                 continue;
             }
             "/api" => {
@@ -1135,6 +1205,7 @@ pub fn run_interactive_chat(
                     if let Ok(new_model) = ModelId::new(&model_list[idx]) {
                         model_id = new_model;
                         agent_history = vec![make_agent_system(&model_id)];
+                        chat_history = vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
                         println!(
                             "  {C_GREEN_BOLD}✓  Model: {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}",
                             model_id.as_str()
@@ -1164,6 +1235,7 @@ pub fn run_interactive_chat(
                 &model_id,
                 &mut agent_history,
                 &tools,
+                &request_options,
             ) {
                 Ok(content) => {
                     let content = content.trim().to_owned();
@@ -1194,7 +1266,8 @@ pub fn run_interactive_chat(
                 provider.id().clone(),
                 model_id.clone(),
                 chat_history.clone(),
-            );
+            )
+            .with_options(request_options.clone());
 
             match provider.complete(request) {
                 Ok(response) => {
@@ -1389,7 +1462,7 @@ fn user_credentials_path() -> Option<PathBuf> {
 
 fn render_interactive_help() -> String {
     format!(
-        "\n{C_BOLD}RaptorCode commands:{C_RESET}\n  /help or ?   Show this help\n  /clear       Clear conversation history\n  /api         Change or view API key\n  /model       Select AI model\n  /exit        Exit\n  /quit        Exit\n\nJust type your coding request and press Enter.\n\n"
+        "\n{C_BOLD}RaptorCode commands:{C_RESET}\n  /help or ?   Show this help\n  /clear       Clear conversation history\n  /api         Change or view API key\n  /model       Select AI model\n  /thinking    Toggle DeepSeek thinking mode on/off\n  /effort      Toggle DeepSeek reasoning effort high/max\n  /balance     Show DeepSeek account balance\n  /exit        Exit\n  /quit        Exit\n\nJust type your coding request and press Enter.\n\n"
     )
 }
 
@@ -1765,10 +1838,11 @@ fn run_agent_loop(
     model_id: &ModelId,
     history: &mut Vec<AgentMessage>,
     tools: &[ToolDefinition],
+    request_options: &DeepSeekRequestOptions,
 ) -> Result<String, CliError> {
     for _ in 0..100 {
         let spinner = Spinner::start("Thinking...");
-        let step = provider.complete_agent_step(model_id, history, tools);
+        let step = provider.complete_agent_step(model_id, history, tools, request_options);
         spinner.stop();
 
         match step {
@@ -3281,9 +3355,11 @@ fn render_token_usage(usage: Option<&TokenUsage>) -> String {
     };
 
     format!(
-        "prompt={} completion={} total={}",
+        "prompt={} completion={} cache_hit={} cache_miss={} total={}",
         display_number_optional(usage.prompt_tokens),
         display_number_optional(usage.completion_tokens),
+        display_number_optional(usage.prompt_cache_hit_tokens),
+        display_number_optional(usage.prompt_cache_miss_tokens),
         display_number_optional(usage.total_tokens)
     )
 }
@@ -3782,6 +3858,8 @@ mod tests {
                     usage: Some(TokenUsage {
                         completion_tokens: Some(2),
                         prompt_tokens: Some(3),
+                        prompt_cache_hit_tokens: Some(1),
+                        prompt_cache_miss_tokens: Some(2),
                         total_tokens: Some(5),
                     }),
                 },

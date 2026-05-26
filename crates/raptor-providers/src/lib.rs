@@ -10,6 +10,8 @@ pub const DEEPSEEK_API_KEY_ENV: &str = "DEEPSEEK_API_KEY";
 pub const DEEPSEEK_API_KEY_URL: &str = "https://platform.deepseek.com/api_keys";
 pub const DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT: &str = "https://api.deepseek.com/chat/completions";
 pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-v4-pro";
+pub const DEEPSEEK_MODELS_ENDPOINT: &str = "https://api.deepseek.com/models";
+pub const DEEPSEEK_USER_BALANCE_ENDPOINT: &str = "https://api.deepseek.com/user/balance";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProviderId(String);
@@ -46,6 +48,7 @@ pub struct CompletionRequest {
     pub provider_id: ProviderId,
     pub model_id: ModelId,
     pub messages: Vec<CompletionMessage>,
+    pub options: DeepSeekRequestOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,7 +64,28 @@ pub struct CompletionResponse {
 pub struct TokenUsage {
     pub completion_tokens: Option<u32>,
     pub prompt_tokens: Option<u32>,
+    pub prompt_cache_hit_tokens: Option<u32>,
+    pub prompt_cache_miss_tokens: Option<u32>,
     pub total_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeepSeekThinkingMode {
+    Enabled,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeepSeekReasoningEffort {
+    High,
+    Max,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeepSeekRequestOptions {
+    pub reasoning_effort: DeepSeekReasoningEffort,
+    pub thinking_mode: DeepSeekThinkingMode,
+    pub user_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,13 +165,23 @@ pub enum AgentStepResult {
 pub struct DeepSeekChatRequest {
     pub model: String,
     pub messages: Vec<DeepSeekChatMessage>,
+    pub reasoning_effort: String,
     pub stream: bool,
+    pub thinking: DeepSeekThinkingRequest,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeepSeekChatMessage {
     pub role: String,
     pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeepSeekThinkingRequest {
+    #[serde(rename = "type")]
+    pub thinking_type: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -172,6 +206,8 @@ struct DeepSeekResponseMessage {
 struct DeepSeekUsage {
     completion_tokens: Option<u32>,
     prompt_tokens: Option<u32>,
+    prompt_cache_hit_tokens: Option<u32>,
+    prompt_cache_miss_tokens: Option<u32>,
     total_tokens: Option<u32>,
 }
 
@@ -179,8 +215,12 @@ struct DeepSeekUsage {
 struct DeepSeekAgentRequest {
     model: String,
     messages: Vec<DeepSeekAgentRequestMessage>,
+    reasoning_effort: String,
     tools: Vec<DeepSeekAgentToolSpec>,
     stream: bool,
+    thinking: DeepSeekThinkingRequest,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -262,6 +302,34 @@ struct DeepSeekModelsListResponse {
 #[derive(Deserialize)]
 struct DeepSeekModelEntry {
     id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeepSeekUserBalance {
+    pub balance_infos: Vec<DeepSeekBalanceInfo>,
+    pub is_available: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeepSeekBalanceInfo {
+    pub currency: String,
+    pub granted_balance: String,
+    pub topped_up_balance: String,
+    pub total_balance: String,
+}
+
+#[derive(Deserialize)]
+struct DeepSeekUserBalanceResponse {
+    is_available: bool,
+    balance_infos: Vec<DeepSeekBalanceInfoResponse>,
+}
+
+#[derive(Deserialize)]
+struct DeepSeekBalanceInfoResponse {
+    currency: String,
+    total_balance: String,
+    granted_balance: String,
+    topped_up_balance: String,
 }
 
 pub struct DeepSeekProvider {
@@ -442,7 +510,72 @@ impl CompletionRequest {
             provider_id,
             model_id,
             messages,
+            options: DeepSeekRequestOptions::default(),
         }
+    }
+
+    pub fn with_options(mut self, options: DeepSeekRequestOptions) -> Self {
+        self.options = options;
+        self
+    }
+}
+
+impl DeepSeekThinkingMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Enabled => "thinking on",
+            Self::Disabled => "thinking off",
+        }
+    }
+}
+
+impl DeepSeekReasoningEffort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::High => "high",
+            Self::Max => "max",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::High => "high effort",
+            Self::Max => "max effort",
+        }
+    }
+}
+
+impl Default for DeepSeekRequestOptions {
+    fn default() -> Self {
+        Self {
+            reasoning_effort: DeepSeekReasoningEffort::High,
+            thinking_mode: DeepSeekThinkingMode::Enabled,
+            user_id: None,
+        }
+    }
+}
+
+impl DeepSeekRequestOptions {
+    pub fn with_thinking_mode(mut self, thinking_mode: DeepSeekThinkingMode) -> Self {
+        self.thinking_mode = thinking_mode;
+        self
+    }
+
+    pub fn with_reasoning_effort(mut self, reasoning_effort: DeepSeekReasoningEffort) -> Self {
+        self.reasoning_effort = reasoning_effort;
+        self
+    }
+
+    pub fn with_user_id(mut self, user_id: impl Into<String>) -> Result<Self, ProviderError> {
+        self.user_id = Some(validate_deepseek_user_id(user_id.into())?);
+        Ok(self)
     }
 }
 
@@ -503,6 +636,7 @@ impl DeepSeekProvider {
         model_id: &ModelId,
         messages: &[AgentMessage],
         tools: &[ToolDefinition],
+        options: &DeepSeekRequestOptions,
     ) -> Result<(AgentMessage, AgentStepResult), ProviderError> {
         let request_messages: Vec<DeepSeekAgentRequestMessage> = messages
             .iter()
@@ -542,8 +676,13 @@ impl DeepSeekProvider {
         let request_body = DeepSeekAgentRequest {
             model: model_id.as_str().to_owned(),
             messages: request_messages,
+            reasoning_effort: options.reasoning_effort.as_str().to_owned(),
             tools: tool_specs,
             stream: false,
+            thinking: DeepSeekThinkingRequest {
+                thinking_type: options.thinking_mode.as_str().to_owned(),
+            },
+            user_id: options.user_id.clone(),
         };
 
         let response = self
@@ -609,7 +748,7 @@ impl DeepSeekProvider {
     pub fn list_models(&self) -> Result<Vec<String>, ProviderError> {
         let response = self
             .client
-            .get("https://api.deepseek.com/models")
+            .get(DEEPSEEK_MODELS_ENDPOINT)
             .bearer_auth(&self.api_key)
             .send()
             .map_err(|e| ProviderError::HttpTransport(e.to_string()))?;
@@ -627,6 +766,25 @@ impl DeepSeekProvider {
         })?;
 
         Ok(parsed.data.into_iter().map(|m| m.id).collect())
+    }
+
+    pub fn get_user_balance(&self) -> Result<DeepSeekUserBalance, ProviderError> {
+        let response = self
+            .client
+            .get(DEEPSEEK_USER_BALANCE_ENDPOINT)
+            .bearer_auth(&self.api_key)
+            .send()
+            .map_err(|e| ProviderError::HttpTransport(e.to_string()))?;
+        let status = response.status().as_u16();
+        let body = response
+            .text()
+            .map_err(|e| ProviderError::HttpTransport(e.to_string()))?;
+
+        if status != 200 {
+            return Err(map_deepseek_error_status(status, &body));
+        }
+
+        parse_deepseek_user_balance_response(&body)
     }
 }
 
@@ -694,7 +852,12 @@ pub fn deepseek_chat_request_from_completion(
                 content: message.content.clone(),
             })
             .collect(),
+        reasoning_effort: request.options.reasoning_effort.as_str().to_owned(),
         stream: false,
+        thinking: DeepSeekThinkingRequest {
+            thinking_type: request.options.thinking_mode.as_str().to_owned(),
+        },
+        user_id: request.options.user_id.clone(),
     })
 }
 
@@ -732,8 +895,32 @@ pub fn parse_deepseek_chat_response(
         usage: parsed.usage.map(|usage| TokenUsage {
             completion_tokens: usage.completion_tokens,
             prompt_tokens: usage.prompt_tokens,
+            prompt_cache_hit_tokens: usage.prompt_cache_hit_tokens,
+            prompt_cache_miss_tokens: usage.prompt_cache_miss_tokens,
             total_tokens: usage.total_tokens,
         }),
+    })
+}
+
+pub fn parse_deepseek_user_balance_response(
+    body: &str,
+) -> Result<DeepSeekUserBalance, ProviderError> {
+    let parsed: DeepSeekUserBalanceResponse = serde_json::from_str(body).map_err(|error| {
+        ProviderError::MalformedResponse(format!("failed to parse user balance JSON: {error}"))
+    })?;
+
+    Ok(DeepSeekUserBalance {
+        is_available: parsed.is_available,
+        balance_infos: parsed
+            .balance_infos
+            .into_iter()
+            .map(|balance| DeepSeekBalanceInfo {
+                currency: balance.currency,
+                granted_balance: balance.granted_balance,
+                topped_up_balance: balance.topped_up_balance,
+                total_balance: balance.total_balance,
+            })
+            .collect(),
     })
 }
 
@@ -917,6 +1104,24 @@ fn response_error_detail(body: &str) -> String {
     }
 }
 
+fn validate_deepseek_user_id(value: String) -> Result<String, ProviderError> {
+    let valid = !value.is_empty()
+        && value.len() <= 512
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'));
+
+    if valid {
+        Ok(value)
+    } else {
+        Err(ProviderError::HttpStatus {
+            detail: "DeepSeek user_id must match [a-zA-Z0-9\\-_]+ and be at most 512 characters"
+                .to_owned(),
+            status: 422,
+        })
+    }
+}
+
 impl Display for ProviderError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1064,10 +1269,33 @@ mod tests {
 
         assert_eq!(json["model"], "deepseek-v4-pro");
         assert_eq!(json["stream"], false);
+        assert_eq!(json["thinking"]["type"], "enabled");
+        assert_eq!(json["reasoning_effort"], "high");
         assert_eq!(json["messages"][0]["role"], "system");
         assert_eq!(json["messages"][0]["content"], "You are RaptorCode.");
         assert_eq!(json["messages"][1]["role"], "user");
         assert_eq!(json["messages"][1]["content"], "Hello");
+    }
+
+    #[test]
+    fn deepseek_request_serialization_applies_thinking_effort_and_user_id() {
+        let options = DeepSeekRequestOptions::default()
+            .with_thinking_mode(DeepSeekThinkingMode::Disabled)
+            .with_reasoning_effort(DeepSeekReasoningEffort::Max)
+            .with_user_id("raptor-session_1")
+            .unwrap();
+        let request = CompletionRequest::new(
+            ProviderId::new("deepseek").unwrap(),
+            ModelId::new("deepseek-v4-pro").unwrap(),
+            vec![CompletionMessage::user("Hello")],
+        )
+        .with_options(options);
+        let deepseek_request = deepseek_chat_request_from_completion(&request).unwrap();
+        let json = serde_json::to_value(deepseek_request).unwrap();
+
+        assert_eq!(json["thinking"]["type"], "disabled");
+        assert_eq!(json["reasoning_effort"], "max");
+        assert_eq!(json["user_id"], "raptor-session_1");
     }
 
     #[test]
@@ -1088,6 +1316,8 @@ mod tests {
             "usage": {
                 "prompt_tokens": 3,
                 "completion_tokens": 4,
+                "prompt_cache_hit_tokens": 2,
+                "prompt_cache_miss_tokens": 1,
                 "total_tokens": 7
             }
         }"#;
@@ -1098,7 +1328,43 @@ mod tests {
         assert_eq!(response.model_id.as_str(), "deepseek-v4-pro");
         assert_eq!(response.content, "Hello from DeepSeek");
         assert_eq!(response.finish_reason.as_deref(), Some("stop"));
-        assert_eq!(response.usage.unwrap().total_tokens, Some(7));
+        let usage = response.usage.unwrap();
+        assert_eq!(usage.total_tokens, Some(7));
+        assert_eq!(usage.prompt_cache_hit_tokens, Some(2));
+        assert_eq!(usage.prompt_cache_miss_tokens, Some(1));
+    }
+
+    #[test]
+    fn deepseek_user_balance_response_parses() {
+        let balance = parse_deepseek_user_balance_response(
+            r#"{
+                "is_available": true,
+                "balance_infos": [
+                    {
+                        "currency": "USD",
+                        "total_balance": "12.34",
+                        "granted_balance": "2.34",
+                        "topped_up_balance": "10.00"
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        assert!(balance.is_available);
+        assert_eq!(balance.balance_infos[0].currency, "USD");
+        assert_eq!(balance.balance_infos[0].total_balance, "12.34");
+    }
+
+    #[test]
+    fn deepseek_user_id_validation_matches_api_contract() {
+        let options = DeepSeekRequestOptions::default()
+            .with_user_id("safe-user_123")
+            .unwrap();
+        assert_eq!(options.user_id.as_deref(), Some("safe-user_123"));
+
+        let invalid = DeepSeekRequestOptions::default().with_user_id("unsafe user");
+        assert!(invalid.is_err());
     }
 
     #[test]
