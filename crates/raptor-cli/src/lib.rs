@@ -29,11 +29,11 @@ use raptor_git::{
     SwarmWorktreePlan, WorktreeCleanupPlan, WorktreeDiff, WorktreeReview,
 };
 use raptor_providers::{
-    AgentMessage, AgentStepResult, CompletionMessage, CompletionRequest, CompletionResponse,
-    CompletionStreamDelta, DeepSeekProvider, DeepSeekReasoningEffort, DeepSeekRequestOptions,
-    DeepSeekResponseFormat, DeepSeekThinkingMode, ModelId, Provider, ProviderCatalog,
-    ProviderConfiguration, ProviderError, ProviderId, ProviderSummary, TokenUsage, ToolDefinition,
-    DEEPSEEK_API_KEY_ENV, DEEPSEEK_API_KEY_URL,
+    AgentMessage, AgentStep, AgentStepResult, CompletionMessage, CompletionRequest,
+    CompletionResponse, CompletionStreamDelta, DeepSeekProvider, DeepSeekReasoningEffort,
+    DeepSeekRequestOptions, DeepSeekResponseFormat, DeepSeekThinkingMode, ModelId, Provider,
+    ProviderCatalog, ProviderConfiguration, ProviderError, ProviderId, ProviderSummary, TokenUsage,
+    ToolDefinition, DEEPSEEK_API_KEY_ENV, DEEPSEEK_API_KEY_URL,
 };
 use raptor_store::{
     init_project_config, list_agent_sessions, list_swarm_metadata, list_task_metadata,
@@ -1295,13 +1295,21 @@ pub fn run_interactive_chat(
                     } else {
                         println!("{content}\n");
                     }
-                    agent_history.push(AgentMessage {
-                        role: "assistant".to_owned(),
-                        content: Some(content),
-                        reasoning_content: None,
-                        tool_calls: None,
-                        tool_call_id: None,
-                    });
+                    if let Some(usage) = output.usage.as_ref() {
+                        println!(
+                            "  {C_DIM}Usage: {}{C_RESET}\n",
+                            render_token_usage(Some(usage))
+                        );
+                    }
+                    let assistant_message =
+                        output.assistant_message.unwrap_or_else(|| AgentMessage {
+                            role: "assistant".to_owned(),
+                            content: Some(content),
+                            reasoning_content: None,
+                            tool_calls: None,
+                            tool_call_id: None,
+                        });
+                    agent_history.push(assistant_message);
                 }
                 Err(error) => {
                     let msg = error.to_string();
@@ -1877,8 +1885,10 @@ struct Spinner {
 }
 
 struct AgentLoopOutput {
+    assistant_message: Option<AgentMessage>,
     content: String,
     streamed: bool,
+    usage: Option<TokenUsage>,
 }
 
 impl Spinner {
@@ -1957,15 +1967,30 @@ fn run_agent_loop(
         };
 
         match step {
-            Ok((assistant_msg, AgentStepResult::Text(content))) => {
-                drop(assistant_msg);
+            Ok(AgentStep {
+                assistant_message,
+                result: AgentStepResult::Text(content),
+                usage,
+            }) => {
                 return Ok(AgentLoopOutput {
+                    assistant_message: Some(assistant_message),
                     content,
                     streamed: streamed_text,
+                    usage,
                 });
             }
-            Ok((assistant_msg, AgentStepResult::ToolCalls(calls))) => {
-                history.push(assistant_msg);
+            Ok(AgentStep {
+                assistant_message,
+                result: AgentStepResult::ToolCalls(calls),
+                usage,
+            }) => {
+                if let Some(usage) = usage.as_ref() {
+                    println!(
+                        "  {C_DIM}Usage: {}{C_RESET}",
+                        render_token_usage(Some(usage))
+                    );
+                }
+                history.push(assistant_message);
 
                 for call in &calls {
                     let action = describe_tool_call(&call.name, &call.arguments);
@@ -2001,10 +2026,12 @@ fn run_agent_loop(
     }
 
     Ok(AgentLoopOutput {
+        assistant_message: None,
         content:
             "⏸  Step limit reached. All progress is saved — type **continue** to resume where I left off."
                 .to_owned(),
         streamed: false,
+        usage: None,
     })
 }
 

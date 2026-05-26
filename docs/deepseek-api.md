@@ -20,7 +20,7 @@ The current implemented OpenAI-format DeepSeek surface is:
 - Alternate model: `deepseek-v4-flash`
 - Thinking mode: enabled by default
 - Reasoning effort: `max` for interactive agentic mode, `high` for regular chat requests
-- Streaming: enabled by default for chat and agent mode; streamed agent tool-call deltas are assembled before local tool execution
+- Streaming: enabled by default for chat and agent mode; streamed requests send `stream_options: {"include_usage": true}` so final usage is available when DeepSeek returns it
 - Response format: text by default, optional JSON output mode through `response_format: {"type": "json_object"}`
 - Context caching: automatic on DeepSeek's side; RaptorCode displays cache hit and cache miss token telemetry when returned
 
@@ -42,9 +42,9 @@ Changing thinking mode, reasoning effort, JSON output mode, or model resets the 
 
 DeepSeek `/chat/completions` is stateless. RaptorCode keeps local conversation history and sends accumulated messages on each request.
 
-In chat mode, streamed SSE chunks are parsed from `data:` events. RaptorCode prints final-answer `delta.content` chunks as they arrive, ignores keep-alive comments, captures thinking-mode `delta.reasoning_content` internally, and records final usage telemetry when returned.
+In chat mode, streamed SSE chunks are parsed from `data:` events. RaptorCode prints final-answer `delta.content` chunks as they arrive, ignores keep-alive comments, captures thinking-mode `delta.reasoning_content` internally, tolerates usage-only final chunks with empty `choices`, and records final usage telemetry when returned.
 
-For agentic tool calls, RaptorCode supports streamed and non-streamed responses. Streamed agent mode assembles `delta.tool_calls` fragments by index, concatenates streamed function names and JSON argument fragments, preserves assistant `reasoning_content`, then executes only the completed local RaptorCode tool call. This matches the DeepSeek thinking-mode requirement that tool-call reasoning content must be passed back in later requests for that conversation.
+For agentic tool calls, RaptorCode supports streamed and non-streamed responses. Streamed agent mode assembles `delta.tool_calls` fragments by index, concatenates streamed function names and JSON argument fragments, preserves assistant `reasoning_content`, records usage/cache telemetry for every model step when returned, then executes only the completed local RaptorCode tool call. This matches the DeepSeek thinking-mode requirement that tool-call reasoning content must be passed back in later requests for that conversation.
 
 ## Tool Calls
 
@@ -67,7 +67,7 @@ This follows the official requirement to both set `response_format` and instruct
 
 DeepSeek context caching is automatic and best-effort. RaptorCode does not attempt to manage the cache directly.
 
-When DeepSeek returns usage telemetry, RaptorCode surfaces:
+When DeepSeek returns usage telemetry, RaptorCode surfaces it in chat responses and live agent steps:
 
 - `prompt_tokens`
 - `completion_tokens`
@@ -75,7 +75,7 @@ When DeepSeek returns usage telemetry, RaptorCode surfaces:
 - `prompt_cache_miss_tokens`
 - `total_tokens`
 
-This lets BOB verify whether repeated prompt prefixes are hitting cache and whether requests are cost-effective.
+This lets BOB verify whether repeated prompt prefixes are hitting cache and whether requests are cost-effective. Streamed requests set `include_usage` so DeepSeek can send the authoritative final usage block before `[DONE]`.
 
 ## User Isolation
 

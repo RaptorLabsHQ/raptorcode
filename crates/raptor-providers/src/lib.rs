@@ -178,6 +178,13 @@ pub enum AgentStepResult {
     ToolCalls(Vec<ToolCall>),
 }
 
+#[derive(Debug, Clone)]
+pub struct AgentStep {
+    pub assistant_message: AgentMessage,
+    pub result: AgentStepResult,
+    pub usage: Option<TokenUsage>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DeepSeekChatRequest {
     pub model: String,
@@ -186,6 +193,8 @@ pub struct DeepSeekChatRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<DeepSeekResponseFormatRequest>,
     pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<DeepSeekStreamOptionsRequest>,
     pub thinking: DeepSeekThinkingRequest,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
@@ -207,6 +216,11 @@ pub struct DeepSeekThinkingRequest {
 pub struct DeepSeekResponseFormatRequest {
     #[serde(rename = "type")]
     pub format_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeepSeekStreamOptionsRequest {
+    pub include_usage: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -264,6 +278,8 @@ struct DeepSeekAgentRequest {
     response_format: Option<DeepSeekResponseFormatRequest>,
     tools: Vec<DeepSeekAgentToolSpec>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<DeepSeekStreamOptionsRequest>,
     thinking: DeepSeekThinkingRequest,
     #[serde(skip_serializing_if = "Option::is_none")]
     user_id: Option<String>,
@@ -313,6 +329,7 @@ struct DeepSeekAgentToolCallFunctionSpec {
 #[derive(Deserialize)]
 struct DeepSeekAgentResponse {
     choices: Vec<DeepSeekAgentChoice>,
+    usage: Option<DeepSeekUsage>,
 }
 
 #[derive(Deserialize)]
@@ -343,6 +360,7 @@ struct DeepSeekAgentToolCallFunctionResponse {
 #[derive(Deserialize)]
 struct DeepSeekAgentStreamChunk {
     choices: Vec<DeepSeekAgentStreamChoice>,
+    usage: Option<DeepSeekUsage>,
 }
 
 #[derive(Deserialize)]
@@ -756,7 +774,7 @@ impl DeepSeekProvider {
         messages: &[AgentMessage],
         tools: &[ToolDefinition],
         options: &DeepSeekRequestOptions,
-    ) -> Result<(AgentMessage, AgentStepResult), ProviderError> {
+    ) -> Result<AgentStep, ProviderError> {
         let request_body = deepseek_agent_request(model_id, messages, tools, options, false);
         let response = self
             .client
@@ -804,7 +822,11 @@ impl DeepSeekProvider {
                 tool_calls: Some(calls.clone()),
                 tool_call_id: None,
             };
-            Ok((assistant_msg, AgentStepResult::ToolCalls(calls)))
+            Ok(AgentStep {
+                assistant_message: assistant_msg,
+                result: AgentStepResult::ToolCalls(calls),
+                usage: parsed.usage.map(token_usage_from_deepseek_usage),
+            })
         } else {
             let content = choice.message.content.clone().unwrap_or_default();
             let assistant_msg = AgentMessage {
@@ -814,7 +836,11 @@ impl DeepSeekProvider {
                 tool_calls: None,
                 tool_call_id: None,
             };
-            Ok((assistant_msg, AgentStepResult::Text(content)))
+            Ok(AgentStep {
+                assistant_message: assistant_msg,
+                result: AgentStepResult::Text(content),
+                usage: parsed.usage.map(token_usage_from_deepseek_usage),
+            })
         }
     }
 
@@ -825,7 +851,7 @@ impl DeepSeekProvider {
         tools: &[ToolDefinition],
         options: &DeepSeekRequestOptions,
         mut on_delta: F,
-    ) -> Result<(AgentMessage, AgentStepResult), ProviderError>
+    ) -> Result<AgentStep, ProviderError>
     where
         F: FnMut(CompletionStreamDelta),
     {
@@ -1005,6 +1031,9 @@ fn deepseek_chat_request_from_completion_with_stream(
         reasoning_effort: request.options.reasoning_effort.as_str().to_owned(),
         response_format: request.options.response_format.request(),
         stream,
+        stream_options: stream.then_some(DeepSeekStreamOptionsRequest {
+            include_usage: true,
+        }),
         thinking: DeepSeekThinkingRequest {
             thinking_type: request.options.thinking_mode.as_str().to_owned(),
         },
@@ -1061,6 +1090,9 @@ fn deepseek_agent_request(
         response_format: options.response_format.request(),
         tools: tool_specs,
         stream,
+        stream_options: stream.then_some(DeepSeekStreamOptionsRequest {
+            include_usage: true,
+        }),
         thinking: DeepSeekThinkingRequest {
             thinking_type: options.thinking_mode.as_str().to_owned(),
         },
@@ -1100,13 +1132,7 @@ pub fn parse_deepseek_chat_response(
         content,
         finish_reason: choice.finish_reason,
         reasoning_content: None,
-        usage: parsed.usage.map(|usage| TokenUsage {
-            completion_tokens: usage.completion_tokens,
-            prompt_tokens: usage.prompt_tokens,
-            prompt_cache_hit_tokens: usage.prompt_cache_hit_tokens,
-            prompt_cache_miss_tokens: usage.prompt_cache_miss_tokens,
-            total_tokens: usage.total_tokens,
-        }),
+        usage: parsed.usage.map(token_usage_from_deepseek_usage),
     })
 }
 
@@ -1121,10 +1147,9 @@ pub fn parse_deepseek_stream_chunk(
     let parsed: DeepSeekChatStreamChunk = serde_json::from_str(trimmed).map_err(|error| {
         ProviderError::MalformedResponse(format!("failed to parse DeepSeek stream chunk: {error}"))
     })?;
-    let choice =
-        parsed.choices.into_iter().next().ok_or_else(|| {
-            ProviderError::MalformedResponse("missing stream choices[0]".to_owned())
-        })?;
+    let Some(choice) = parsed.choices.into_iter().next() else {
+        return Ok(None);
+    };
 
     Ok(Some(CompletionStreamDelta {
         content: choice.delta.content,
@@ -1176,13 +1201,7 @@ where
         }
 
         if let Some(chunk_usage) = parsed.usage {
-            usage = Some(TokenUsage {
-                completion_tokens: chunk_usage.completion_tokens,
-                prompt_tokens: chunk_usage.prompt_tokens,
-                prompt_cache_hit_tokens: chunk_usage.prompt_cache_hit_tokens,
-                prompt_cache_miss_tokens: chunk_usage.prompt_cache_miss_tokens,
-                total_tokens: chunk_usage.total_tokens,
-            });
+            usage = Some(token_usage_from_deepseek_usage(chunk_usage));
         }
 
         let Some(choice) = parsed.choices.into_iter().next() else {
@@ -1226,7 +1245,7 @@ where
 fn read_deepseek_agent_streaming_response<F>(
     response: reqwest::blocking::Response,
     on_delta: &mut F,
-) -> Result<(AgentMessage, AgentStepResult), ProviderError>
+) -> Result<AgentStep, ProviderError>
 where
     F: FnMut(CompletionStreamDelta),
 {
@@ -1234,6 +1253,7 @@ where
     let mut reasoning_content = String::new();
     let mut tool_calls = BTreeMap::new();
     let mut finish_reason = None;
+    let mut usage = None;
     let reader = BufReader::new(response);
 
     for line in reader.lines() {
@@ -1258,11 +1278,12 @@ where
             &mut reasoning_content,
             &mut tool_calls,
             &mut finish_reason,
+            &mut usage,
             on_delta,
         )?;
     }
 
-    finish_deepseek_agent_stream(content, reasoning_content, tool_calls, finish_reason)
+    finish_deepseek_agent_stream(content, reasoning_content, tool_calls, finish_reason, usage)
 }
 
 fn apply_deepseek_agent_stream_data<F>(
@@ -1271,6 +1292,7 @@ fn apply_deepseek_agent_stream_data<F>(
     reasoning_content: &mut String,
     tool_calls: &mut BTreeMap<usize, ToolCallAccumulator>,
     finish_reason: &mut Option<String>,
+    usage: &mut Option<TokenUsage>,
     on_delta: &mut F,
 ) -> Result<(), ProviderError>
 where
@@ -1281,6 +1303,9 @@ where
             "failed to parse DeepSeek agent stream chunk: {error}"
         ))
     })?;
+    if let Some(chunk_usage) = parsed.usage {
+        *usage = Some(token_usage_from_deepseek_usage(chunk_usage));
+    }
     let Some(choice) = parsed.choices.into_iter().next() else {
         return Ok(());
     };
@@ -1331,7 +1356,8 @@ fn finish_deepseek_agent_stream(
     reasoning_content: String,
     tool_calls: BTreeMap<usize, ToolCallAccumulator>,
     finish_reason: Option<String>,
-) -> Result<(AgentMessage, AgentStepResult), ProviderError> {
+    usage: Option<TokenUsage>,
+) -> Result<AgentStep, ProviderError> {
     let reasoning_content = if reasoning_content.is_empty() {
         None
     } else {
@@ -1365,7 +1391,11 @@ fn finish_deepseek_agent_stream(
             tool_calls: Some(calls.clone()),
             tool_call_id: None,
         };
-        Ok((assistant_msg, AgentStepResult::ToolCalls(calls)))
+        Ok(AgentStep {
+            assistant_message: assistant_msg,
+            result: AgentStepResult::ToolCalls(calls),
+            usage,
+        })
     } else {
         let assistant_msg = AgentMessage {
             role: "assistant".to_owned(),
@@ -1374,7 +1404,21 @@ fn finish_deepseek_agent_stream(
             tool_calls: None,
             tool_call_id: None,
         };
-        Ok((assistant_msg, AgentStepResult::Text(content)))
+        Ok(AgentStep {
+            assistant_message: assistant_msg,
+            result: AgentStepResult::Text(content),
+            usage,
+        })
+    }
+}
+
+fn token_usage_from_deepseek_usage(usage: DeepSeekUsage) -> TokenUsage {
+    TokenUsage {
+        completion_tokens: usage.completion_tokens,
+        prompt_tokens: usage.prompt_tokens,
+        prompt_cache_hit_tokens: usage.prompt_cache_hit_tokens,
+        prompt_cache_miss_tokens: usage.prompt_cache_miss_tokens,
+        total_tokens: usage.total_tokens,
     }
 }
 
@@ -1745,6 +1789,7 @@ mod tests {
 
         assert_eq!(json["model"], "deepseek-v4-pro");
         assert_eq!(json["stream"], false);
+        assert!(json.get("stream_options").is_none());
         assert_eq!(json["thinking"]["type"], "enabled");
         assert_eq!(json["reasoning_effort"], "high");
         assert!(json.get("response_format").is_none());
@@ -1765,6 +1810,7 @@ mod tests {
         let json = serde_json::to_value(deepseek_request).unwrap();
 
         assert_eq!(json["stream"], true);
+        assert_eq!(json["stream_options"]["include_usage"], true);
         assert_eq!(json["thinking"]["type"], "enabled");
         assert_eq!(json["reasoning_effort"], "high");
     }
@@ -1804,6 +1850,38 @@ mod tests {
         let json = serde_json::to_value(deepseek_request).unwrap();
 
         assert_eq!(json["response_format"]["type"], "json_object");
+    }
+
+    #[test]
+    fn deepseek_agent_request_serialization_includes_stream_usage_options() {
+        let request = deepseek_agent_request(
+            &ModelId::new("deepseek-v4-pro").unwrap(),
+            &[AgentMessage {
+                role: "user".to_owned(),
+                content: Some("Read a file".to_owned()),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+            }],
+            &[ToolDefinition {
+                name: "read_file".to_owned(),
+                description: "Read a file".to_owned(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"}
+                    },
+                    "required": ["path"]
+                }),
+            }],
+            &DeepSeekRequestOptions::default(),
+            true,
+        );
+        let json = serde_json::to_value(request).unwrap();
+
+        assert_eq!(json["stream"], true);
+        assert_eq!(json["stream_options"]["include_usage"], true);
+        assert_eq!(json["tools"][0]["type"], "function");
     }
 
     #[test]
@@ -1881,6 +1959,13 @@ mod tests {
         assert_eq!(reasoning.content, None);
         assert_eq!(content.content.as_deref(), Some("Hello"));
         assert_eq!(content.reasoning_content, None);
+        assert!(
+            parse_deepseek_stream_chunk(
+                r#"{"choices":[],"model":"deepseek-v4-pro","usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}"#,
+            )
+            .unwrap()
+            .is_none()
+        );
         assert!(parse_deepseek_stream_chunk("[DONE]").unwrap().is_none());
     }
 
@@ -1890,6 +1975,7 @@ mod tests {
         let mut reasoning_content = String::new();
         let mut tool_calls = BTreeMap::new();
         let mut finish_reason = None;
+        let mut usage = None;
         let mut deltas = Vec::new();
 
         apply_deepseek_agent_stream_data(
@@ -1898,25 +1984,39 @@ mod tests {
             &mut reasoning_content,
             &mut tool_calls,
             &mut finish_reason,
+            &mut usage,
             &mut |delta| deltas.push(delta),
         )
         .unwrap();
         apply_deepseek_agent_stream_data(
-            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"src/lib.rs\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"src/lib.rs\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":3,"prompt_cache_hit_tokens":4,"prompt_cache_miss_tokens":1,"total_tokens":8}}"#,
             &mut content,
             &mut reasoning_content,
             &mut tool_calls,
             &mut finish_reason,
+            &mut usage,
             &mut |delta| deltas.push(delta),
         )
         .unwrap();
 
-        let (assistant, result) =
-            finish_deepseek_agent_stream(content, reasoning_content, tool_calls, finish_reason)
-                .unwrap();
+        let step = finish_deepseek_agent_stream(
+            content,
+            reasoning_content,
+            tool_calls,
+            finish_reason,
+            usage,
+        )
+        .unwrap();
 
-        assert_eq!(assistant.reasoning_content.as_deref(), Some("thinking"));
-        match result {
+        assert_eq!(
+            step.assistant_message.reasoning_content.as_deref(),
+            Some("thinking")
+        );
+        assert_eq!(
+            step.usage.as_ref().unwrap().prompt_cache_hit_tokens,
+            Some(4)
+        );
+        match step.result {
             AgentStepResult::ToolCalls(calls) => {
                 assert_eq!(calls.len(), 1);
                 assert_eq!(calls[0].id, "call_1");
