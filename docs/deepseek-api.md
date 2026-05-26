@@ -20,7 +20,7 @@ The current implemented OpenAI-format DeepSeek surface is:
 - Alternate model: `deepseek-v4-flash`
 - Thinking mode: enabled by default
 - Reasoning effort: `max` for interactive agentic mode, `high` for regular chat requests
-- Streaming: not yet implemented
+- Streaming: implemented for non-agent chat mode; agent tool-call streaming is still pending
 - Context caching: automatic on DeepSeek's side; RaptorCode displays cache hit and cache miss token telemetry when returned
 
 ## Interactive Commands
@@ -29,6 +29,7 @@ The interactive `raptor` agent supports these DeepSeek runtime controls:
 
 - `/thinking`: toggles `{"thinking": {"type": "enabled"}}` and `{"thinking": {"type": "disabled"}}`
 - `/effort`: toggles `reasoning_effort` between `high` and `max`
+- `/stream`: toggles streamed DeepSeek chat responses in chat mode
 - `/balance`: calls `/user/balance` and prints availability plus returned balance rows
 - `/model`: fetches `/models` and lets the user select a model
 - `/clear`: resets conversation state after API-affecting changes
@@ -38,6 +39,8 @@ Changing thinking mode, reasoning effort, or model resets the in-memory conversa
 ## Multi-Round Conversation
 
 DeepSeek `/chat/completions` is stateless. RaptorCode keeps local conversation history and sends accumulated messages on each request.
+
+In chat mode, streamed SSE chunks are parsed from `data:` events. RaptorCode prints final-answer `delta.content` chunks as they arrive, ignores keep-alive comments, captures thinking-mode `delta.reasoning_content` internally, and records final usage telemetry when returned.
 
 For agentic tool calls, RaptorCode preserves assistant `reasoning_content` when a DeepSeek response includes tool calls. This matches the DeepSeek thinking-mode requirement that tool-call reasoning content must be passed back in later requests for that conversation.
 
@@ -69,7 +72,7 @@ No private user data should be placed in `user_id`.
 
 ## Not Yet Implemented
 
-- Streaming SSE output
+- Agent tool-call streaming delta assembly
 - Chat Prefix Completion beta endpoint behavior
 - FIM Completion beta endpoint behavior
 - JSON output command/control surface

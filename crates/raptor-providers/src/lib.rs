@@ -1,6 +1,7 @@
 use std::env;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::io::{BufRead, BufReader};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -57,7 +58,15 @@ pub struct CompletionResponse {
     pub model_id: ModelId,
     pub content: String,
     pub finish_reason: Option<String>,
+    pub reasoning_content: Option<String>,
     pub usage: Option<TokenUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionStreamDelta {
+    pub content: Option<String>,
+    pub finish_reason: Option<String>,
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +198,25 @@ struct DeepSeekChatResponse {
     choices: Vec<DeepSeekChoice>,
     model: Option<String>,
     usage: Option<DeepSeekUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepSeekChatStreamChunk {
+    choices: Vec<DeepSeekStreamChoice>,
+    model: Option<String>,
+    usage: Option<DeepSeekUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepSeekStreamChoice {
+    delta: DeepSeekStreamDelta,
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepSeekStreamDelta {
+    content: Option<String>,
+    reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -518,6 +546,10 @@ impl CompletionRequest {
         self.options = options;
         self
     }
+
+    pub fn for_streaming(&self) -> Result<DeepSeekChatRequest, ProviderError> {
+        deepseek_chat_request_from_completion_with_stream(self, true)
+    }
 }
 
 impl DeepSeekThinkingMode {
@@ -786,6 +818,45 @@ impl DeepSeekProvider {
 
         parse_deepseek_user_balance_response(&body)
     }
+
+    pub fn complete_streaming<F>(
+        &self,
+        request: CompletionRequest,
+        mut on_delta: F,
+    ) -> Result<CompletionResponse, ProviderError>
+    where
+        F: FnMut(CompletionStreamDelta),
+    {
+        if request.provider_id.as_str() != "deepseek" {
+            return Err(ProviderError::InvalidProviderId(
+                request.provider_id.as_str().to_owned(),
+            ));
+        }
+
+        let request_body = request.for_streaming()?;
+        let response = self
+            .client
+            .post(&self.endpoint)
+            .bearer_auth(&self.api_key)
+            .json(&request_body)
+            .send()
+            .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+        let status = response.status().as_u16();
+
+        if status != 200 {
+            let body = response
+                .text()
+                .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+            return Err(map_deepseek_error_status(status, &body));
+        }
+
+        read_deepseek_streaming_response(
+            response,
+            &request.provider_id,
+            &request.model_id,
+            &mut on_delta,
+        )
+    }
 }
 
 impl Provider for DeepSeekProvider {
@@ -836,6 +907,13 @@ impl Provider for DeepSeekProvider {
 pub fn deepseek_chat_request_from_completion(
     request: &CompletionRequest,
 ) -> Result<DeepSeekChatRequest, ProviderError> {
+    deepseek_chat_request_from_completion_with_stream(request, false)
+}
+
+fn deepseek_chat_request_from_completion_with_stream(
+    request: &CompletionRequest,
+    stream: bool,
+) -> Result<DeepSeekChatRequest, ProviderError> {
     if request.provider_id.as_str() != "deepseek" {
         return Err(ProviderError::InvalidProviderId(
             request.provider_id.as_str().to_owned(),
@@ -853,7 +931,7 @@ pub fn deepseek_chat_request_from_completion(
             })
             .collect(),
         reasoning_effort: request.options.reasoning_effort.as_str().to_owned(),
-        stream: false,
+        stream,
         thinking: DeepSeekThinkingRequest {
             thinking_type: request.options.thinking_mode.as_str().to_owned(),
         },
@@ -892,6 +970,7 @@ pub fn parse_deepseek_chat_response(
         model_id,
         content,
         finish_reason: choice.finish_reason,
+        reasoning_content: None,
         usage: parsed.usage.map(|usage| TokenUsage {
             completion_tokens: usage.completion_tokens,
             prompt_tokens: usage.prompt_tokens,
@@ -899,6 +978,119 @@ pub fn parse_deepseek_chat_response(
             prompt_cache_miss_tokens: usage.prompt_cache_miss_tokens,
             total_tokens: usage.total_tokens,
         }),
+    })
+}
+
+pub fn parse_deepseek_stream_chunk(
+    data: &str,
+) -> Result<Option<CompletionStreamDelta>, ProviderError> {
+    let trimmed = data.trim();
+    if trimmed.is_empty() || trimmed == "[DONE]" {
+        return Ok(None);
+    }
+
+    let parsed: DeepSeekChatStreamChunk = serde_json::from_str(trimmed).map_err(|error| {
+        ProviderError::MalformedResponse(format!("failed to parse DeepSeek stream chunk: {error}"))
+    })?;
+    let choice =
+        parsed.choices.into_iter().next().ok_or_else(|| {
+            ProviderError::MalformedResponse("missing stream choices[0]".to_owned())
+        })?;
+
+    Ok(Some(CompletionStreamDelta {
+        content: choice.delta.content,
+        finish_reason: choice.finish_reason,
+        reasoning_content: choice.delta.reasoning_content,
+    }))
+}
+
+fn read_deepseek_streaming_response<F>(
+    response: reqwest::blocking::Response,
+    provider_id: &ProviderId,
+    fallback_model_id: &ModelId,
+    on_delta: &mut F,
+) -> Result<CompletionResponse, ProviderError>
+where
+    F: FnMut(CompletionStreamDelta),
+{
+    let mut content = String::new();
+    let mut finish_reason = None;
+    let mut model_id = fallback_model_id.clone();
+    let mut reasoning_content = String::new();
+    let mut usage = None;
+    let reader = BufReader::new(response);
+
+    for line in reader.lines() {
+        let line = line.map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() || trimmed.starts_with(':') {
+            continue;
+        }
+
+        let Some(data) = trimmed.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data == "[DONE]" {
+            break;
+        }
+
+        let parsed: DeepSeekChatStreamChunk = serde_json::from_str(data).map_err(|error| {
+            ProviderError::MalformedResponse(format!(
+                "failed to parse DeepSeek stream chunk: {error}"
+            ))
+        })?;
+
+        if let Some(model) = parsed.model.filter(|model| !model.trim().is_empty()) {
+            model_id = ModelId::new(model)?;
+        }
+
+        if let Some(chunk_usage) = parsed.usage {
+            usage = Some(TokenUsage {
+                completion_tokens: chunk_usage.completion_tokens,
+                prompt_tokens: chunk_usage.prompt_tokens,
+                prompt_cache_hit_tokens: chunk_usage.prompt_cache_hit_tokens,
+                prompt_cache_miss_tokens: chunk_usage.prompt_cache_miss_tokens,
+                total_tokens: chunk_usage.total_tokens,
+            });
+        }
+
+        let Some(choice) = parsed.choices.into_iter().next() else {
+            continue;
+        };
+        if choice.finish_reason.is_some() {
+            finish_reason = choice.finish_reason.clone();
+        }
+        if let Some(reasoning_delta) = choice.delta.reasoning_content {
+            reasoning_content.push_str(&reasoning_delta);
+            on_delta(CompletionStreamDelta {
+                content: None,
+                finish_reason: choice.finish_reason.clone(),
+                reasoning_content: Some(reasoning_delta),
+            });
+        }
+        if let Some(content_delta) = choice.delta.content {
+            content.push_str(&content_delta);
+            on_delta(CompletionStreamDelta {
+                content: Some(content_delta),
+                finish_reason: choice.finish_reason,
+                reasoning_content: None,
+            });
+        }
+    }
+
+    Ok(CompletionResponse {
+        provider_id: provider_id.clone(),
+        model_id,
+        content,
+        finish_reason,
+        reasoning_content: if reasoning_content.is_empty() {
+            None
+        } else {
+            Some(reasoning_content)
+        },
+        usage,
     })
 }
 
@@ -1278,6 +1470,21 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_request_serialization_supports_streaming_shape() {
+        let request = CompletionRequest::new(
+            ProviderId::new("deepseek").unwrap(),
+            ModelId::new("deepseek-v4-pro").unwrap(),
+            vec![CompletionMessage::user("Hello")],
+        );
+        let deepseek_request = request.for_streaming().unwrap();
+        let json = serde_json::to_value(deepseek_request).unwrap();
+
+        assert_eq!(json["stream"], true);
+        assert_eq!(json["thinking"]["type"], "enabled");
+        assert_eq!(json["reasoning_effort"], "high");
+    }
+
+    #[test]
     fn deepseek_request_serialization_applies_thinking_effort_and_user_id() {
         let options = DeepSeekRequestOptions::default()
             .with_thinking_mode(DeepSeekThinkingMode::Disabled)
@@ -1354,6 +1561,26 @@ mod tests {
         assert!(balance.is_available);
         assert_eq!(balance.balance_infos[0].currency, "USD");
         assert_eq!(balance.balance_infos[0].total_balance, "12.34");
+    }
+
+    #[test]
+    fn deepseek_stream_chunk_parsing_reads_content_and_reasoning_deltas() {
+        let reasoning = parse_deepseek_stream_chunk(
+            r#"{"choices":[{"delta":{"reasoning_content":"thinking...","role":"assistant"},"finish_reason":null,"index":0}],"model":"deepseek-v4-pro"}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let content = parse_deepseek_stream_chunk(
+            r#"{"choices":[{"delta":{"content":"Hello","role":"assistant"},"finish_reason":null,"index":0}],"model":"deepseek-v4-pro"}"#,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(reasoning.reasoning_content.as_deref(), Some("thinking..."));
+        assert_eq!(reasoning.content, None);
+        assert_eq!(content.content.as_deref(), Some("Hello"));
+        assert_eq!(content.reasoning_content, None);
+        assert!(parse_deepseek_stream_chunk("[DONE]").unwrap().is_none());
     }
 
     #[test]

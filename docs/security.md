@@ -87,7 +87,7 @@ Current provider controls:
 - Explicit test commands are structured process arguments, not shell strings.
 - Explicit test commands are limited to test-oriented subcommands and reject path traversal arguments.
 - `raptor test <task-id>` does not install dependencies, execute model output, update metadata, edit source files, commit, merge, or push.
-- No streaming connections, provider SDKs, or additional provider executions are implemented before v0.1.
+- Streaming is implemented only for interactive chat-mode DeepSeek final-answer chunks. Agent tool-call streaming remains disabled until streamed tool-call delta assembly is implemented and verified. No provider SDKs or additional provider executions are implemented before v0.1.
 
 Current agent controls:
 

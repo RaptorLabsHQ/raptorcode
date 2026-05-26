@@ -30,9 +30,10 @@ use raptor_git::{
 };
 use raptor_providers::{
     AgentMessage, AgentStepResult, CompletionMessage, CompletionRequest, CompletionResponse,
-    DeepSeekProvider, DeepSeekReasoningEffort, DeepSeekRequestOptions, DeepSeekThinkingMode,
-    ModelId, Provider, ProviderCatalog, ProviderConfiguration, ProviderError, ProviderId,
-    ProviderSummary, TokenUsage, ToolDefinition, DEEPSEEK_API_KEY_ENV, DEEPSEEK_API_KEY_URL,
+    CompletionStreamDelta, DeepSeekProvider, DeepSeekReasoningEffort, DeepSeekRequestOptions,
+    DeepSeekThinkingMode, ModelId, Provider, ProviderCatalog, ProviderConfiguration, ProviderError,
+    ProviderId, ProviderSummary, TokenUsage, ToolDefinition, DEEPSEEK_API_KEY_ENV,
+    DEEPSEEK_API_KEY_URL,
 };
 use raptor_store::{
     init_project_config, list_agent_sessions, list_swarm_metadata, list_task_metadata,
@@ -988,6 +989,7 @@ pub fn run_interactive_chat(
         } else {
             DeepSeekReasoningEffort::High
         });
+    let mut stream_chat = !agent_mode;
 
     println!();
     println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}");
@@ -1001,7 +1003,11 @@ pub fn run_interactive_chat(
         "  {C_RED_BOLD}RaptorCode Engineering Agent{C_RESET}  {C_DIM}│{C_RESET}  {workflow_label}"
     );
     println!("  Type your request and press Enter to send.");
-    println!("  {C_DIM}/help · /api · /model · /thinking · /effort · /balance · Ctrl+D or /exit{C_RESET}");
+    println!("  {C_DIM}/help · /api · /model · /thinking · /effort · /stream · /balance · Ctrl+D or /exit{C_RESET}");
+    println!(
+        "  {C_DIM}Streaming: {}{C_RESET}",
+        if stream_chat { "on for chat" } else { "off" }
+    );
     println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}\n");
 
     let tools = build_agent_tools();
@@ -1078,6 +1084,20 @@ pub fn run_interactive_chat(
                     "  {C_GREEN_BOLD}✓  DeepSeek {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}\n",
                     request_options.reasoning_effort.label()
                 );
+                continue;
+            }
+            "/stream" => {
+                if agent_mode {
+                    println!(
+                        "  {C_DIM}Streaming is currently available for chat mode. Agent tool-call streaming is pending.{C_RESET}\n"
+                    );
+                } else {
+                    stream_chat = !stream_chat;
+                    println!(
+                        "  {C_GREEN_BOLD}✓  Streaming {}{C_RESET}\n",
+                        if stream_chat { "on" } else { "off" }
+                    );
+                }
                 continue;
             }
             "/balance" => {
@@ -1269,10 +1289,30 @@ pub fn run_interactive_chat(
             )
             .with_options(request_options.clone());
 
-            match provider.complete(request) {
+            let response = if stream_chat {
+                print!("  {C_DIM}Streaming DeepSeek response...{C_RESET}\n\n");
+                std::io::stdout().flush().ok();
+                provider.complete_streaming(request, |delta| {
+                    print_stream_delta(delta);
+                })
+            } else {
+                provider.complete(request)
+            };
+
+            match response {
                 Ok(response) => {
                     let content = response.content.trim().to_owned();
-                    println!("{content}\n");
+                    if stream_chat {
+                        println!("\n");
+                    } else {
+                        println!("{content}\n");
+                    }
+                    if let Some(usage) = response.usage.as_ref() {
+                        println!(
+                            "  {C_DIM}Usage: {}{C_RESET}\n",
+                            render_token_usage(Some(usage))
+                        );
+                    }
                     chat_history.push(CompletionMessage::assistant(&content));
                 }
                 Err(ProviderError::MissingApiKey) | Err(ProviderError::AuthenticationFailed(_)) => {
@@ -1319,6 +1359,17 @@ fn read_boxed_agent_prompt_line(color_mode: ColorMode) -> std::io::Result<Option
         Ok(0) => Ok(None),
         Ok(_) => Ok(Some(input.trim().to_owned())),
         Err(error) => Err(error),
+    }
+}
+
+fn print_stream_delta(delta: CompletionStreamDelta) {
+    if delta.reasoning_content.is_some() {
+        return;
+    }
+
+    if let Some(content) = delta.content {
+        print!("{content}");
+        std::io::stdout().flush().ok();
     }
 }
 
@@ -1462,7 +1513,7 @@ fn user_credentials_path() -> Option<PathBuf> {
 
 fn render_interactive_help() -> String {
     format!(
-        "\n{C_BOLD}RaptorCode commands:{C_RESET}\n  /help or ?   Show this help\n  /clear       Clear conversation history\n  /api         Change or view API key\n  /model       Select AI model\n  /thinking    Toggle DeepSeek thinking mode on/off\n  /effort      Toggle DeepSeek reasoning effort high/max\n  /balance     Show DeepSeek account balance\n  /exit        Exit\n  /quit        Exit\n\nJust type your coding request and press Enter.\n\n"
+        "\n{C_BOLD}RaptorCode commands:{C_RESET}\n  /help or ?   Show this help\n  /clear       Clear conversation history\n  /api         Change or view API key\n  /model       Select AI model\n  /thinking    Toggle DeepSeek thinking mode on/off\n  /effort      Toggle DeepSeek reasoning effort high/max\n  /stream      Toggle streaming responses in chat mode\n  /balance     Show DeepSeek account balance\n  /exit        Exit\n  /quit        Exit\n\nJust type your coding request and press Enter.\n\n"
     )
 }
 
@@ -3855,6 +3906,7 @@ mod tests {
                     model_id: default_model,
                     content: content.to_owned(),
                     finish_reason: Some("stop".to_owned()),
+                    reasoning_content: None,
                     usage: Some(TokenUsage {
                         completion_tokens: Some(2),
                         prompt_tokens: Some(3),
