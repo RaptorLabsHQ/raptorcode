@@ -47,9 +47,10 @@ use raptor_tools::{
     TestCommandOutput,
 };
 use raptor_tui::{
-    color_mode_from_environment, render_dashboard_snapshot, render_startup_banner, run_dashboard,
-    terminal_width_from_environment, AgentDashboardSummary, ColorMode, DashboardState,
-    StartupBannerOptions, SwarmDashboardSummary, TaskDashboardSummary,
+    color_mode_from_environment, prompt_input_cursor_column, render_dashboard_snapshot,
+    render_prompt_input_box, render_startup_banner, run_dashboard, terminal_width_from_environment,
+    AgentDashboardSummary, ColorMode, DashboardState, StartupBannerOptions, SwarmDashboardSummary,
+    TaskDashboardSummary,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1014,23 +1015,17 @@ pub fn run_interactive_chat(
         vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
 
     loop {
-        print!("{C_RED_BOLD}>{C_RESET} ");
-        std::io::stdout().flush().ok();
-
-        let mut input = String::new();
-        match std::io::stdin().read_line(&mut input) {
-            Ok(0) => {
+        let input = match read_boxed_agent_prompt_line(banner_options.color_mode) {
+            Ok(None) => {
                 println!("\nGoodbye.");
                 break;
             }
-            Ok(_) => {}
+            Ok(Some(input)) => input,
             Err(error) => {
                 eprintln!("input error: {error}");
                 break;
             }
-        }
-
-        let input = input.trim().to_owned();
+        };
 
         if input.is_empty() {
             continue;
@@ -1222,6 +1217,36 @@ pub fn run_interactive_chat(
     }
 
     Ok(())
+}
+
+fn read_boxed_agent_prompt_line(color_mode: ColorMode) -> std::io::Result<Option<String>> {
+    use crossterm::{cursor, execute};
+
+    const AGENT_INPUT_LABEL: &str = ">  ";
+
+    let width = terminal_width_from_environment();
+    let mut stdout = std::io::stdout();
+    print!(
+        "{}",
+        render_prompt_input_box(width, color_mode, AGENT_INPUT_LABEL)
+    );
+    stdout.flush()?;
+    execute!(
+        stdout,
+        cursor::MoveUp(2),
+        cursor::MoveToColumn(prompt_input_cursor_column(AGENT_INPUT_LABEL))
+    )?;
+    stdout.flush()?;
+
+    let mut input = String::new();
+    let read = std::io::stdin().read_line(&mut input);
+    execute!(stdout, cursor::MoveDown(1), cursor::MoveToColumn(0)).ok();
+
+    match read {
+        Ok(0) => Ok(None),
+        Ok(_) => Ok(Some(input.trim().to_owned())),
+        Err(error) => Err(error),
+    }
 }
 
 fn test_deepseek_connection(provider: &DeepSeekProvider) -> Result<(), CliError> {

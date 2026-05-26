@@ -51,6 +51,7 @@ pub const BRAND_MUTED_TEXT_HEX: &str = theme::DIM;
 pub const BRAND_RED_HEX: &str = theme::RAPTOR_RED;
 pub const BRAND_DARK_RED_HEX: &str = theme::RAPTOR_RED_MUTED;
 pub const BRAND_SUBTLE_DEEP_RED_HEX: &str = theme::RAPTOR_RED_MUTED;
+pub const PROMPT_INPUT_LABEL: &str = "raptorcode>  ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorMode {
@@ -728,13 +729,54 @@ fn push_metadata_border(
 }
 
 fn push_prompt(options: &StartupBannerOptions, output: &mut String) {
-    output.push_str("  ");
-    output.push_str(&style(
+    output.push_str(&render_prompt_input_box(
+        options.terminal_width,
         options.color_mode,
-        BrandToken::RaptorRed,
-        true,
-        "raptorcode>  ",
+        PROMPT_INPUT_LABEL,
     ));
+}
+
+pub fn render_prompt_input_box(terminal_width: u16, color_mode: ColorMode, label: &str) -> String {
+    let box_width = prompt_input_box_width(terminal_width);
+    let inner_width = box_width.saturating_sub(2);
+    let label_width = visible_width(label);
+    let prompt_padding = " ".repeat(inner_width.saturating_sub(label_width + 1));
+
+    let mut output = String::new();
+    output.push_str("  ");
+    output.push_str(&paint(color_mode, BrandToken::RaptorRed, "┌"));
+    output.push_str(&paint(
+        color_mode,
+        BrandToken::RaptorRed,
+        &"─".repeat(inner_width),
+    ));
+    output.push_str(&paint(color_mode, BrandToken::RaptorRed, "┐"));
+    output.push('\n');
+    output.push_str("  ");
+    output.push_str(&paint(color_mode, BrandToken::RaptorRed, "│"));
+    output.push(' ');
+    output.push_str(&style(color_mode, BrandToken::Accent, true, label));
+    output.push_str(&prompt_padding);
+    output.push_str(&paint(color_mode, BrandToken::RaptorRed, "│"));
+    output.push('\n');
+    output.push_str("  ");
+    output.push_str(&paint(color_mode, BrandToken::RaptorRed, "└"));
+    output.push_str(&paint(
+        color_mode,
+        BrandToken::RaptorRed,
+        &"─".repeat(inner_width),
+    ));
+    output.push_str(&paint(color_mode, BrandToken::RaptorRed, "┘"));
+
+    output
+}
+
+pub fn prompt_input_box_width(terminal_width: u16) -> usize {
+    (terminal_width.saturating_sub(4) as usize).clamp(44, 120)
+}
+
+pub fn prompt_input_cursor_column(label: &str) -> u16 {
+    (2 + 1 + 1 + visible_width(label)) as u16
 }
 
 fn icon_field(icon: &str) -> String {
@@ -1035,6 +1077,11 @@ mod tests {
         assert!(output.contains("high effort"));
         assert!(output.contains("Type"));
         assert!(output.contains("/help for commands"));
+        assert!(output.contains("┌"));
+        assert!(output.contains("┐"));
+        assert!(output.contains("└"));
+        assert!(output.contains("┘"));
+        assert!(output.contains("│ raptorcode>"));
         assert!(output.contains("raptorcode>"));
         assert!(!output.ends_with('\n'));
         assert!(!output.contains("raptor>"));
@@ -1099,6 +1146,7 @@ mod tests {
         assert!(!output.contains("████"));
         assert!(output.contains("Raptor Code"));
         assert!(output.contains("v0.1"));
+        assert!(output.contains("│ raptorcode>"));
         assert!(output.contains("raptorcode>"));
         assert!(!output.contains("raptor>"));
     }
