@@ -3,9 +3,12 @@ use std::fmt::{Display, Formatter};
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, OnceLock, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, OnceLock,
+};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use raptor_agent::{
     build_role_planning_prompt, role_prompt_template, AgentId, AgentRole, AgentSession,
@@ -28,8 +31,8 @@ use raptor_git::{
 use raptor_providers::{
     AgentMessage, AgentStepResult, CompletionMessage, CompletionRequest, CompletionResponse,
     DeepSeekProvider, ModelId, Provider, ProviderCatalog, ProviderConfiguration, ProviderError,
-    ProviderId, ProviderSummary, ToolDefinition, TokenUsage,
-    DEEPSEEK_API_KEY_ENV, DEEPSEEK_API_KEY_URL,
+    ProviderId, ProviderSummary, TokenUsage, ToolDefinition, DEEPSEEK_API_KEY_ENV,
+    DEEPSEEK_API_KEY_URL,
 };
 use raptor_store::{
     init_project_config, list_agent_sessions, list_swarm_metadata, list_task_metadata,
@@ -128,9 +131,9 @@ pub struct CliError {
 
 const SWARM_PROVIDER_ID: &str = "deepseek";
 const SWARM_PROVIDER_DISPLAY: &str = "DeepSeek";
-const SWARM_MODEL_ID: &str = "deepseek-chat";
+const SWARM_MODEL_ID: &str = "deepseek-v4-pro";
 const CHAT_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised coding assistant. Answer the developer's message directly. Do not claim to modify files, run commands, install dependencies, commit, merge, or push.";
-const AGENT_SYSTEM_PROMPT: &str = "You are RaptorCode, an autonomous coding agent. When asked to build or create files, use your tools to write them directly to the working directory — do not print code to the terminal. Use write_file to create or update files, read_file to check existing content, list_directory to explore the project, and create_directory for new folders. After completing a task, summarize what files you created or modified.";
+const AGENT_SYSTEM_PROMPT: &str = "You are RaptorCode, an autonomous coding agent for production software engineering. Work sequentially and deliberately: inspect the project, form a concise plan, make small coherent changes, run focused verification, then summarize the result. Coordinate specialist concerns internally like a swarm of frontend, backend, test, and security reviewers, but never perform conflicting parallel file edits. When asked to build or create files, use your tools to write them directly to the working directory; do not print code to the terminal. Use write_file to create or update files, read_file to check existing content, list_directory to explore the project, and create_directory for new folders. Do not run persistent foreground dev servers as blocking commands; prefer build, lint, test, and static inspection commands. For frontend work, default to clean, readable, premium, minimal, enterprise-grade design: restrained palettes, strong hierarchy, accessible contrast, practical spacing, no decorative gradient-heavy button systems, no generic vibecoding visual patterns, and no visual noise unless the user explicitly requests a different style. After completing a task, summarize what files you created or modified and what verification ran.";
 const SWARM_PLANNING_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised v0.1 planning assistant for Raptor Labs. Produce role-specific implementation planning only. Do not modify files, execute commands, apply patches, run tests, claim work was completed, or propose Phase 2 features. DeepSeek is the only provider in scope before v0.1.";
 const SWARM_IMPLEMENTATION_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised v0.1 implementation proposal assistant for Raptor Labs. Produce a safe, reviewable implementation proposal only. Do not claim files were modified. Do not execute commands. Do not apply patches. Do not instruct RaptorCode to modify source files automatically. DeepSeek is the only provider in scope before v0.1.";
 const RAPTOR_PLAN_FILE_NAME: &str = "RAPTOR_PLAN.md";
@@ -158,7 +161,10 @@ fn render_menu_lines(items: &[MenuItem], cursor: usize, raw_mode: bool) {
     for (i, item) in items.iter().enumerate() {
         let selected = i == cursor;
         if selected && item.enabled {
-            print!("  {C_GREEN_BOLD}❯{C_RESET}  {C_BOLD}{}{C_RESET}", item.label);
+            print!(
+                "  {C_GREEN_BOLD}❯{C_RESET}  {C_BOLD}{}{C_RESET}",
+                item.label
+            );
         } else if item.enabled {
             print!("     {}", item.label);
         } else {
@@ -197,8 +203,8 @@ fn interactive_select(items: &[MenuItem]) -> Option<usize> {
     }
 
     let result = loop {
-        match event::read() {
-            Ok(Event::Key(key)) => match key.code {
+        if let Ok(Event::Key(key)) = event::read() {
+            match key.code {
                 KeyCode::Up if cursor_idx > 0 => {
                     cursor_idx -= 1;
                     print!("\x1b[{}A\r", items.len());
@@ -213,14 +219,9 @@ fn interactive_select(items: &[MenuItem]) -> Option<usize> {
                 }
                 KeyCode::Enter => break Some(enabled[cursor_idx]),
                 KeyCode::Esc => break None,
-                KeyCode::Char('c')
-                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
-                    break None
-                }
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break None,
                 _ => {}
-            },
-            _ => {}
+            }
         }
     };
 
@@ -600,28 +601,40 @@ fn pick_latest_model(models: &[String]) -> Option<String> {
         .max_by_key(|m| {
             let ver = m
                 .find("-v")
-                .and_then(|p| m[p + 2..].split('-').next().and_then(|s| s.parse::<i32>().ok()))
+                .and_then(|p| {
+                    m[p + 2..]
+                        .split('-')
+                        .next()
+                        .and_then(|s| s.parse::<i32>().ok())
+                })
                 .unwrap_or(0)
                 * 100;
-            let tier = if m.contains("pro") { 20 }
-                else if m.contains("reasoner") { 15 }
-                else if m.contains("chat") { 10 }
-                else if m.contains("flash") { 5 }
-                else { 1 };
+            let tier = if m.contains("pro") {
+                20
+            } else if m.contains("reasoner") {
+                15
+            } else if m.contains("chat") {
+                10
+            } else if m.contains("flash") {
+                5
+            } else {
+                1
+            };
             ver + tier
         })
         .cloned()
 }
 
 fn describe_tool_call(name: &str, args_json: &str) -> String {
-    let args = serde_json::from_str::<serde_json::Value>(args_json).unwrap_or(serde_json::Value::Null);
+    let args =
+        serde_json::from_str::<serde_json::Value>(args_json).unwrap_or(serde_json::Value::Null);
     match name {
         "run_command" => describe_shell_command(args["command"].as_str().unwrap_or("")),
-        "write_file" => format!("Writing {}", args["path"].as_str().unwrap_or("file")),
-        "read_file" => format!("Reading {}", args["path"].as_str().unwrap_or("file")),
-        "list_directory" => format!("Listing {}", args["path"].as_str().unwrap_or(".")),
-        "create_directory" => format!("Creating dir {}", args["path"].as_str().unwrap_or(".")),
-        "change_directory" => format!("Navigating to {}", args["path"].as_str().unwrap_or(".")),
+        "write_file" => "Writing project file".to_owned(),
+        "read_file" => "Reading project file".to_owned(),
+        "list_directory" => "Inspecting project directory".to_owned(),
+        "create_directory" => "Creating project directory".to_owned(),
+        "change_directory" => "Changing working directory".to_owned(),
         _ => format!("Running {name}"),
     }
 }
@@ -629,19 +642,32 @@ fn describe_tool_call(name: &str, args_json: &str) -> String {
 fn describe_shell_command(cmd: &str) -> String {
     let cmd = cmd.trim();
     // Skip "cd /path && " prefixes to surface the real command
-    let effective = cmd.rfind(" && ").map(|i| cmd[i + 4..].trim()).unwrap_or(cmd);
+    let effective = cmd
+        .rfind(" && ")
+        .map(|i| cmd[i + 4..].trim())
+        .unwrap_or(cmd);
     let parts: Vec<&str> = effective.split_whitespace().collect();
     let base = parts.first().copied().unwrap_or("");
 
     match base {
         "npm" => match parts.get(1).copied().unwrap_or("") {
             "install" | "i" => {
-                let pkgs: Vec<&str> = parts[2..].iter().filter(|s| !s.starts_with('-')).copied().collect();
-                if pkgs.is_empty() { "Installing npm dependencies".to_owned() }
-                else { format!("Installing: {}", pkgs[..pkgs.len().min(3)].join(", ")) }
+                let pkgs: Vec<&str> = parts[2..]
+                    .iter()
+                    .filter(|s| !s.starts_with('-'))
+                    .copied()
+                    .collect();
+                if pkgs.is_empty() {
+                    "Installing npm dependencies".to_owned()
+                } else {
+                    format!("Installing: {}", pkgs[..pkgs.len().min(3)].join(", "))
+                }
             }
             "run" => format!("Running script: {}", parts.get(2).copied().unwrap_or("...")),
-            "create" => format!("Scaffolding: {}", parts.get(2).copied().unwrap_or("project")),
+            "create" => format!(
+                "Scaffolding: {}",
+                parts.get(2).copied().unwrap_or("project")
+            ),
             "build" => "Building project (npm)".to_owned(),
             "test" => "Running tests (npm)".to_owned(),
             "start" => "Starting dev server".to_owned(),
@@ -654,14 +680,20 @@ fn describe_shell_command(cmd: &str) -> String {
             match sub {
                 "install" | "i" | "add" => format!("Installing deps ({tool})"),
                 "build" => format!("Building ({tool})"),
-                "run" => format!("Running script ({tool}): {}", parts.get(2).copied().unwrap_or("...")),
+                "run" => format!(
+                    "Running script ({tool}): {}",
+                    parts.get(2).copied().unwrap_or("...")
+                ),
                 _ => format!("{tool} {sub}"),
             }
         }
         "cargo" => match parts.get(1).copied().unwrap_or("") {
             "build" => "Compiling Rust project".to_owned(),
             "test" => "Running Rust tests".to_owned(),
-            "install" => format!("Installing crate: {}", parts.get(2).copied().unwrap_or("...")),
+            "install" => format!(
+                "Installing crate: {}",
+                parts.get(2).copied().unwrap_or("...")
+            ),
             "run" => "Running Rust binary".to_owned(),
             sub => format!("cargo {sub}"),
         },
@@ -685,17 +717,30 @@ fn describe_shell_command(cmd: &str) -> String {
         "find" => "Searching filesystem".to_owned(),
         "grep" | "rg" => "Searching file contents".to_owned(),
         "ls" => format!("Listing: {}", parts.get(1).copied().unwrap_or(".")),
-        "python" | "python3" => format!("Running Python: {}", parts.get(1).copied().unwrap_or("script")),
-        "node" => format!("Running Node: {}", parts.get(1).copied().unwrap_or("script")),
+        "python" | "python3" => format!(
+            "Running Python: {}",
+            parts.get(1).copied().unwrap_or("script")
+        ),
+        "node" => format!(
+            "Running Node: {}",
+            parts.get(1).copied().unwrap_or("script")
+        ),
         "pip" | "pip3" => match parts.get(1).copied().unwrap_or("") {
-            "install" => format!("Installing Python pkg: {}", parts.get(2).copied().unwrap_or("...")),
+            "install" => format!(
+                "Installing Python pkg: {}",
+                parts.get(2).copied().unwrap_or("...")
+            ),
             sub => format!("pip {sub}"),
         },
         "chmod" | "chown" => "Setting permissions".to_owned(),
         "echo" | "printf" if effective.contains('>') => "Writing file content".to_owned(),
         _ => {
             let preview: String = effective.chars().take(55).collect();
-            if effective.len() > 55 { format!("{preview}...") } else { preview }
+            if effective.len() > 55 {
+                format!("{preview}...")
+            } else {
+                preview
+            }
         }
     }
 }
@@ -891,7 +936,9 @@ pub fn run_interactive_chat(
     if let Some(saved_key) = resolve_deepseek_api_key() {
         if let Ok(temp_provider) = DeepSeekProvider::new(saved_key) {
             let (tx, rx) = std::sync::mpsc::channel();
-            thread::spawn(move || { let _ = tx.send(temp_provider.list_models()); });
+            thread::spawn(move || {
+                let _ = tx.send(temp_provider.list_models());
+            });
             if let Ok(Ok(models)) = rx.recv_timeout(Duration::from_secs(3)) {
                 if let Some(best) = pick_latest_model(&models) {
                     banner_options.model_name = Some(format_model_display_name(&best));
@@ -937,9 +984,12 @@ pub fn run_interactive_chat(
 
     println!();
     println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}");
+    let workflow_label = format!(
+        "{} · Agentic Coding",
+        format_model_display_name(model_id.as_str())
+    );
     println!(
-        "  {C_RED_BOLD}RaptorCode AI Agent{C_RESET}  {C_DIM}│{C_RESET}  DeepSeek / {}",
-        model_id.as_str()
+        "  {C_RED_BOLD}RaptorCode Engineering Agent{C_RESET}  {C_DIM}│{C_RESET}  {workflow_label}"
     );
     println!("  Type your request and press Enter to send.");
     println!("  {C_DIM}/help · /api · /model · Ctrl+D or /exit to quit{C_RESET}");
@@ -1023,31 +1073,27 @@ pub fn run_interactive_chat(
                     },
                 ];
                 match interactive_select(&api_items) {
-                    Some(0) => {
-                        match prompt_provider_and_api_key() {
-                            Ok(new_key) => {
-                                print!("\n  {C_DIM}⟳  Testing connection...{C_RESET}");
-                                std::io::stdout().flush().ok();
-                                match DeepSeekProvider::new(&new_key) {
-                                    Ok(new_prov) => match test_deepseek_connection(&new_prov) {
+                    Some(0) => match prompt_provider_and_api_key() {
+                        Ok(new_key) => {
+                            print!("\n  {C_DIM}⟳  Testing connection...{C_RESET}");
+                            std::io::stdout().flush().ok();
+                            match DeepSeekProvider::new(&new_key) {
+                                Ok(new_prov) => match test_deepseek_connection(&new_prov) {
+                                    Ok(()) => match write_stored_deepseek_api_key(&new_key) {
                                         Ok(()) => {
-                                            match write_stored_deepseek_api_key(&new_key) {
-                                                Ok(()) => {
-                                                    provider = new_prov;
-                                                    api_key = new_key;
-                                                    println!("\n  {C_GREEN_BOLD}✓  API key updated and saved.{C_RESET}");
-                                                }
-                                                Err(e) => eprintln!("\n  failed to save key: {e}"),
-                                            }
+                                            provider = new_prov;
+                                            api_key = new_key;
+                                            println!("\n  {C_GREEN_BOLD}✓  API key updated and saved.{C_RESET}");
                                         }
-                                        Err(e) => eprintln!("\n  {C_RED}✗  {e}{C_RESET}"),
+                                        Err(e) => eprintln!("\n  failed to save key: {e}"),
                                     },
                                     Err(e) => eprintln!("\n  {C_RED}✗  {e}{C_RESET}"),
-                                }
+                                },
+                                Err(e) => eprintln!("\n  {C_RED}✗  {e}{C_RESET}"),
                             }
-                            Err(e) => eprintln!("  {e}"),
                         }
-                    }
+                        Err(e) => eprintln!("  {e}"),
+                    },
                     Some(1) => {
                         let masked = if api_key.len() > 12 {
                             format!("{}...{}", &api_key[..8], &api_key[api_key.len() - 4..])
@@ -1072,10 +1118,7 @@ pub fn run_interactive_chat(
                     }
                     _ => {
                         println!(" using defaults\r");
-                        vec![
-                            "deepseek-chat".to_owned(),
-                            "deepseek-reasoner".to_owned(),
-                        ]
+                        vec!["deepseek-v4-pro".to_owned(), "deepseek-v4-flash".to_owned()]
                     }
                 };
                 println!();
@@ -1219,7 +1262,7 @@ fn prompt_provider_and_api_key() -> Result<String, CliError> {
 
     let items = vec![
         MenuItem {
-            label: "DeepSeek API  ─  deepseek-chat · platform.deepseek.com".to_owned(),
+            label: "DeepSeek V4 Pro API  ─  agentic coding · platform.deepseek.com".to_owned(),
             sublabel: None,
             enabled: true,
         },
@@ -1235,8 +1278,7 @@ fn prompt_provider_and_api_key() -> Result<String, CliError> {
         },
     ];
 
-    interactive_select(&items)
-        .ok_or_else(|| CliError::new("provider selection cancelled"))?;
+    interactive_select(&items).ok_or_else(|| CliError::new("provider selection cancelled"))?;
 
     // Only DeepSeek is selectable for now
     println!();
@@ -1290,11 +1332,9 @@ fn read_stored_deepseek_api_key() -> Option<String> {
 }
 
 fn write_stored_deepseek_api_key(key: &str) -> Result<(), CliError> {
-    let dir =
-        user_raptor_dir().ok_or_else(|| CliError::new("cannot determine home directory"))?;
-    std::fs::create_dir_all(&dir).map_err(|error| {
-        CliError::new(format!("failed to create {}: {error}", dir.display()))
-    })?;
+    let dir = user_raptor_dir().ok_or_else(|| CliError::new("cannot determine home directory"))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| CliError::new(format!("failed to create {}: {error}", dir.display())))?;
     let path = dir.join(".credentials");
     std::fs::write(&path, key)
         .map_err(|error| CliError::new(format!("failed to write credentials: {error}")))?;
@@ -1350,7 +1390,7 @@ fn prompt_file_access_consent(_current_dir: &Path) -> bool {
     answer == "y" || answer == "yes"
 }
 
-fn resolve_tool_path(working_dir: &PathBuf, path_str: &str) -> PathBuf {
+fn resolve_tool_path(working_dir: &Path, path_str: &str) -> PathBuf {
     let path = Path::new(path_str);
     if path.is_absolute() {
         path.to_path_buf()
@@ -1527,45 +1567,81 @@ fn execute_tool_call(working_dir: &mut PathBuf, name: &str, arguments: &str) -> 
             } else {
                 working_dir.clone()
             };
-            let (tx, rx) = std::sync::mpsc::channel();
-            thread::spawn(move || {
-                let result = std::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(&cmd)
-                    .current_dir(&cmd_dir)
-                    .output();
-                let _ = tx.send(result);
-            });
-            match rx.recv_timeout(Duration::from_secs(120)) {
-                Ok(Ok(out)) => {
-                    let stdout_str = String::from_utf8_lossy(&out.stdout);
-                    let stderr_str = String::from_utf8_lossy(&out.stderr);
-                    let mut result = String::new();
-                    if !stdout_str.is_empty() {
-                        result.push_str(stdout_str.trim_end());
-                    }
-                    if !stderr_str.is_empty() {
-                        if !result.is_empty() {
-                            result.push('\n');
+            let mut command = std::process::Command::new("sh");
+            command
+                .arg("-c")
+                .arg(&cmd)
+                .current_dir(&cmd_dir)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt as _;
+                command.process_group(0);
+            }
+            let mut child = match command.spawn() {
+                Ok(child) => child,
+                Err(e) => return format!("error: {e}"),
+            };
+            let started_at = Instant::now();
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => match child.wait_with_output() {
+                        Ok(out) => {
+                            let stdout_str = String::from_utf8_lossy(&out.stdout);
+                            let stderr_str = String::from_utf8_lossy(&out.stderr);
+                            let mut result = String::new();
+                            if !stdout_str.is_empty() {
+                                result.push_str(stdout_str.trim_end());
+                            }
+                            if !stderr_str.is_empty() {
+                                if !result.is_empty() {
+                                    result.push('\n');
+                                }
+                                result.push_str(&format!("[stderr] {}", stderr_str.trim_end()));
+                            }
+                            if result.len() > 4000 {
+                                result.truncate(4000);
+                                result.push_str("\n...[truncated]");
+                            }
+                            if result.is_empty() {
+                                if out.status.success() {
+                                    return "ok (no output)".to_owned();
+                                } else {
+                                    return format!(
+                                        "exited with code {}",
+                                        out.status.code().unwrap_or(-1)
+                                    );
+                                }
+                            } else {
+                                return result;
+                            }
                         }
-                        result.push_str(&format!("[stderr] {}", stderr_str.trim_end()));
-                    }
-                    if result.len() > 4000 {
-                        result.truncate(4000);
-                        result.push_str("\n...[truncated]");
-                    }
-                    if result.is_empty() {
-                        if out.status.success() {
-                            "ok (no output)".to_owned()
-                        } else {
-                            format!("exited with code {}", out.status.code().unwrap_or(-1))
+                        Err(e) => return format!("error: {e}"),
+                    },
+                    Ok(None) => {
+                        if started_at.elapsed() >= Duration::from_secs(120) {
+                            #[cfg(unix)]
+                            {
+                                let process_group = format!("-{}", child.id());
+                                let _ = std::process::Command::new("kill")
+                                    .arg("-TERM")
+                                    .arg(&process_group)
+                                    .status();
+                                thread::sleep(Duration::from_millis(500));
+                                let _ = std::process::Command::new("kill")
+                                    .arg("-KILL")
+                                    .arg(&process_group)
+                                    .status();
+                            }
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            return "error: command exceeded the 120-second execution limit and was stopped".to_owned();
                         }
-                    } else {
-                        result
+                        thread::sleep(Duration::from_millis(100));
                     }
+                    Err(e) => return format!("error: {e}"),
                 }
-                Ok(Err(e)) => format!("error: {e}"),
-                Err(_) => "error: command timed out after 120s; try breaking it into smaller steps".to_owned(),
             }
         }
         unknown => format!("error: unknown tool: {unknown}"),
@@ -1586,7 +1662,11 @@ fn hacking_quotes() -> &'static [String] {
                 let prefix = &line[..dot_pos];
                 if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
                     let text = line[dot_pos + 2..].trim();
-                    if !text.is_empty() { Some(text.to_owned()) } else { None }
+                    if !text.is_empty() {
+                        Some(text.to_owned())
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -1624,7 +1704,11 @@ impl Spinner {
             std::io::stdout().flush().ok();
             let mut dot_idx = 0usize;
             while !flag.load(Ordering::Relaxed) {
-                let dots = match dot_idx % 3 { 0 => ".", 1 => "..", _ => "..." };
+                let dots = match dot_idx % 3 {
+                    0 => ".",
+                    1 => "..",
+                    _ => "...",
+                };
                 print!(
                     "\r\x1b[K{C_DIM}{thinking}{C_RESET}\n\r\x1b[K{C_RED}{quote}{dots}{C_RESET}\x1b[1A\r"
                 );
@@ -1636,7 +1720,10 @@ impl Spinner {
             std::io::stdout().flush().ok();
         });
 
-        Spinner { stop_flag, handle: Some(handle) }
+        Spinner {
+            stop_flag,
+            handle: Some(handle),
+        }
     }
 
     fn stop(mut self) {
@@ -1668,26 +1755,18 @@ fn run_agent_loop(
                 history.push(assistant_msg);
 
                 for call in &calls {
-                    let args_preview: String = call.arguments.chars().take(60).collect();
-                    let ellipsis = if call.arguments.len() > 60 { "…" } else { "" };
-                    println!("  {C_DIM}→ {}({args_preview}{ellipsis}){C_RESET}", call.name);
+                    let action = describe_tool_call(&call.name, &call.arguments);
+                    println!("  {C_DIM}→ {action}{C_RESET}");
                     std::io::stdout().flush().ok();
 
-                    let spinner = Spinner::start(describe_tool_call(&call.name, &call.arguments));
+                    let spinner = Spinner::start(action.clone());
                     let result = execute_tool_call(working_dir, &call.name, &call.arguments);
                     spinner.stop();
 
-                    let preview: String = result
-                        .lines()
-                        .next()
-                        .unwrap_or("done")
-                        .chars()
-                        .take(70)
-                        .collect();
                     if result.starts_with("error:") {
-                        println!("  {C_RED}✗ {preview}{C_RESET}");
+                        println!("  {C_RED}✗ action needs adjustment{C_RESET}");
                     } else {
-                        println!("  {C_GREEN}✓ {preview}{C_RESET}");
+                        println!("  {C_GREEN}✓ done{C_RESET}");
                     }
 
                     history.push(AgentMessage {
@@ -3662,7 +3741,7 @@ mod tests {
     impl FakeDeepSeekProvider {
         fn new(content: &str) -> Self {
             let provider_id = ProviderId::new("deepseek").unwrap();
-            let default_model = ModelId::new("deepseek-chat").unwrap();
+            let default_model = ModelId::new("deepseek-v4-pro").unwrap();
 
             Self {
                 capabilities: ProviderCapabilities::network_chat(),
@@ -3722,7 +3801,7 @@ mod tests {
         ) -> Result<CompletionResponse, ProviderError> {
             self.call_count.set(self.call_count.get() + 1);
             assert_eq!(request.provider_id.as_str(), "deepseek");
-            assert_eq!(request.model_id.as_str(), "deepseek-chat");
+            assert_eq!(request.model_id.as_str(), "deepseek-v4-pro");
             assert_eq!(request.messages.len(), 2);
             assert_eq!(request.messages[0].role.as_str(), "system");
             assert_eq!(request.messages[1].role.as_str(), "user");
@@ -4057,11 +4136,11 @@ mod tests {
                 "--provider",
                 "deepseek",
                 "--model",
-                "deepseek-chat"
+                "deepseek-v4-pro"
             ])
             .unwrap(),
             CliCommand::Agent(AgentCommand::Create {
-                model_id: Some("deepseek-chat".to_owned()),
+                model_id: Some("deepseek-v4-pro".to_owned()),
                 provider_id: Some("deepseek".to_owned()),
                 role: "worker".to_owned(),
                 task_id: Some("task-1".to_owned())
@@ -4374,7 +4453,7 @@ mod tests {
         assert!(output.contains("Provider configuration: configured"));
         assert!(output.contains("deepseek"));
         assert!(output.contains("enabled"));
-        assert!(output.contains("deepseek-chat"));
+        assert!(output.contains("deepseek-v4-pro"));
         assert!(output.contains("network-required"));
     }
 
@@ -4398,7 +4477,7 @@ mod tests {
 
         assert!(output.contains("DeepSeek response"));
         assert!(output.contains("Provider: deepseek"));
-        assert!(output.contains("Model: deepseek-chat"));
+        assert!(output.contains("Model: deepseek-v4-pro"));
         assert!(output.contains("Use OAuth callback validation."));
         assert!(output.contains("Model output execution: not performed"));
         assert!(output.contains("Source file writes: not performed"));
@@ -4453,7 +4532,7 @@ mod tests {
             AgentRole::Worker,
             None,
             Some("deepseek"),
-            Some("deepseek-chat"),
+            Some("deepseek-v4-pro"),
         )
         .unwrap();
 
@@ -4466,7 +4545,7 @@ mod tests {
                 "--provider",
                 "deepseek",
                 "--model",
-                "deepseek-chat",
+                "deepseek-v4-pro",
             ],
             &test_dir.path,
         )
@@ -4483,7 +4562,7 @@ mod tests {
         assert!(metadata.contains("role = \"worker\""));
         assert!(metadata.contains("execution_mode = \"read_only\""));
         assert!(metadata.contains("provider_id = \"deepseek\""));
-        assert!(metadata.contains("model_id = \"deepseek-chat\""));
+        assert!(metadata.contains("model_id = \"deepseek-v4-pro\""));
     }
 
     #[test]
@@ -4520,7 +4599,7 @@ mod tests {
             AgentRole::Architect,
             None,
             Some("deepseek"),
-            Some("deepseek-chat"),
+            Some("deepseek-v4-pro"),
         )
         .unwrap();
 
@@ -4533,7 +4612,7 @@ mod tests {
                 "--provider",
                 "deepseek",
                 "--model",
-                "deepseek-chat",
+                "deepseek-v4-pro",
             ],
             &test_dir.path,
         )
@@ -4543,7 +4622,7 @@ mod tests {
         assert!(output.contains(&format!("Agent: {}", agent_id.as_str())));
         assert!(output.contains("Role: architect"));
         assert!(output.contains("Provider: deepseek"));
-        assert!(output.contains("Model: deepseek-chat"));
+        assert!(output.contains("Model: deepseek-v4-pro"));
         assert!(output.contains("Metadata:"));
     }
 
@@ -4710,7 +4789,7 @@ mod tests {
         assert!(metadata_path.exists());
         assert!(metadata.contains(&format!("id = \"{}\"", task_id.as_str())));
         assert!(metadata.contains("provider = \"deepseek\""));
-        assert!(metadata.contains("model = \"deepseek-chat\""));
+        assert!(metadata.contains("model = \"deepseek-v4-pro\""));
         assert!(metadata.contains("status = \"blocked_missing_deepseek_api_key\""));
         assert!(metadata.contains("planning_status = \"blocked_missing_deepseek_api_key\""));
 
@@ -4799,7 +4878,7 @@ mod tests {
             assert!(plan.contains(&format!("Task id: {}", task_id.as_str())));
             assert!(plan.contains(&format!("Agent role: {role}")));
             assert!(plan.contains("Provider: DeepSeek"));
-            assert!(plan.contains("Model: deepseek-chat"));
+            assert!(plan.contains("Model: deepseek-v4-pro"));
             assert!(plan.contains("This plan is AI-generated"));
             assert!(metadata.contains(&format!("role = \"{role}\"")));
             assert!(metadata.contains(&format!("plan_file_path = \"{}\"", plan_path.display())));
@@ -4970,7 +5049,7 @@ mod tests {
         assert!(proposal.contains(&format!("Task id: {}", task_id.as_str())));
         assert!(proposal.contains("Role: frontend-agent"));
         assert!(proposal.contains("Provider: DeepSeek"));
-        assert!(proposal.contains("Model: deepseek-chat"));
+        assert!(proposal.contains("Model: deepseek-v4-pro"));
         assert!(proposal.contains("Patch-like content stays in this file"));
         assert!(proposal.contains("RaptorCode did not execute model output"));
         assert_eq!(

@@ -2127,14 +2127,14 @@ mod tests {
         let test_dir = TestDir::create("agent-show");
         let mut session =
             AgentSession::new_read_only(AgentId::new("agent-1").unwrap(), AgentRole::Architect);
-        session.set_model_id("deepseek-chat").unwrap();
+        session.set_model_id("deepseek-v4-pro").unwrap();
         persist_agent_session(&test_dir.path, &session).unwrap();
 
         let stored = read_agent_session(&test_dir.path, "agent-1").unwrap();
 
         assert_eq!(stored.session.id.as_str(), "agent-1");
         assert_eq!(stored.session.role, AgentRole::Architect);
-        assert_eq!(stored.session.model_id.as_deref(), Some("deepseek-chat"));
+        assert_eq!(stored.session.model_id.as_deref(), Some("deepseek-v4-pro"));
     }
 
     #[test]
@@ -2197,7 +2197,7 @@ mod tests {
         assert!(swarm_metadata_exists(&test_dir.path, &task_id).unwrap());
         assert!(content.contains(&format!("id = \"{}\"", task_id.as_str())));
         assert!(content.contains("provider = \"deepseek\""));
-        assert!(content.contains("model = \"deepseek-chat\""));
+        assert!(content.contains("model = \"deepseek-v4-pro\""));
         assert!(content.contains("[[agents]]"));
         assert!(content.contains("role = \"frontend-agent\""));
         assert!(matches!(
@@ -2249,7 +2249,7 @@ mod tests {
         metadata.agents[0].plan_file_path = Some(plan_file.clone());
         metadata.agents[0].proposal_file_path = Some(proposal_file.clone());
         metadata.agents[0].provider = Some("deepseek".to_owned());
-        metadata.agents[0].model = Some("deepseek-chat".to_owned());
+        metadata.agents[0].model = Some("deepseek-v4-pro".to_owned());
 
         let updated_path = update_swarm_metadata(&test_dir.path, &metadata).unwrap();
         let content = fs::read_to_string(&updated_path).unwrap();
@@ -2263,7 +2263,7 @@ mod tests {
             proposal_file.display()
         )));
         assert!(content.contains("provider = \"deepseek\""));
-        assert!(content.contains("model = \"deepseek-chat\""));
+        assert!(content.contains("model = \"deepseek-v4-pro\""));
     }
 
     #[test]
@@ -2282,7 +2282,7 @@ mod tests {
         metadata.agents[0].plan_file_path = Some(plan_file.clone());
         metadata.agents[0].proposal_file_path = Some(proposal_file.clone());
         metadata.agents[0].provider = Some("deepseek".to_owned());
-        metadata.agents[0].model = Some("deepseek-chat".to_owned());
+        metadata.agents[0].model = Some("deepseek-v4-pro".to_owned());
         persist_swarm_metadata(&test_dir.path, &metadata).unwrap();
 
         let stored = read_swarm_metadata(&test_dir.path, task_id.as_str()).unwrap();
@@ -2514,7 +2514,7 @@ mod tests {
             created_at: None,
             description: description.to_owned(),
             id: task_id.as_str().to_owned(),
-            model: "deepseek-chat".to_owned(),
+            model: "deepseek-v4-pro".to_owned(),
             planning_status: None,
             provider: "deepseek".to_owned(),
             status: SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned(),

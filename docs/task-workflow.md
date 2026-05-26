@@ -70,7 +70,7 @@ The command:
   - `.raptor/worktrees/<task-id>/test-agent`
   - `.raptor/worktrees/<task-id>/security-agent`
 - Persists swarm metadata under `.raptor/swarms/<task-id>.toml`.
-- Records provider `deepseek`, model `deepseek-chat`, swarm planning status, per-agent planning status, and per-agent plan file paths when generated.
+- Records provider `deepseek`, model `deepseek-v4-pro`, swarm planning status, per-agent planning status, and per-agent plan file paths when generated.
 - Uses role templates from `templates/frontend-agent.md`, `templates/backend-agent.md`, `templates/test-agent.md`, and `templates/security-agent.md`.
 - If `DEEPSEEK_API_KEY` is set, calls DeepSeek once per role and writes `RAPTOR_PLAN.md` inside each assigned role worktree.
 - If `DEEPSEEK_API_KEY` is missing, keeps the worktrees and metadata, records `blocked_missing_deepseek_api_key`, and directs the developer to `https://platform.deepseek.com/api_keys`.

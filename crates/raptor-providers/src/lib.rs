@@ -9,7 +9,7 @@ pub const CRATE_PURPOSE: &str = "Provider integration boundaries for RaptorCode.
 pub const DEEPSEEK_API_KEY_ENV: &str = "DEEPSEEK_API_KEY";
 pub const DEEPSEEK_API_KEY_URL: &str = "https://platform.deepseek.com/api_keys";
 pub const DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT: &str = "https://api.deepseek.com/chat/completions";
-pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-chat";
+pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-v4-pro";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProviderId(String);
@@ -622,10 +622,9 @@ impl DeepSeekProvider {
             return Err(map_deepseek_error_status(status, &body));
         }
 
-        let parsed: DeepSeekModelsListResponse =
-            serde_json::from_str(&body).map_err(|e| {
-                ProviderError::MalformedResponse(format!("failed to parse models list: {e}"))
-            })?;
+        let parsed: DeepSeekModelsListResponse = serde_json::from_str(&body).map_err(|e| {
+            ProviderError::MalformedResponse(format!("failed to parse models list: {e}"))
+        })?;
 
         Ok(parsed.data.into_iter().map(|m| m.id).collect())
     }
@@ -874,7 +873,7 @@ fn deepseek_definition() -> ProviderDefinition {
         Some(ModelId::new(DEEPSEEK_DEFAULT_MODEL).expect("built-in model id is valid")),
         vec![
             ModelId::new(DEEPSEEK_DEFAULT_MODEL).expect("built-in model id is valid"),
-            ModelId::new("deepseek-reasoner").expect("built-in model id is valid"),
+            ModelId::new("deepseek-v4-flash").expect("built-in model id is valid"),
         ],
         ProviderCapabilities::network_chat(),
     )
@@ -981,7 +980,7 @@ mod tests {
     #[test]
     fn provider_id_validation_rejects_unsafe_values() {
         assert!(ProviderId::new("deepseek").is_ok());
-        assert!(ProviderId::new("deepseek-chat").is_ok());
+        assert!(ProviderId::new("deepseek-v4-pro").is_ok());
         assert!(ProviderId::new("DeepSeek").is_err());
         assert!(ProviderId::new("../deepseek").is_err());
         assert!(ProviderId::new("-deepseek").is_err());
@@ -989,7 +988,7 @@ mod tests {
 
     #[test]
     fn model_id_validation_supports_common_model_names() {
-        assert!(ModelId::new("deepseek-chat").is_ok());
+        assert!(ModelId::new("deepseek-v4-pro").is_ok());
         assert!(ModelId::new("gpt-5.4").is_ok());
         assert!(ModelId::new("local/qwen3-coder").is_ok());
         assert!(ModelId::new("../secret").is_err());
@@ -1014,7 +1013,7 @@ mod tests {
         assert!(deepseek.enabled);
         assert_eq!(
             deepseek.default_model.as_ref().unwrap().as_str(),
-            "deepseek-chat"
+            "deepseek-v4-pro"
         );
         assert!(deepseek.capabilities.labels().contains(&"network-required"));
         assert!(!openai.configured);
@@ -1035,7 +1034,7 @@ mod tests {
         assert!(provider
             .models()
             .iter()
-            .any(|model| model.as_str() == "deepseek-chat"));
+            .any(|model| model.as_str() == "deepseek-v4-pro"));
         assert!(provider.capabilities().network_required);
     }
 
@@ -1054,7 +1053,7 @@ mod tests {
     fn deepseek_request_serialization_matches_chat_completion_shape() {
         let request = CompletionRequest::new(
             ProviderId::new("deepseek").unwrap(),
-            ModelId::new("deepseek-chat").unwrap(),
+            ModelId::new("deepseek-v4-pro").unwrap(),
             vec![
                 CompletionMessage::system("You are RaptorCode."),
                 CompletionMessage::user("Hello"),
@@ -1063,7 +1062,7 @@ mod tests {
         let deepseek_request = deepseek_chat_request_from_completion(&request).unwrap();
         let json = serde_json::to_value(deepseek_request).unwrap();
 
-        assert_eq!(json["model"], "deepseek-chat");
+        assert_eq!(json["model"], "deepseek-v4-pro");
         assert_eq!(json["stream"], false);
         assert_eq!(json["messages"][0]["role"], "system");
         assert_eq!(json["messages"][0]["content"], "You are RaptorCode.");
@@ -1074,11 +1073,11 @@ mod tests {
     #[test]
     fn deepseek_response_parsing_succeeds() {
         let provider_id = ProviderId::new("deepseek").unwrap();
-        let model_id = ModelId::new("deepseek-chat").unwrap();
+        let model_id = ModelId::new("deepseek-v4-pro").unwrap();
         let body = r#"{
             "id": "abc",
             "object": "chat.completion",
-            "model": "deepseek-chat",
+            "model": "deepseek-v4-pro",
             "choices": [
                 {
                     "index": 0,
@@ -1096,7 +1095,7 @@ mod tests {
         let response = parse_deepseek_chat_response(200, body, &provider_id, &model_id).unwrap();
 
         assert_eq!(response.provider_id.as_str(), "deepseek");
-        assert_eq!(response.model_id.as_str(), "deepseek-chat");
+        assert_eq!(response.model_id.as_str(), "deepseek-v4-pro");
         assert_eq!(response.content, "Hello from DeepSeek");
         assert_eq!(response.finish_reason.as_deref(), Some("stop"));
         assert_eq!(response.usage.unwrap().total_tokens, Some(7));
@@ -1105,7 +1104,7 @@ mod tests {
     #[test]
     fn deepseek_response_parsing_rejects_malformed_response() {
         let provider_id = ProviderId::new("deepseek").unwrap();
-        let model_id = ModelId::new("deepseek-chat").unwrap();
+        let model_id = ModelId::new("deepseek-v4-pro").unwrap();
         let body = r#"{"choices":[{"message":{},"finish_reason":"stop"}]}"#;
 
         let error = parse_deepseek_chat_response(200, body, &provider_id, &model_id).unwrap_err();
@@ -1117,7 +1116,7 @@ mod tests {
     #[test]
     fn deepseek_non_200_responses_are_explicit() {
         let provider_id = ProviderId::new("deepseek").unwrap();
-        let model_id = ModelId::new("deepseek-chat").unwrap();
+        let model_id = ModelId::new("deepseek-v4-pro").unwrap();
 
         let auth = parse_deepseek_chat_response(
             401,

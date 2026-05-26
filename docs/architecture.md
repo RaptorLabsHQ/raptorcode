@@ -64,7 +64,7 @@ The v0.1 swarm implementation proposal MVP is deliberately limited to metadata, 
 - Branches use `raptor/<task-id>/<role>`.
 - Worktrees use `.raptor/worktrees/<task-id>/<role>`.
 - Swarm metadata uses `.raptor/swarms/<task-id>.toml`.
-- Metadata records task description, status, planning status, provider `deepseek`, model `deepseek-chat`, role ids, branches, worktree paths, per-role planning status, per-role plan file paths, per-role implementation status, and per-role proposal file paths.
+- Metadata records task description, status, planning status, provider `deepseek`, model `deepseek-v4-pro`, role ids, branches, worktree paths, per-role planning status, per-role plan file paths, per-role implementation status, and per-role proposal file paths.
 - Role templates live in the repository root `templates/` directory.
 - Swarm planning sends only the task description and role template to DeepSeek.
 - Generated plans are written as `RAPTOR_PLAN.md` in each assigned role worktree.

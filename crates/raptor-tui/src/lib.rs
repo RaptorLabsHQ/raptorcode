@@ -153,7 +153,7 @@ impl DashboardState {
             changed_file_count: None,
             cwd: cwd.into(),
             deepseek_api_key_present: false,
-            model_name: "deepseek-chat".to_owned(),
+            model_name: "DeepSeek V4 Pro".to_owned(),
             provider_name: "DeepSeek".to_owned(),
             swarms: Vec::new(),
             tasks: Vec::new(),
@@ -1170,7 +1170,7 @@ mod tests {
 
         assert!(output.contains("Raptor Code v0.1"));
         assert!(output.contains("Raptor Labs"));
-        assert!(output.contains("DeepSeek / deepseek-chat"));
+        assert!(output.contains("DeepSeek / DeepSeek V4 Pro"));
         assert!(output.contains("frontend-agent"));
         assert!(output.contains("q to quit"));
     }

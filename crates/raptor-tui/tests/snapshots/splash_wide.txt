@@ -23,7 +23,7 @@
 
   ╭────────────────────────────────────────────────────────────╮
   │ 📁  Working directory : /workspace/raptor-code             │
-  │ 🔗  Model             : Sonnet 4.6                         │
+  │ 🔗  Model             : DeepSeek                           │
   │ ⏱   Mode              : high effort                        │
   │ >_  Type              : /help for commands                 │
   ╰────────────────────────────────────────────────────────────╯

@@ -891,14 +891,14 @@ mod tests {
             AgentRole::Worker,
             Some("task-1"),
             Some("deepseek"),
-            Some("deepseek-chat"),
+            Some("deepseek-v4-pro"),
         )
         .unwrap();
         let second = AgentId::from_session_parts(
             AgentRole::Worker,
             Some("task-1"),
             Some("deepseek"),
-            Some("deepseek-chat"),
+            Some("deepseek-v4-pro"),
         )
         .unwrap();
 
@@ -924,7 +924,7 @@ mod tests {
             AgentSession::new_read_only(AgentId::new("agent-1").unwrap(), AgentRole::Reviewer);
         session.transition_to(AgentSessionState::Waiting);
         session.set_provider_id("deepseek").unwrap();
-        session.set_model_id("deepseek-chat").unwrap();
+        session.set_model_id("deepseek-v4-pro").unwrap();
         session
             .bind_task("task-1", PathBuf::from("/tmp/task-1"))
             .unwrap();
@@ -939,7 +939,7 @@ mod tests {
         assert_eq!(parsed.state, AgentSessionState::Waiting);
         assert_eq!(parsed.execution_mode, AgentExecutionMode::ReadOnly);
         assert_eq!(parsed.provider_id.as_deref(), Some("deepseek"));
-        assert_eq!(parsed.model_id.as_deref(), Some("deepseek-chat"));
+        assert_eq!(parsed.model_id.as_deref(), Some("deepseek-v4-pro"));
         assert_eq!(parsed.task_binding.as_ref().unwrap().task_id, "task-1");
         assert_eq!(parsed.created_at.as_deref(), Some("1"));
         assert_eq!(parsed.updated_at.as_deref(), Some("2"));
