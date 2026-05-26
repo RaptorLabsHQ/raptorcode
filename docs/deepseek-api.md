@@ -23,6 +23,7 @@ The current implemented OpenAI-format DeepSeek surface is:
 - Streaming: enabled by default for chat and agent mode; streamed requests send `stream_options: {"include_usage": true}` so final usage is available when DeepSeek returns it
 - Response format: text by default, optional JSON output mode through `response_format: {"type": "json_object"}`
 - Context caching: automatic on DeepSeek's side; RaptorCode displays cache hit and cache miss token telemetry when returned
+- Context budget guard: warns at 850K tokens and locally compacts history at 900K tokens against DeepSeek V4's 1M-token context length
 
 ## Interactive Commands
 
@@ -45,6 +46,8 @@ DeepSeek `/chat/completions` is stateless. RaptorCode keeps local conversation h
 In chat mode, streamed SSE chunks are parsed from `data:` events. RaptorCode prints final-answer `delta.content` chunks as they arrive, ignores keep-alive comments, captures thinking-mode `delta.reasoning_content` internally, tolerates usage-only final chunks with empty `choices`, and records final usage telemetry when returned.
 
 For agentic tool calls, RaptorCode supports streamed and non-streamed responses. Streamed agent mode assembles `delta.tool_calls` fragments by index, concatenates streamed function names and JSON argument fragments, preserves assistant `reasoning_content`, records usage/cache telemetry for every model step when returned, then executes only the completed local RaptorCode tool call. This matches the DeepSeek thinking-mode requirement that tool-call reasoning content must be passed back in later requests for that conversation.
+
+RaptorCode uses DeepSeek's returned `usage.total_tokens` as the authoritative budget signal. At 850K total tokens it warns in the terminal; at 900K it compacts local chat or agent history by retaining the system prompt, a compacted-context marker, and recent messages. Agent compaction starts from a retained user boundary so tool messages are not kept without nearby user/assistant context.
 
 ## Tool Calls
 
@@ -88,5 +91,4 @@ No private user data should be placed in `user_id`.
 - Chat Prefix Completion beta endpoint behavior
 - FIM Completion beta endpoint behavior
 - Strict tool-call schema beta mode
-- Token budget warnings and rolling conversation compaction
 - Persisted session restore across CLI invocations

@@ -137,6 +137,11 @@ const SWARM_MODEL_ID: &str = "deepseek-v4-pro";
 const CHAT_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised coding assistant. Answer the developer's message directly. Do not claim to modify files, run commands, install dependencies, commit, merge, or push.";
 const AGENT_SYSTEM_PROMPT: &str = "You are RaptorCode, an autonomous coding agent for production software engineering. Work sequentially and deliberately: inspect the project, form a concise plan, make small coherent changes, run focused verification, then summarize the result. Coordinate specialist concerns internally like a swarm of frontend, backend, test, and security reviewers, but never perform conflicting parallel file edits. When asked to build or create files, use your tools to write them directly to the working directory; do not print code to the terminal. Use write_file to create or update files, read_file to check existing content, list_directory to explore the project, and create_directory for new folders. Do not run persistent foreground dev servers as blocking commands; prefer build, lint, test, and static inspection commands. For frontend work, default to clean, readable, premium, minimal, enterprise-grade design: restrained palettes, strong hierarchy, accessible contrast, practical spacing, no decorative gradient-heavy button systems, no generic vibecoding visual patterns, and no visual noise unless the user explicitly requests a different style. After completing a task, summarize what files you created or modified and what verification ran.";
 const JSON_OUTPUT_SYSTEM_INSTRUCTION: &str = "JSON output mode is enabled. Respond with valid JSON only. Do not include Markdown fences or prose outside the JSON value. If the user does not provide a schema, return an object with keys \"result\" and \"notes\".";
+const DEEPSEEK_CONTEXT_TOKEN_LIMIT: u32 = 1_000_000;
+const DEEPSEEK_CONTEXT_WARNING_TOKENS: u32 = 850_000;
+const DEEPSEEK_CONTEXT_COMPACTION_TOKENS: u32 = 900_000;
+const CHAT_COMPACTION_KEEP_MESSAGES: usize = 32;
+const AGENT_COMPACTION_KEEP_MESSAGES: usize = 48;
 const SWARM_PLANNING_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised v0.1 planning assistant for Raptor Labs. Produce role-specific implementation planning only. Do not modify files, execute commands, apply patches, run tests, claim work was completed, or propose Phase 2 features. DeepSeek is the only provider in scope before v0.1.";
 const SWARM_IMPLEMENTATION_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised v0.1 implementation proposal assistant for Raptor Labs. Produce a safe, reviewable implementation proposal only. Do not claim files were modified. Do not execute commands. Do not apply patches. Do not instruct RaptorCode to modify source files automatically. DeepSeek is the only provider in scope before v0.1.";
 const RAPTOR_PLAN_FILE_NAME: &str = "RAPTOR_PLAN.md";
@@ -1043,6 +1048,7 @@ pub fn run_interactive_chat(
 
     let tools = build_agent_tools();
     let mut agent_working_dir = current_dir.to_path_buf();
+    let mut context_budget = ContextBudgetState::default();
 
     let mut agent_history: Vec<AgentMessage> = vec![agent_system_message(current_dir, json_mode)];
     let mut chat_history: Vec<CompletionMessage> =
@@ -1077,6 +1083,7 @@ pub fn run_interactive_chat(
             "/clear" => {
                 agent_history = vec![agent_system_message(current_dir, json_mode)];
                 chat_history = vec![CompletionMessage::system(chat_system_prompt(json_mode))];
+                context_budget = ContextBudgetState::default();
                 println!("Conversation cleared.\n");
                 continue;
             }
@@ -1087,6 +1094,7 @@ pub fn run_interactive_chat(
                 };
                 agent_history = vec![agent_system_message(current_dir, json_mode)];
                 chat_history = vec![CompletionMessage::system(chat_system_prompt(json_mode))];
+                context_budget = ContextBudgetState::default();
                 println!(
                     "  {C_GREEN_BOLD}✓  DeepSeek {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}\n",
                     request_options.thinking_mode.label()
@@ -1100,6 +1108,7 @@ pub fn run_interactive_chat(
                 };
                 agent_history = vec![agent_system_message(current_dir, json_mode)];
                 chat_history = vec![CompletionMessage::system(chat_system_prompt(json_mode))];
+                context_budget = ContextBudgetState::default();
                 println!(
                     "  {C_GREEN_BOLD}✓  DeepSeek {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}\n",
                     request_options.reasoning_effort.label()
@@ -1123,6 +1132,7 @@ pub fn run_interactive_chat(
                 };
                 agent_history = vec![agent_system_message(current_dir, json_mode)];
                 chat_history = vec![CompletionMessage::system(chat_system_prompt(json_mode))];
+                context_budget = ContextBudgetState::default();
                 println!(
                     "  {C_GREEN_BOLD}✓  JSON output {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}\n",
                     if json_mode { "on" } else { "off" }
@@ -1256,6 +1266,7 @@ pub fn run_interactive_chat(
                         agent_history = vec![agent_system_message(current_dir, json_mode)];
                         chat_history =
                             vec![CompletionMessage::system(chat_system_prompt(json_mode))];
+                        context_budget = ContextBudgetState::default();
                         println!(
                             "  {C_GREEN_BOLD}✓  Model: {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}",
                             model_id.as_str()
@@ -1279,14 +1290,18 @@ pub fn run_interactive_chat(
                 tool_call_id: None,
             });
 
+            let mut agent_loop_context = AgentLoopContext {
+                context_budget: &mut context_budget,
+                model_id: &model_id,
+                provider: &provider,
+                request_options: &request_options,
+                streaming_enabled,
+                tools: &tools,
+            };
             match run_agent_loop(
                 &mut agent_working_dir,
-                &provider,
-                &model_id,
                 &mut agent_history,
-                &tools,
-                &request_options,
-                streaming_enabled,
+                &mut agent_loop_context,
             ) {
                 Ok(output) => {
                     let content = output.content.trim().to_owned();
@@ -1310,6 +1325,11 @@ pub fn run_interactive_chat(
                             tool_call_id: None,
                         });
                     agent_history.push(assistant_message);
+                    handle_agent_context_budget(
+                        &mut agent_history,
+                        output.usage.as_ref(),
+                        &mut context_budget,
+                    );
                 }
                 Err(error) => {
                     let msg = error.to_string();
@@ -1357,6 +1377,11 @@ pub fn run_interactive_chat(
                         );
                     }
                     chat_history.push(CompletionMessage::assistant(&content));
+                    handle_chat_context_budget(
+                        &mut chat_history,
+                        response.usage.as_ref(),
+                        &mut context_budget,
+                    );
                 }
                 Err(ProviderError::MissingApiKey) | Err(ProviderError::AuthenticationFailed(_)) => {
                     chat_history.pop();
@@ -1891,6 +1916,21 @@ struct AgentLoopOutput {
     usage: Option<TokenUsage>,
 }
 
+#[derive(Default)]
+struct ContextBudgetState {
+    compacted_turns: usize,
+    warned: bool,
+}
+
+struct AgentLoopContext<'a> {
+    context_budget: &'a mut ContextBudgetState,
+    model_id: &'a ModelId,
+    provider: &'a DeepSeekProvider,
+    request_options: &'a DeepSeekRequestOptions,
+    streaming_enabled: bool,
+    tools: &'a [ToolDefinition],
+}
+
 impl Spinner {
     fn start(thinking: impl Into<String>) -> Self {
         let thinking = thinking.into();
@@ -1935,23 +1975,19 @@ impl Spinner {
 
 fn run_agent_loop(
     working_dir: &mut PathBuf,
-    provider: &DeepSeekProvider,
-    model_id: &ModelId,
     history: &mut Vec<AgentMessage>,
-    tools: &[ToolDefinition],
-    request_options: &DeepSeekRequestOptions,
-    streaming_enabled: bool,
+    context: &mut AgentLoopContext<'_>,
 ) -> Result<AgentLoopOutput, CliError> {
     for _ in 0..100 {
         let mut streamed_text = false;
-        let step = if streaming_enabled {
+        let step = if context.streaming_enabled {
             print!("  {C_DIM}Streaming DeepSeek agent response...{C_RESET}\n\n");
             std::io::stdout().flush().ok();
-            provider.complete_agent_step_streaming(
-                model_id,
+            context.provider.complete_agent_step_streaming(
+                context.model_id,
                 history,
-                tools,
-                request_options,
+                context.tools,
+                context.request_options,
                 |delta| {
                     if delta.content.is_some() {
                         streamed_text = true;
@@ -1961,7 +1997,12 @@ fn run_agent_loop(
             )
         } else {
             let spinner = Spinner::start("Thinking...");
-            let step = provider.complete_agent_step(model_id, history, tools, request_options);
+            let step = context.provider.complete_agent_step(
+                context.model_id,
+                history,
+                context.tools,
+                context.request_options,
+            );
             spinner.stop();
             step
         };
@@ -2016,6 +2057,7 @@ fn run_agent_loop(
                     });
                 }
 
+                handle_agent_context_budget(history, usage.as_ref(), context.context_budget);
                 println!();
             }
             Err(ProviderError::MissingApiKey) | Err(ProviderError::AuthenticationFailed(_)) => {
@@ -2033,6 +2075,145 @@ fn run_agent_loop(
         streamed: false,
         usage: None,
     })
+}
+
+fn handle_chat_context_budget(
+    history: &mut Vec<CompletionMessage>,
+    usage: Option<&TokenUsage>,
+    state: &mut ContextBudgetState,
+) {
+    let Some(total_tokens) = usage.and_then(context_total_tokens) else {
+        return;
+    };
+
+    print_context_budget_warning(total_tokens, state);
+
+    if total_tokens >= DEEPSEEK_CONTEXT_COMPACTION_TOKENS {
+        let omitted = compact_chat_history(history, state);
+        print_compaction_notice(omitted, history.len());
+    }
+}
+
+fn handle_agent_context_budget(
+    history: &mut Vec<AgentMessage>,
+    usage: Option<&TokenUsage>,
+    state: &mut ContextBudgetState,
+) {
+    let Some(total_tokens) = usage.and_then(context_total_tokens) else {
+        return;
+    };
+
+    print_context_budget_warning(total_tokens, state);
+
+    if total_tokens >= DEEPSEEK_CONTEXT_COMPACTION_TOKENS {
+        let omitted = compact_agent_history(history, state);
+        print_compaction_notice(omitted, history.len());
+    }
+}
+
+fn context_total_tokens(usage: &TokenUsage) -> Option<u32> {
+    usage
+        .total_tokens
+        .or_else(|| match (usage.prompt_tokens, usage.completion_tokens) {
+            (Some(prompt), Some(completion)) => prompt.checked_add(completion),
+            _ => None,
+        })
+}
+
+fn print_context_budget_warning(total_tokens: u32, state: &mut ContextBudgetState) {
+    if total_tokens < DEEPSEEK_CONTEXT_WARNING_TOKENS || state.warned {
+        return;
+    }
+
+    state.warned = true;
+    let percent = (total_tokens as f64 / DEEPSEEK_CONTEXT_TOKEN_LIMIT as f64) * 100.0;
+    println!(
+        "  {C_YELLOW_BOLD}Context budget warning{C_RESET}  {C_DIM}{} / {} tokens ({percent:.1}%){C_RESET}",
+        display_number(total_tokens),
+        display_number(DEEPSEEK_CONTEXT_TOKEN_LIMIT)
+    );
+}
+
+fn print_compaction_notice(omitted: usize, retained: usize) {
+    if omitted == 0 {
+        return;
+    }
+
+    println!(
+        "  {C_GREEN}✓ context compacted{C_RESET}  {C_DIM}omitted {omitted} older messages, retained {retained} recent messages{C_RESET}"
+    );
+}
+
+fn compact_chat_history(
+    history: &mut Vec<CompletionMessage>,
+    state: &mut ContextBudgetState,
+) -> usize {
+    if history.len() <= CHAT_COMPACTION_KEEP_MESSAGES + 1 {
+        return 0;
+    }
+
+    let Some(system_message) = history.first().cloned() else {
+        return 0;
+    };
+    let recent_start = history.len().saturating_sub(CHAT_COMPACTION_KEEP_MESSAGES);
+    let omitted = recent_start.saturating_sub(1);
+    if omitted == 0 {
+        return 0;
+    }
+
+    state.compacted_turns += omitted;
+    state.warned = false;
+    let mut compacted = Vec::with_capacity(CHAT_COMPACTION_KEEP_MESSAGES + 2);
+    compacted.push(system_message);
+    compacted.push(CompletionMessage::system(format!(
+        "RaptorCode locally compacted this chat to stay inside DeepSeek's 1M-token context budget. {} older messages were omitted. Continue with the retained recent messages as authoritative context.",
+        state.compacted_turns
+    )));
+    compacted.extend(history.drain(recent_start..));
+    *history = compacted;
+
+    omitted
+}
+
+fn compact_agent_history(history: &mut Vec<AgentMessage>, state: &mut ContextBudgetState) -> usize {
+    if history.len() <= AGENT_COMPACTION_KEEP_MESSAGES + 1 {
+        return 0;
+    }
+
+    let Some(system_message) = history.first().cloned() else {
+        return 0;
+    };
+    let minimum_start = history.len().saturating_sub(AGENT_COMPACTION_KEEP_MESSAGES);
+    let recent_start = history
+        .iter()
+        .enumerate()
+        .skip(minimum_start.max(1))
+        .find(|(_, message)| message.role == "user")
+        .map(|(index, _)| index)
+        .unwrap_or(minimum_start.max(1));
+    let omitted = recent_start.saturating_sub(1);
+    if omitted == 0 {
+        return 0;
+    }
+
+    state.compacted_turns += omitted;
+    state.warned = false;
+    let mut compacted = Vec::with_capacity(AGENT_COMPACTION_KEEP_MESSAGES + 2);
+    compacted.push(system_message);
+    compacted.push(AgentMessage {
+        role: "system".to_owned(),
+        content: Some(format!(
+            "RaptorCode locally compacted this agent conversation to stay inside DeepSeek's 1M-token context budget. {} older messages were omitted. Continue with the retained recent user, assistant, and tool messages as authoritative context. If missing details are needed, inspect the repository again with tools.",
+            state.compacted_turns
+        )),
+        reasoning_content: None,
+        tool_calls: None,
+        tool_call_id: None,
+    });
+    compacted.extend(history.drain(recent_start..));
+    *history = compacted;
+
+    omitted
 }
 
 pub fn create_agent(
@@ -3915,10 +4096,12 @@ fn display_path_optional(value: Option<&std::path::PathBuf>) -> String {
         .unwrap_or_else(|| "-".to_owned())
 }
 
+fn display_number(value: u32) -> String {
+    value.to_string()
+}
+
 fn display_number_optional(value: Option<u32>) -> String {
-    value
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "-".to_owned())
+    value.map(display_number).unwrap_or_else(|| "-".to_owned())
 }
 
 fn display_exit_code(value: Option<i32>) -> String {
@@ -4747,6 +4930,63 @@ mod tests {
             ),
             ""
         );
+    }
+
+    #[test]
+    fn chat_context_compaction_preserves_system_and_recent_messages() {
+        let mut history = vec![CompletionMessage::system("system")];
+        for index in 0..40 {
+            history.push(CompletionMessage::user(format!("message {index}")));
+        }
+        let mut state = ContextBudgetState::default();
+
+        let omitted = compact_chat_history(&mut history, &mut state);
+
+        assert_eq!(omitted, 8);
+        assert_eq!(history.first().unwrap().content, "system");
+        assert!(history[1].content.contains("locally compacted"));
+        assert_eq!(history.len(), CHAT_COMPACTION_KEEP_MESSAGES + 2);
+        assert_eq!(history.last().unwrap().content, "message 39");
+    }
+
+    #[test]
+    fn agent_context_compaction_starts_from_user_boundary() {
+        let mut history = vec![AgentMessage {
+            role: "system".to_owned(),
+            content: Some("system".to_owned()),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        }];
+        for index in 0..60 {
+            let role = if index % 3 == 0 {
+                "user"
+            } else if index % 3 == 1 {
+                "assistant"
+            } else {
+                "tool"
+            };
+            history.push(AgentMessage {
+                role: role.to_owned(),
+                content: Some(format!("{role} {index}")),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+        let mut state = ContextBudgetState::default();
+
+        let omitted = compact_agent_history(&mut history, &mut state);
+
+        assert!(omitted > 0);
+        assert_eq!(history.first().unwrap().role, "system");
+        assert!(history[1]
+            .content
+            .as_deref()
+            .unwrap()
+            .contains("locally compacted"));
+        assert_eq!(history[2].role, "user");
+        assert_eq!(history.last().unwrap().content.as_deref(), Some("tool 59"));
     }
 
     #[test]
