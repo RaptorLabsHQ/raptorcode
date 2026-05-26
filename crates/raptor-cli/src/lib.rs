@@ -31,9 +31,9 @@ use raptor_git::{
 use raptor_providers::{
     AgentMessage, AgentStepResult, CompletionMessage, CompletionRequest, CompletionResponse,
     CompletionStreamDelta, DeepSeekProvider, DeepSeekReasoningEffort, DeepSeekRequestOptions,
-    DeepSeekThinkingMode, ModelId, Provider, ProviderCatalog, ProviderConfiguration, ProviderError,
-    ProviderId, ProviderSummary, TokenUsage, ToolDefinition, DEEPSEEK_API_KEY_ENV,
-    DEEPSEEK_API_KEY_URL,
+    DeepSeekResponseFormat, DeepSeekThinkingMode, ModelId, Provider, ProviderCatalog,
+    ProviderConfiguration, ProviderError, ProviderId, ProviderSummary, TokenUsage, ToolDefinition,
+    DEEPSEEK_API_KEY_ENV, DEEPSEEK_API_KEY_URL,
 };
 use raptor_store::{
     init_project_config, list_agent_sessions, list_swarm_metadata, list_task_metadata,
@@ -136,6 +136,7 @@ const SWARM_PROVIDER_DISPLAY: &str = "DeepSeek";
 const SWARM_MODEL_ID: &str = "deepseek-v4-pro";
 const CHAT_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised coding assistant. Answer the developer's message directly. Do not claim to modify files, run commands, install dependencies, commit, merge, or push.";
 const AGENT_SYSTEM_PROMPT: &str = "You are RaptorCode, an autonomous coding agent for production software engineering. Work sequentially and deliberately: inspect the project, form a concise plan, make small coherent changes, run focused verification, then summarize the result. Coordinate specialist concerns internally like a swarm of frontend, backend, test, and security reviewers, but never perform conflicting parallel file edits. When asked to build or create files, use your tools to write them directly to the working directory; do not print code to the terminal. Use write_file to create or update files, read_file to check existing content, list_directory to explore the project, and create_directory for new folders. Do not run persistent foreground dev servers as blocking commands; prefer build, lint, test, and static inspection commands. For frontend work, default to clean, readable, premium, minimal, enterprise-grade design: restrained palettes, strong hierarchy, accessible contrast, practical spacing, no decorative gradient-heavy button systems, no generic vibecoding visual patterns, and no visual noise unless the user explicitly requests a different style. After completing a task, summarize what files you created or modified and what verification ran.";
+const JSON_OUTPUT_SYSTEM_INSTRUCTION: &str = "JSON output mode is enabled. Respond with valid JSON only. Do not include Markdown fences or prose outside the JSON value. If the user does not provide a schema, return an object with keys \"result\" and \"notes\".";
 const SWARM_PLANNING_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised v0.1 planning assistant for Raptor Labs. Produce role-specific implementation planning only. Do not modify files, execute commands, apply patches, run tests, claim work was completed, or propose Phase 2 features. DeepSeek is the only provider in scope before v0.1.";
 const SWARM_IMPLEMENTATION_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised v0.1 implementation proposal assistant for Raptor Labs. Produce a safe, reviewable implementation proposal only. Do not claim files were modified. Do not execute commands. Do not apply patches. Do not instruct RaptorCode to modify source files automatically. DeepSeek is the only provider in scope before v0.1.";
 const RAPTOR_PLAN_FILE_NAME: &str = "RAPTOR_PLAN.md";
@@ -927,6 +928,34 @@ pub fn chat_with_provider(message: &str, provider: &dyn Provider) -> Result<Stri
     Ok(render_chat_response(&response))
 }
 
+fn chat_system_prompt(json_mode: bool) -> String {
+    if json_mode {
+        format!("{CHAT_SYSTEM_PROMPT}\n\n{JSON_OUTPUT_SYSTEM_INSTRUCTION}")
+    } else {
+        CHAT_SYSTEM_PROMPT.to_owned()
+    }
+}
+
+fn agent_system_message(current_dir: &Path, json_mode: bool) -> AgentMessage {
+    let mut content = format!(
+        "{AGENT_SYSTEM_PROMPT}\n\nCurrent working directory: {}",
+        current_dir.display()
+    );
+
+    if json_mode {
+        content.push_str("\n\n");
+        content.push_str(JSON_OUTPUT_SYSTEM_INSTRUCTION);
+    }
+
+    AgentMessage {
+        role: "system".to_owned(),
+        content: Some(content),
+        reasoning_content: None,
+        tool_calls: None,
+        tool_call_id: None,
+    }
+}
+
 pub fn run_interactive_chat(
     current_dir: &Path,
     startup_options: &StartupBannerOptions,
@@ -989,44 +1018,35 @@ pub fn run_interactive_chat(
         } else {
             DeepSeekReasoningEffort::High
         });
-    let mut stream_chat = !agent_mode;
+    let mut streaming_enabled = true;
+    let mut json_mode = false;
 
     println!();
     println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}");
     let workflow_label = format!(
-        "{} · Agentic Coding · {} · {}",
+        "{} · Agentic Coding · {} · {} · {} output",
         format_model_display_name(model_id.as_str()),
         request_options.thinking_mode.label(),
-        request_options.reasoning_effort.label()
+        request_options.reasoning_effort.label(),
+        request_options.response_format.label()
     );
     println!(
         "  {C_RED_BOLD}RaptorCode Engineering Agent{C_RESET}  {C_DIM}│{C_RESET}  {workflow_label}"
     );
     println!("  Type your request and press Enter to send.");
-    println!("  {C_DIM}/help · /api · /model · /thinking · /effort · /stream · /balance · Ctrl+D or /exit{C_RESET}");
+    println!("  {C_DIM}/help · /api · /model · /thinking · /effort · /stream · /json · /balance · Ctrl+D or /exit{C_RESET}");
     println!(
         "  {C_DIM}Streaming: {}{C_RESET}",
-        if stream_chat { "on for chat" } else { "off" }
+        if streaming_enabled { "on" } else { "off" }
     );
     println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}\n");
 
     let tools = build_agent_tools();
     let mut agent_working_dir = current_dir.to_path_buf();
 
-    let make_agent_system = |_model: &ModelId| AgentMessage {
-        role: "system".to_owned(),
-        content: Some(format!(
-            "{AGENT_SYSTEM_PROMPT}\n\nCurrent working directory: {}",
-            current_dir.display()
-        )),
-        reasoning_content: None,
-        tool_calls: None,
-        tool_call_id: None,
-    };
-
-    let mut agent_history: Vec<AgentMessage> = vec![make_agent_system(&model_id)];
+    let mut agent_history: Vec<AgentMessage> = vec![agent_system_message(current_dir, json_mode)];
     let mut chat_history: Vec<CompletionMessage> =
-        vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
+        vec![CompletionMessage::system(chat_system_prompt(json_mode))];
 
     loop {
         let input = match read_boxed_agent_prompt_line(banner_options.color_mode) {
@@ -1055,8 +1075,8 @@ pub fn run_interactive_chat(
                 continue;
             }
             "/clear" => {
-                agent_history = vec![make_agent_system(&model_id)];
-                chat_history = vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
+                agent_history = vec![agent_system_message(current_dir, json_mode)];
+                chat_history = vec![CompletionMessage::system(chat_system_prompt(json_mode))];
                 println!("Conversation cleared.\n");
                 continue;
             }
@@ -1065,8 +1085,8 @@ pub fn run_interactive_chat(
                     DeepSeekThinkingMode::Enabled => DeepSeekThinkingMode::Disabled,
                     DeepSeekThinkingMode::Disabled => DeepSeekThinkingMode::Enabled,
                 };
-                agent_history = vec![make_agent_system(&model_id)];
-                chat_history = vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
+                agent_history = vec![agent_system_message(current_dir, json_mode)];
+                chat_history = vec![CompletionMessage::system(chat_system_prompt(json_mode))];
                 println!(
                     "  {C_GREEN_BOLD}✓  DeepSeek {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}\n",
                     request_options.thinking_mode.label()
@@ -1078,8 +1098,8 @@ pub fn run_interactive_chat(
                     DeepSeekReasoningEffort::High => DeepSeekReasoningEffort::Max,
                     DeepSeekReasoningEffort::Max => DeepSeekReasoningEffort::High,
                 };
-                agent_history = vec![make_agent_system(&model_id)];
-                chat_history = vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
+                agent_history = vec![agent_system_message(current_dir, json_mode)];
+                chat_history = vec![CompletionMessage::system(chat_system_prompt(json_mode))];
                 println!(
                     "  {C_GREEN_BOLD}✓  DeepSeek {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}\n",
                     request_options.reasoning_effort.label()
@@ -1087,17 +1107,26 @@ pub fn run_interactive_chat(
                 continue;
             }
             "/stream" => {
-                if agent_mode {
-                    println!(
-                        "  {C_DIM}Streaming is currently available for chat mode. Agent tool-call streaming is pending.{C_RESET}\n"
-                    );
+                streaming_enabled = !streaming_enabled;
+                println!(
+                    "  {C_GREEN_BOLD}✓  Streaming {}{C_RESET}\n",
+                    if streaming_enabled { "on" } else { "off" }
+                );
+                continue;
+            }
+            "/json" => {
+                json_mode = !json_mode;
+                request_options.response_format = if json_mode {
+                    DeepSeekResponseFormat::JsonObject
                 } else {
-                    stream_chat = !stream_chat;
-                    println!(
-                        "  {C_GREEN_BOLD}✓  Streaming {}{C_RESET}\n",
-                        if stream_chat { "on" } else { "off" }
-                    );
-                }
+                    DeepSeekResponseFormat::Text
+                };
+                agent_history = vec![agent_system_message(current_dir, json_mode)];
+                chat_history = vec![CompletionMessage::system(chat_system_prompt(json_mode))];
+                println!(
+                    "  {C_GREEN_BOLD}✓  JSON output {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}\n",
+                    if json_mode { "on" } else { "off" }
+                );
                 continue;
             }
             "/balance" => {
@@ -1224,8 +1253,9 @@ pub fn run_interactive_chat(
                 if let Some(idx) = interactive_select(&model_items) {
                     if let Ok(new_model) = ModelId::new(&model_list[idx]) {
                         model_id = new_model;
-                        agent_history = vec![make_agent_system(&model_id)];
-                        chat_history = vec![CompletionMessage::system(CHAT_SYSTEM_PROMPT)];
+                        agent_history = vec![agent_system_message(current_dir, json_mode)];
+                        chat_history =
+                            vec![CompletionMessage::system(chat_system_prompt(json_mode))];
                         println!(
                             "  {C_GREEN_BOLD}✓  Model: {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}",
                             model_id.as_str()
@@ -1256,10 +1286,15 @@ pub fn run_interactive_chat(
                 &mut agent_history,
                 &tools,
                 &request_options,
+                streaming_enabled,
             ) {
-                Ok(content) => {
-                    let content = content.trim().to_owned();
-                    println!("{content}\n");
+                Ok(output) => {
+                    let content = output.content.trim().to_owned();
+                    if output.streamed {
+                        println!("\n");
+                    } else {
+                        println!("{content}\n");
+                    }
                     agent_history.push(AgentMessage {
                         role: "assistant".to_owned(),
                         content: Some(content),
@@ -1289,7 +1324,7 @@ pub fn run_interactive_chat(
             )
             .with_options(request_options.clone());
 
-            let response = if stream_chat {
+            let response = if streaming_enabled {
                 print!("  {C_DIM}Streaming DeepSeek response...{C_RESET}\n\n");
                 std::io::stdout().flush().ok();
                 provider.complete_streaming(request, |delta| {
@@ -1302,7 +1337,7 @@ pub fn run_interactive_chat(
             match response {
                 Ok(response) => {
                     let content = response.content.trim().to_owned();
-                    if stream_chat {
+                    if streaming_enabled {
                         println!("\n");
                     } else {
                         println!("{content}\n");
@@ -1513,7 +1548,7 @@ fn user_credentials_path() -> Option<PathBuf> {
 
 fn render_interactive_help() -> String {
     format!(
-        "\n{C_BOLD}RaptorCode commands:{C_RESET}\n  /help or ?   Show this help\n  /clear       Clear conversation history\n  /api         Change or view API key\n  /model       Select AI model\n  /thinking    Toggle DeepSeek thinking mode on/off\n  /effort      Toggle DeepSeek reasoning effort high/max\n  /stream      Toggle streaming responses in chat mode\n  /balance     Show DeepSeek account balance\n  /exit        Exit\n  /quit        Exit\n\nJust type your coding request and press Enter.\n\n"
+        "\n{C_BOLD}RaptorCode commands:{C_RESET}\n  /help or ?   Show this help\n  /clear       Clear conversation history\n  /api         Change or view API key\n  /model       Select AI model\n  /thinking    Toggle DeepSeek thinking mode on/off\n  /effort      Toggle DeepSeek reasoning effort high/max\n  /stream      Toggle streaming responses\n  /json        Toggle DeepSeek JSON output mode\n  /balance     Show DeepSeek account balance\n  /exit        Exit\n  /quit        Exit\n\nJust type your coding request and press Enter.\n\n"
     )
 }
 
@@ -1841,6 +1876,11 @@ struct Spinner {
     handle: Option<thread::JoinHandle<()>>,
 }
 
+struct AgentLoopOutput {
+    content: String,
+    streamed: bool,
+}
+
 impl Spinner {
     fn start(thinking: impl Into<String>) -> Self {
         let thinking = thinking.into();
@@ -1890,16 +1930,39 @@ fn run_agent_loop(
     history: &mut Vec<AgentMessage>,
     tools: &[ToolDefinition],
     request_options: &DeepSeekRequestOptions,
-) -> Result<String, CliError> {
+    streaming_enabled: bool,
+) -> Result<AgentLoopOutput, CliError> {
     for _ in 0..100 {
-        let spinner = Spinner::start("Thinking...");
-        let step = provider.complete_agent_step(model_id, history, tools, request_options);
-        spinner.stop();
+        let mut streamed_text = false;
+        let step = if streaming_enabled {
+            print!("  {C_DIM}Streaming DeepSeek agent response...{C_RESET}\n\n");
+            std::io::stdout().flush().ok();
+            provider.complete_agent_step_streaming(
+                model_id,
+                history,
+                tools,
+                request_options,
+                |delta| {
+                    if delta.content.is_some() {
+                        streamed_text = true;
+                    }
+                    print_stream_delta(delta);
+                },
+            )
+        } else {
+            let spinner = Spinner::start("Thinking...");
+            let step = provider.complete_agent_step(model_id, history, tools, request_options);
+            spinner.stop();
+            step
+        };
 
         match step {
             Ok((assistant_msg, AgentStepResult::Text(content))) => {
                 drop(assistant_msg);
-                return Ok(content);
+                return Ok(AgentLoopOutput {
+                    content,
+                    streamed: streamed_text,
+                });
             }
             Ok((assistant_msg, AgentStepResult::ToolCalls(calls))) => {
                 history.push(assistant_msg);
@@ -1937,7 +2000,12 @@ fn run_agent_loop(
         }
     }
 
-    Ok("⏸  Step limit reached. All progress is saved — type **continue** to resume where I left off.".to_owned())
+    Ok(AgentLoopOutput {
+        content:
+            "⏸  Step limit reached. All progress is saved — type **continue** to resume where I left off."
+                .to_owned(),
+        streamed: false,
+    })
 }
 
 pub fn create_agent(

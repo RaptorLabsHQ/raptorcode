@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -90,9 +91,16 @@ pub enum DeepSeekReasoningEffort {
     Max,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeepSeekResponseFormat {
+    Text,
+    JsonObject,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeepSeekRequestOptions {
     pub reasoning_effort: DeepSeekReasoningEffort,
+    pub response_format: DeepSeekResponseFormat,
     pub thinking_mode: DeepSeekThinkingMode,
     pub user_id: Option<String>,
 }
@@ -175,6 +183,8 @@ pub struct DeepSeekChatRequest {
     pub model: String,
     pub messages: Vec<DeepSeekChatMessage>,
     pub reasoning_effort: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<DeepSeekResponseFormatRequest>,
     pub stream: bool,
     pub thinking: DeepSeekThinkingRequest,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -191,6 +201,12 @@ pub struct DeepSeekChatMessage {
 pub struct DeepSeekThinkingRequest {
     #[serde(rename = "type")]
     pub thinking_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeepSeekResponseFormatRequest {
+    #[serde(rename = "type")]
+    pub format_type: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -244,6 +260,8 @@ struct DeepSeekAgentRequest {
     model: String,
     messages: Vec<DeepSeekAgentRequestMessage>,
     reasoning_effort: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<DeepSeekResponseFormatRequest>,
     tools: Vec<DeepSeekAgentToolSpec>,
     stream: bool,
     thinking: DeepSeekThinkingRequest,
@@ -318,6 +336,44 @@ struct DeepSeekAgentToolCallResponse {
 
 #[derive(Deserialize)]
 struct DeepSeekAgentToolCallFunctionResponse {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Deserialize)]
+struct DeepSeekAgentStreamChunk {
+    choices: Vec<DeepSeekAgentStreamChoice>,
+}
+
+#[derive(Deserialize)]
+struct DeepSeekAgentStreamChoice {
+    delta: DeepSeekAgentStreamDelta,
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct DeepSeekAgentStreamDelta {
+    content: Option<String>,
+    reasoning_content: Option<String>,
+    tool_calls: Option<Vec<DeepSeekAgentToolCallDelta>>,
+}
+
+#[derive(Deserialize)]
+struct DeepSeekAgentToolCallDelta {
+    index: Option<usize>,
+    id: Option<String>,
+    function: Option<DeepSeekAgentToolCallFunctionDelta>,
+}
+
+#[derive(Deserialize)]
+struct DeepSeekAgentToolCallFunctionDelta {
+    name: Option<String>,
+    arguments: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct ToolCallAccumulator {
+    id: Option<String>,
     name: String,
     arguments: String,
 }
@@ -584,10 +640,36 @@ impl DeepSeekReasoningEffort {
     }
 }
 
+impl DeepSeekResponseFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::JsonObject => "json_object",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::JsonObject => "json",
+        }
+    }
+
+    fn request(self) -> Option<DeepSeekResponseFormatRequest> {
+        match self {
+            Self::Text => None,
+            Self::JsonObject => Some(DeepSeekResponseFormatRequest {
+                format_type: self.as_str().to_owned(),
+            }),
+        }
+    }
+}
+
 impl Default for DeepSeekRequestOptions {
     fn default() -> Self {
         Self {
             reasoning_effort: DeepSeekReasoningEffort::High,
+            response_format: DeepSeekResponseFormat::Text,
             thinking_mode: DeepSeekThinkingMode::Enabled,
             user_id: None,
         }
@@ -602,6 +684,11 @@ impl DeepSeekRequestOptions {
 
     pub fn with_reasoning_effort(mut self, reasoning_effort: DeepSeekReasoningEffort) -> Self {
         self.reasoning_effort = reasoning_effort;
+        self
+    }
+
+    pub fn with_response_format(mut self, response_format: DeepSeekResponseFormat) -> Self {
+        self.response_format = response_format;
         self
     }
 
@@ -670,53 +757,7 @@ impl DeepSeekProvider {
         tools: &[ToolDefinition],
         options: &DeepSeekRequestOptions,
     ) -> Result<(AgentMessage, AgentStepResult), ProviderError> {
-        let request_messages: Vec<DeepSeekAgentRequestMessage> = messages
-            .iter()
-            .map(|m| DeepSeekAgentRequestMessage {
-                role: m.role.clone(),
-                content: m.content.clone(),
-                reasoning_content: m.reasoning_content.clone(),
-                tool_calls: m.tool_calls.as_ref().map(|calls| {
-                    calls
-                        .iter()
-                        .map(|c| DeepSeekAgentToolCallSpec {
-                            id: c.id.clone(),
-                            tool_type: "function".to_owned(),
-                            function: DeepSeekAgentToolCallFunctionSpec {
-                                name: c.name.clone(),
-                                arguments: c.arguments.clone(),
-                            },
-                        })
-                        .collect()
-                }),
-                tool_call_id: m.tool_call_id.clone(),
-            })
-            .collect();
-
-        let tool_specs: Vec<DeepSeekAgentToolSpec> = tools
-            .iter()
-            .map(|t| DeepSeekAgentToolSpec {
-                tool_type: "function".to_owned(),
-                function: DeepSeekAgentFunctionSpec {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    parameters: t.parameters.clone(),
-                },
-            })
-            .collect();
-
-        let request_body = DeepSeekAgentRequest {
-            model: model_id.as_str().to_owned(),
-            messages: request_messages,
-            reasoning_effort: options.reasoning_effort.as_str().to_owned(),
-            tools: tool_specs,
-            stream: false,
-            thinking: DeepSeekThinkingRequest {
-                thinking_type: options.thinking_mode.as_str().to_owned(),
-            },
-            user_id: options.user_id.clone(),
-        };
-
+        let request_body = deepseek_agent_request(model_id, messages, tools, options, false);
         let response = self
             .client
             .post(&self.endpoint)
@@ -775,6 +816,37 @@ impl DeepSeekProvider {
             };
             Ok((assistant_msg, AgentStepResult::Text(content)))
         }
+    }
+
+    pub fn complete_agent_step_streaming<F>(
+        &self,
+        model_id: &ModelId,
+        messages: &[AgentMessage],
+        tools: &[ToolDefinition],
+        options: &DeepSeekRequestOptions,
+        mut on_delta: F,
+    ) -> Result<(AgentMessage, AgentStepResult), ProviderError>
+    where
+        F: FnMut(CompletionStreamDelta),
+    {
+        let request_body = deepseek_agent_request(model_id, messages, tools, options, true);
+        let response = self
+            .client
+            .post(&self.endpoint)
+            .bearer_auth(&self.api_key)
+            .json(&request_body)
+            .send()
+            .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+        let status = response.status().as_u16();
+
+        if status != 200 {
+            let body = response
+                .text()
+                .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+            return Err(map_deepseek_error_status(status, &body));
+        }
+
+        read_deepseek_agent_streaming_response(response, &mut on_delta)
     }
 
     pub fn list_models(&self) -> Result<Vec<String>, ProviderError> {
@@ -931,12 +1003,69 @@ fn deepseek_chat_request_from_completion_with_stream(
             })
             .collect(),
         reasoning_effort: request.options.reasoning_effort.as_str().to_owned(),
+        response_format: request.options.response_format.request(),
         stream,
         thinking: DeepSeekThinkingRequest {
             thinking_type: request.options.thinking_mode.as_str().to_owned(),
         },
         user_id: request.options.user_id.clone(),
     })
+}
+
+fn deepseek_agent_request(
+    model_id: &ModelId,
+    messages: &[AgentMessage],
+    tools: &[ToolDefinition],
+    options: &DeepSeekRequestOptions,
+    stream: bool,
+) -> DeepSeekAgentRequest {
+    let request_messages: Vec<DeepSeekAgentRequestMessage> = messages
+        .iter()
+        .map(|message| DeepSeekAgentRequestMessage {
+            role: message.role.clone(),
+            content: message.content.clone(),
+            reasoning_content: message.reasoning_content.clone(),
+            tool_calls: message.tool_calls.as_ref().map(|calls| {
+                calls
+                    .iter()
+                    .map(|call| DeepSeekAgentToolCallSpec {
+                        id: call.id.clone(),
+                        tool_type: "function".to_owned(),
+                        function: DeepSeekAgentToolCallFunctionSpec {
+                            name: call.name.clone(),
+                            arguments: call.arguments.clone(),
+                        },
+                    })
+                    .collect()
+            }),
+            tool_call_id: message.tool_call_id.clone(),
+        })
+        .collect();
+
+    let tool_specs: Vec<DeepSeekAgentToolSpec> = tools
+        .iter()
+        .map(|tool| DeepSeekAgentToolSpec {
+            tool_type: "function".to_owned(),
+            function: DeepSeekAgentFunctionSpec {
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                parameters: tool.parameters.clone(),
+            },
+        })
+        .collect();
+
+    DeepSeekAgentRequest {
+        model: model_id.as_str().to_owned(),
+        messages: request_messages,
+        reasoning_effort: options.reasoning_effort.as_str().to_owned(),
+        response_format: options.response_format.request(),
+        tools: tool_specs,
+        stream,
+        thinking: DeepSeekThinkingRequest {
+            thinking_type: options.thinking_mode.as_str().to_owned(),
+        },
+        user_id: options.user_id.clone(),
+    }
 }
 
 pub fn parse_deepseek_chat_response(
@@ -1092,6 +1221,161 @@ where
         },
         usage,
     })
+}
+
+fn read_deepseek_agent_streaming_response<F>(
+    response: reqwest::blocking::Response,
+    on_delta: &mut F,
+) -> Result<(AgentMessage, AgentStepResult), ProviderError>
+where
+    F: FnMut(CompletionStreamDelta),
+{
+    let mut content = String::new();
+    let mut reasoning_content = String::new();
+    let mut tool_calls = BTreeMap::new();
+    let mut finish_reason = None;
+    let reader = BufReader::new(response);
+
+    for line in reader.lines() {
+        let line = line.map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() || trimmed.starts_with(':') {
+            continue;
+        }
+
+        let Some(data) = trimmed.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data == "[DONE]" {
+            break;
+        }
+
+        apply_deepseek_agent_stream_data(
+            data,
+            &mut content,
+            &mut reasoning_content,
+            &mut tool_calls,
+            &mut finish_reason,
+            on_delta,
+        )?;
+    }
+
+    finish_deepseek_agent_stream(content, reasoning_content, tool_calls, finish_reason)
+}
+
+fn apply_deepseek_agent_stream_data<F>(
+    data: &str,
+    content: &mut String,
+    reasoning_content: &mut String,
+    tool_calls: &mut BTreeMap<usize, ToolCallAccumulator>,
+    finish_reason: &mut Option<String>,
+    on_delta: &mut F,
+) -> Result<(), ProviderError>
+where
+    F: FnMut(CompletionStreamDelta),
+{
+    let parsed: DeepSeekAgentStreamChunk = serde_json::from_str(data).map_err(|error| {
+        ProviderError::MalformedResponse(format!(
+            "failed to parse DeepSeek agent stream chunk: {error}"
+        ))
+    })?;
+    let Some(choice) = parsed.choices.into_iter().next() else {
+        return Ok(());
+    };
+
+    if choice.finish_reason.is_some() {
+        *finish_reason = choice.finish_reason.clone();
+    }
+
+    if let Some(reasoning_delta) = choice.delta.reasoning_content {
+        reasoning_content.push_str(&reasoning_delta);
+        on_delta(CompletionStreamDelta {
+            content: None,
+            finish_reason: choice.finish_reason.clone(),
+            reasoning_content: Some(reasoning_delta),
+        });
+    }
+
+    if let Some(content_delta) = choice.delta.content {
+        content.push_str(&content_delta);
+        on_delta(CompletionStreamDelta {
+            content: Some(content_delta),
+            finish_reason: choice.finish_reason.clone(),
+            reasoning_content: None,
+        });
+    }
+
+    for tool_delta in choice.delta.tool_calls.unwrap_or_default() {
+        let index = tool_delta.index.unwrap_or(0);
+        let entry = tool_calls.entry(index).or_default();
+        if let Some(id) = tool_delta.id.filter(|id| !id.trim().is_empty()) {
+            entry.id = Some(id);
+        }
+        if let Some(function) = tool_delta.function {
+            if let Some(name) = function.name {
+                entry.name.push_str(&name);
+            }
+            if let Some(arguments) = function.arguments {
+                entry.arguments.push_str(&arguments);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn finish_deepseek_agent_stream(
+    content: String,
+    reasoning_content: String,
+    tool_calls: BTreeMap<usize, ToolCallAccumulator>,
+    finish_reason: Option<String>,
+) -> Result<(AgentMessage, AgentStepResult), ProviderError> {
+    let reasoning_content = if reasoning_content.is_empty() {
+        None
+    } else {
+        Some(reasoning_content)
+    };
+    let has_tool_calls = finish_reason.as_deref() == Some("tool_calls")
+        || tool_calls
+            .values()
+            .any(|call| !call.name.is_empty() || !call.arguments.is_empty());
+
+    if has_tool_calls {
+        let calls = tool_calls
+            .into_iter()
+            .map(|(index, call)| {
+                if call.name.is_empty() {
+                    return Err(ProviderError::MalformedResponse(format!(
+                        "missing streamed tool call name at index {index}"
+                    )));
+                }
+                Ok(ToolCall {
+                    id: call.id.unwrap_or_else(|| format!("call_streamed_{index}")),
+                    name: call.name,
+                    arguments: call.arguments,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let assistant_msg = AgentMessage {
+            role: "assistant".to_owned(),
+            content: None,
+            reasoning_content,
+            tool_calls: Some(calls.clone()),
+            tool_call_id: None,
+        };
+        Ok((assistant_msg, AgentStepResult::ToolCalls(calls)))
+    } else {
+        let assistant_msg = AgentMessage {
+            role: "assistant".to_owned(),
+            content: Some(content.clone()),
+            reasoning_content,
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        Ok((assistant_msg, AgentStepResult::Text(content)))
+    }
 }
 
 pub fn parse_deepseek_user_balance_response(
@@ -1463,6 +1747,7 @@ mod tests {
         assert_eq!(json["stream"], false);
         assert_eq!(json["thinking"]["type"], "enabled");
         assert_eq!(json["reasoning_effort"], "high");
+        assert!(json.get("response_format").is_none());
         assert_eq!(json["messages"][0]["role"], "system");
         assert_eq!(json["messages"][0]["content"], "You are RaptorCode.");
         assert_eq!(json["messages"][1]["role"], "user");
@@ -1503,6 +1788,22 @@ mod tests {
         assert_eq!(json["thinking"]["type"], "disabled");
         assert_eq!(json["reasoning_effort"], "max");
         assert_eq!(json["user_id"], "raptor-session_1");
+    }
+
+    #[test]
+    fn deepseek_request_serialization_supports_json_output_mode() {
+        let options = DeepSeekRequestOptions::default()
+            .with_response_format(DeepSeekResponseFormat::JsonObject);
+        let request = CompletionRequest::new(
+            ProviderId::new("deepseek").unwrap(),
+            ModelId::new("deepseek-v4-pro").unwrap(),
+            vec![CompletionMessage::user("Return json.")],
+        )
+        .with_options(options);
+        let deepseek_request = deepseek_chat_request_from_completion(&request).unwrap();
+        let json = serde_json::to_value(deepseek_request).unwrap();
+
+        assert_eq!(json["response_format"]["type"], "json_object");
     }
 
     #[test]
@@ -1581,6 +1882,50 @@ mod tests {
         assert_eq!(content.content.as_deref(), Some("Hello"));
         assert_eq!(content.reasoning_content, None);
         assert!(parse_deepseek_stream_chunk("[DONE]").unwrap().is_none());
+    }
+
+    #[test]
+    fn deepseek_agent_stream_assembles_tool_call_deltas() {
+        let mut content = String::new();
+        let mut reasoning_content = String::new();
+        let mut tool_calls = BTreeMap::new();
+        let mut finish_reason = None;
+        let mut deltas = Vec::new();
+
+        apply_deepseek_agent_stream_data(
+            r#"{"choices":[{"delta":{"reasoning_content":"thinking","tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\"path\""}}]},"finish_reason":null}]}"#,
+            &mut content,
+            &mut reasoning_content,
+            &mut tool_calls,
+            &mut finish_reason,
+            &mut |delta| deltas.push(delta),
+        )
+        .unwrap();
+        apply_deepseek_agent_stream_data(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"src/lib.rs\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+            &mut content,
+            &mut reasoning_content,
+            &mut tool_calls,
+            &mut finish_reason,
+            &mut |delta| deltas.push(delta),
+        )
+        .unwrap();
+
+        let (assistant, result) =
+            finish_deepseek_agent_stream(content, reasoning_content, tool_calls, finish_reason)
+                .unwrap();
+
+        assert_eq!(assistant.reasoning_content.as_deref(), Some("thinking"));
+        match result {
+            AgentStepResult::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].id, "call_1");
+                assert_eq!(calls[0].name, "read_file");
+                assert_eq!(calls[0].arguments, r#"{"path":"src/lib.rs"}"#);
+            }
+            AgentStepResult::Text(_) => panic!("expected streamed tool call"),
+        }
+        assert_eq!(deltas[0].reasoning_content.as_deref(), Some("thinking"));
     }
 
     #[test]
