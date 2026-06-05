@@ -115,6 +115,30 @@ An increment is complete when:
 - The diff has been reviewed.
 - The change is committed and pushed when credentials are available.
 
+## Refactor Delivery Rules
+
+Date: 2026-06-05
+Author: Bob Vasic
+Company: RaptorLabs.dev
+
+Agile delivery for RaptorCode means small, shippable, verified increments with clear ownership boundaries. Do not treat "microservices" as a default quality goal for this CLI product. The current scalable architecture is a modular Rust workspace; distributed services should be introduced only after a concrete runtime, deployment, or team-boundary requirement exists.
+
+SOLID cleanup priorities for upcoming iterations:
+
+- Extract one responsibility at a time from `raptor-cli/src/lib.rs`.
+- Preserve the public CLI contract unless BOB explicitly approves a behavior change.
+- Add focused tests before or with each extracted boundary.
+- Keep terminal rendering, provider I/O, persistence, git operations, and process execution in separate modules or crates.
+- Prefer deleting duplication and narrowing mutable state over adding abstractions.
+- Keep each commit coherent enough to review independently.
+
+Current refactor sequence:
+
+- Completed: extract DeepSeek context-budget decisions into `raptor-cli::context_budget`.
+- Next: extract interactive local tool definitions and execution into a dedicated CLI module.
+- Then: extract interactive slash-command handling from the main REPL loop.
+- Then: split provider streaming assembly from synchronous request execution if DeepSeek support continues to expand.
+
 ## Current Status
 
 The repository has project documentation, governance files, a minimal Rust workspace, a CLI command router, a branded base `raptor` startup screen, a simple read-only `raptor tui` dashboard, `raptor init`, `raptor doctor`, provider metadata inspection, DeepSeek chat completion through `raptor chat "message"`, persisted read-only agent session metadata, a deny-by-default permission policy display, a safe single-task workflow, and a v0.1 swarm worktree MVP. The task workflow validates input, creates an isolated worktree, persists local task metadata, supports read-only metadata and worktree inspection through `raptor task list`, `raptor task show <id>`, `raptor review <task-id> [role]`, and `raptor diff <task-id> [role]`, runs supervised tests through `raptor test <task-id>`, includes merge dry-run plus supervised local merge execution, records lifecycle status updates, and supports safe cleanup for merged, completed, or abandoned task worktrees without launching autonomous agents. The swarm workflow creates role worktrees, records swarm metadata, can generate DeepSeek plans and implementation proposal artifacts, supports read-only review/diff fan-out or per-role inspection, and runs supervised tests across validated role worktrees.

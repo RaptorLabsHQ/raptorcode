@@ -58,7 +58,8 @@ Security-relevant actions should be logged or surfaced clearly to the developer:
 
 Current provider controls:
 
-- Base `raptor` checks only whether `DEEPSEEK_API_KEY` is present, never prints it, never stores it, and never reads `.env` files.
+- Base `raptor` checks whether `DEEPSEEK_API_KEY` or a saved local DeepSeek key is present, never prints the raw key, and never reads `.env` files.
+- Interactive key onboarding stores the user-provided DeepSeek key in `~/.raptor/.credentials` with owner-only permissions. Repository files and `raptor.toml` remain secrets-free.
 - Base `raptor` prints `https://platform.deepseek.com/api_keys` when the DeepSeek key is missing.
 - Base `raptor` uses minimal plain-text output for non-TTY output and `CI=true`; `NO_COLOR` disables ANSI color.
 - `raptor tui` is read-only and does not call models, run shell commands, modify files, write metadata, commit, merge, or push.
@@ -73,6 +74,7 @@ Current provider controls:
 - `raptor chat` sends only a fixed system prompt and the user-provided message to DeepSeek.
 - `raptor chat` does not send repository contents, `.env` files, task metadata, worktree files, or secrets.
 - `raptor chat` does not execute model output, run shell commands, write source files, create worktrees, merge, commit, or push.
+- Interactive base `raptor` agentic mode is different from `raptor chat`: after explicit file-system consent it may execute model-requested local tools, including file writes and shell commands, inside the current agent working directory.
 - `raptor swarm` sends only the task description and v0.1 role template to DeepSeek when `DEEPSEEK_API_KEY` is set.
 - `raptor swarm` writes only `RAPTOR_PLAN.md` planning artifacts inside assigned role worktrees.
 - `raptor swarm` records `blocked_missing_deepseek_api_key` without destroying worktrees when `DEEPSEEK_API_KEY` is missing.
@@ -87,7 +89,23 @@ Current provider controls:
 - Explicit test commands are structured process arguments, not shell strings.
 - Explicit test commands are limited to test-oriented subcommands and reject path traversal arguments.
 - `raptor test <task-id>` does not install dependencies, execute model output, update metadata, edit source files, commit, merge, or push.
-- Streaming is implemented only for interactive chat-mode DeepSeek final-answer chunks. Agent tool-call streaming remains disabled until streamed tool-call delta assembly is implemented and verified. No provider SDKs or additional provider executions are implemented before v0.1.
+- Streaming is implemented for interactive chat and agent responses. Streamed DeepSeek agent tool-call deltas are assembled before local tool execution. No provider SDKs or additional provider executions are implemented before v0.1.
+
+## Interactive Agent Tool Controls
+
+Date: 2026-06-05
+Author: Bob Vasic
+Company: RaptorLabs.dev
+
+Interactive agentic mode has a broader trust boundary than the metadata-only `raptor agent` commands.
+
+- Agentic mode starts only after an explicit local file-system consent prompt.
+- Available tools are `write_file`, `read_file`, `list_directory`, `create_directory`, `change_directory`, and `run_command`.
+- `run_command` uses a shell command string from the model, so the consent prompt must be treated as granting privileged local execution for that session.
+- Shell commands run with a 120-second timeout and Unix process-group termination to reduce orphaned process risk.
+- Tool results are appended to provider history as tool messages for auditability inside the active session.
+- DeepSeek usage telemetry is monitored; context warnings and local compaction reduce runaway context growth.
+- Future hardening should move tool execution into its own module with explicit path and command policy hooks before adding more tools.
 
 Current agent controls:
 
