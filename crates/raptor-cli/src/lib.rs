@@ -12,6 +12,7 @@ use std::time::Duration;
 
 mod agent_tools;
 mod context_budget;
+mod swarm_orchestrator;
 mod tool_policy;
 
 use agent_tools::{build_agent_tools, describe_tool_call, execute_tool_call};
@@ -86,6 +87,9 @@ pub enum CliCommand {
     SwarmImplement {
         role: String,
         task_id: String,
+    },
+    SwarmRun {
+        description: String,
     },
     Task(TaskCommand),
     Test {
@@ -371,6 +375,14 @@ where
         [arg, subcommand, ..] if arg == "swarm" && subcommand == "implement" => Err(CliError::new(
             "swarm implement accepts exactly one task id and one role",
         )),
+        [arg, subcommand] if arg == "swarm" && subcommand == "run" => {
+            Err(CliError::new("swarm run mission description is required"))
+        }
+        [arg, subcommand, description @ ..] if arg == "swarm" && subcommand == "run" => {
+            Ok(CliCommand::SwarmRun {
+                description: description.join(" "),
+            })
+        }
         [arg, description @ ..] if arg == "swarm" => Ok(CliCommand::Swarm {
             description: description.join(" "),
         }),
@@ -542,6 +554,7 @@ where
         CliCommand::SwarmImplement { role, task_id } => {
             implement_swarm_role(current_dir, &task_id, &role)
         }
+        CliCommand::SwarmRun { description } => cmd_swarm_run(current_dir, &description),
         CliCommand::Task(TaskCommand::Abandon { id }) => abandon_task(current_dir, &id),
         CliCommand::Task(TaskCommand::Cleanup { id }) => {
             cleanup_task(current_dir, &id, confirmation_input)
@@ -725,7 +738,7 @@ pub fn render_version() -> String {
 
 pub fn render_help() -> String {
     format!(
-        "raptor {}\n\n{}\n\nUsage:\n  raptor\n  raptor --version\n  raptor init\n  raptor tui\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat \"message\"\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm \"task description\"\n  raptor swarm implement <task-id> <role>\n  raptor review <task-id> [role]\n  raptor diff <task-id> [role]\n  raptor test <task-id> [-- <command>]\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
+        "raptor {}\n\n{}\n\nUsage:\n  raptor\n  raptor --version\n  raptor init\n  raptor tui\n  raptor provider list\n  raptor agent list\n  raptor agent show <id>\n  raptor agent create --role <role> [--task <task-id>] [--provider <provider-id>] [--model <model-id>]\n  raptor agent policy\n  raptor chat \"message\"\n  raptor task \"task description\"\n  raptor task list\n  raptor task show <id>\n  raptor task abandon <id>\n  raptor task cleanup <id>\n  raptor swarm \"task description\"\n  raptor swarm implement <task-id> <role>\n  raptor swarm run \"mission description\"\n  raptor review <task-id> [role]\n  raptor diff <task-id> [role]\n  raptor test <task-id> [-- <command>]\n  raptor merge <task-id>\n  raptor merge <task-id> --execute\n  raptor doctor\n",
         version(),
         project_description()
     )
@@ -920,7 +933,7 @@ pub fn run_interactive_chat(
         "  {C_RED_BOLD}RaptorCode Engineering Agent{C_RESET}  {C_DIM}│{C_RESET}  {workflow_label}"
     );
     println!("  Type your request and press Enter to send.");
-    println!("  {C_DIM}/help · /api · /model · /thinking · /effort · /stream · /json · /balance · Ctrl+D or /exit{C_RESET}");
+    println!("  {C_DIM}/help · /swarm · /api · /model · /thinking · /effort · /stream · /json · /balance · Ctrl+D or /exit{C_RESET}");
     println!(
         "  {C_DIM}Streaming: {}{C_RESET}",
         if streaming_enabled { "on" } else { "off" }
@@ -954,6 +967,40 @@ pub fn run_interactive_chat(
         };
 
         if input.is_empty() {
+            continue;
+        }
+
+        if let Some(mission) = input
+            .strip_prefix("/swarm")
+            .filter(|rest| rest.is_empty() || rest.starts_with(' '))
+        {
+            let mission = mission.trim();
+            if mission.is_empty() {
+                println!("  usage: /swarm <mission description>\n");
+                continue;
+            }
+            if !agent_mode {
+                println!("  {C_RED}✗ /swarm needs agentic mode.{C_RESET}  {C_DIM}Restart raptor and grant file system access.{C_RESET}\n");
+                continue;
+            }
+            println!();
+            let result = swarm_orchestrator::run_live_swarm(
+                current_dir,
+                swarm_orchestrator::LiveSwarmConfig {
+                    api_key: api_key.clone(),
+                    mission: mission.to_owned(),
+                    model_label: format_model_display_name(model_id.as_str()),
+                    model_id: model_id.clone(),
+                    // Swarm agents always run ultrathink with text output,
+                    // independent of the session /json or /effort settings.
+                    request_options: DeepSeekRequestOptions::default()
+                        .with_reasoning_effort(DeepSeekReasoningEffort::Max),
+                },
+            );
+            match result {
+                Ok(summary) => println!("{summary}"),
+                Err(error) => println!("  {C_RED}✗ swarm failed:{C_RESET} {error}\n"),
+            }
             continue;
         }
 
@@ -1468,7 +1515,7 @@ fn user_credentials_path() -> Option<PathBuf> {
 
 fn render_interactive_help() -> String {
     format!(
-        "\n{C_BOLD}RaptorCode commands:{C_RESET}\n  /help or ?   Show this help\n  /clear       Clear conversation history\n  /api         Change or view API key\n  /model       Select AI model\n  /thinking    Toggle DeepSeek thinking mode on/off\n  /effort      Toggle DeepSeek reasoning effort high/max\n  /stream      Toggle streaming responses\n  /json        Toggle DeepSeek JSON output mode\n  /balance     Show DeepSeek account balance\n  /exit        Exit\n  /quit        Exit\n\nJust type your coding request and press Enter.\n\n"
+        "\n{C_BOLD}RaptorCode commands:{C_RESET}\n  /help or ?   Show this help\n  /swarm <mission>  Launch the live four-specialist agent swarm\n  /clear       Clear conversation history\n  /api         Change or view API key\n  /model       Select AI model\n  /thinking    Toggle DeepSeek thinking mode on/off\n  /effort      Toggle DeepSeek reasoning effort high/max\n  /stream      Toggle streaming responses\n  /json        Toggle DeepSeek JSON output mode\n  /balance     Show DeepSeek account balance\n  /exit        Exit\n  /quit        Exit\n\nJust type your coding request and press Enter.\n\n"
     )
 }
 
@@ -2030,6 +2077,46 @@ fn create_swarm_with_planning_source(
         .map_err(|error| CliError::new(error.to_string()))?;
 
     Ok(render_swarm_created(&metadata, &metadata_path))
+}
+
+fn cmd_swarm_run(current_dir: &Path, description: &str) -> Result<String, CliError> {
+    use std::io::IsTerminal as _;
+
+    if description.trim().is_empty() {
+        return Err(CliError::new("swarm run mission description is required"));
+    }
+    if !std::io::stdin().is_terminal()
+        || !std::io::stdout().is_terminal()
+        || ci_environment_enabled()
+    {
+        return Err(CliError::new(
+            "swarm run requires an interactive terminal for the live dashboard",
+        ));
+    }
+    let api_key = resolve_deepseek_api_key().ok_or_else(|| {
+        CliError::new(format!(
+            "DeepSeek API key required. Set {DEEPSEEK_API_KEY_ENV} or run `raptor` once to save a key. Get one: {DEEPSEEK_API_KEY_URL}"
+        ))
+    })?;
+    let provider =
+        DeepSeekProvider::new(&api_key).map_err(|error| CliError::new(error.to_string()))?;
+    let model_id = provider
+        .default_model()
+        .cloned()
+        .ok_or_else(|| CliError::new("DeepSeek provider has no default model"))?;
+
+    swarm_orchestrator::run_live_swarm(
+        current_dir,
+        swarm_orchestrator::LiveSwarmConfig {
+            api_key,
+            mission: description.trim().to_owned(),
+            model_label: format_model_display_name(model_id.as_str()),
+            model_id,
+            // Ultrathink defaults; swarm agents always use text output.
+            request_options: DeepSeekRequestOptions::default()
+                .with_reasoning_effort(DeepSeekReasoningEffort::Max),
+        },
+    )
 }
 
 fn swarm_metadata_from_plan(plan: &SwarmWorktreePlan, description: &str) -> SwarmMetadata {
@@ -4298,6 +4385,23 @@ mod tests {
         let error = parse_args(["swarm"]).unwrap_err();
 
         assert!(error.to_string().contains("description"));
+    }
+
+    #[test]
+    fn parses_swarm_run_mission() {
+        assert_eq!(
+            parse_args(["swarm", "run", "build", "a", "saas", "app"]).unwrap(),
+            CliCommand::SwarmRun {
+                description: "build a saas app".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_missing_swarm_run_mission() {
+        let error = parse_args(["swarm", "run"]).unwrap_err();
+
+        assert!(error.to_string().contains("mission"));
     }
 
     #[test]
