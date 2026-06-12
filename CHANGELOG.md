@@ -6,6 +6,20 @@ Company: RaptorLabs.dev
 
 All notable RaptorCode changes will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- Interactive `raptor` REPL with chat and consent-gated agentic mode: DeepSeek streaming, thinking mode, reasoning effort, JSON mode, model selection, balance, usage telemetry, context compaction, and six local tools with a 120-second shell timeout.
+- Interactive tool policy hooks: workspace-scoped file writes with a per-session override prompt, a hard deny-list for catastrophic shell commands, and confirm-on-prompt handling for gray-zone commands.
+- Ultrathink session defaults: thinking mode enabled and maximum reasoning effort from session start in chat and agentic mode.
+- Live swarm TUI dashboard with four specialist panels, live status one-liners, an activity feed, aggregated token usage, and policy confirmation modals.
+- Live swarm orchestrator: `raptor swarm run "mission"` and interactive `/swarm <mission>` spawn four live specialist agents (frontend, backend, test, security) in parallel isolated worktrees with worktree-scoped tool policy; outcomes are recorded in swarm metadata and all changes are left uncommitted for review.
+
+### Safety Notes
+
+- Live swarm agents and interactive agentic mode execute model-requested tools only after explicit developer consent and under the interactive tool policy; the planning and proposal swarm paths remain non-executing.
+
 ## v0.1.0 - Released
 
 v0.1.0 is the first open-source MVP release for RaptorCode.

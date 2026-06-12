@@ -156,6 +156,25 @@ Current permission policy controls:
 - This permission policy code was implemented early and is frozen until after v0.1 unless BOB explicitly approves a narrow change directly required for the v0.1 demo.
 - Policy enforcement hooks must not be implemented before v0.1.
 
+## Live Swarm Agentic Mode
+
+Date: 2026-06-12
+Author: Bob Vasic
+Company: RaptorLabs.dev
+
+`raptor swarm run "mission"` and the interactive `/swarm <mission>` REPL command launch the live multi-agent implementation path. Unlike the planning-only and proposal-only swarm paths, live swarm agents execute model-requested tools.
+
+- `/swarm` is available only after the per-session agentic file-system consent; `raptor swarm run` refuses non-interactive terminals and `CI=true` environments.
+- The live swarm refuses to run when task or swarm metadata already exists for the derived task id.
+- Each role agent runs on its own thread inside its own isolated git worktree under `.raptor/worktrees/<task-id>/<role>/`, created through the validated worktree creation path.
+- Each worker constructs its own `ToolPolicy` rooted at its canonicalized worktree: writes outside the worktree require explicit developer confirmation, the catastrophic-command hard deny-list applies unchanged, and gray-zone shell commands require per-occurrence confirmation.
+- Policy confirmations are forwarded to the dashboard as modal prompts with a reply channel; denial returns a policy error to that agent's model. Quitting the dashboard (`q`/`Esc`) denies queued confirmations and requests a cooperative stop honored at step and tool-call boundaries.
+- Each agent is limited to 100 steps; `run_command` keeps the 120-second timeout with Unix process-group termination.
+- Prompt context per agent is limited to the fixed role system prompt, the developer mission text, and that agent's own conversation and tool-result history; API keys and repository secrets are never included.
+- Live agents reuse the context budget guard, so per-agent history warns and compacts before DeepSeek's documented context limit.
+- Worker outcomes (completed, aborted, failed, files written, steps) are recorded in `.raptor/swarms/<task-id>.toml` with live-run lifecycle statuses for auditability.
+- All resulting changes remain uncommitted inside role worktrees for developer review via `raptor review`, `raptor diff`, `raptor test`, and the supervised merge path.
+
 ## v0.1 Model And Worktree Safety
 
 DeepSeek output remains untrusted.
@@ -354,4 +373,4 @@ Auditability requirements:
 
 ## Current Status
 
-The repository contains a Rust workspace with an implemented CLI router, base `raptor` startup screen, `raptor tui`, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor chat`, `raptor swarm`, `raptor swarm implement <task-id> <role>`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id> [role]`, `raptor diff <task-id> [role]`, `raptor test <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for startup key detection, read-only dashboard rendering, provider metadata inspection, DeepSeek chat, DeepSeek swarm planning artifacts, swarm implementation proposal artifacts, role-aware swarm review/diff inspection, supervised test execution, persisted read-only agent session metadata, permission policy display, task setup, task inspection, lifecycle updates, cleanup, and merge execution. They remain design requirements for future autonomous source modification workflows.
+The repository contains a Rust workspace with an implemented CLI router, base `raptor` startup screen, `raptor tui`, `raptor init`, `raptor doctor`, `raptor provider list`, `raptor chat`, `raptor swarm`, `raptor swarm implement <task-id> <role>`, `raptor swarm run "mission"`, `raptor agent list`, `raptor agent show <id>`, `raptor agent create`, `raptor agent policy`, `raptor task "description"`, `raptor task list`, `raptor task show <id>`, `raptor task abandon <id>`, `raptor task cleanup <id>`, `raptor review <task-id> [role]`, `raptor diff <task-id> [role]`, `raptor test <task-id>`, `raptor merge <task-id>` preflight dry run, and `raptor merge <task-id> --execute` supervised local merge execution. Security controls described here are implemented for startup key detection, read-only dashboard rendering, provider metadata inspection, DeepSeek chat, DeepSeek swarm planning artifacts, swarm implementation proposal artifacts, live swarm agentic execution with per-worktree tool policy, role-aware swarm review/diff inspection, supervised test execution, persisted read-only agent session metadata, permission policy display, task setup, task inspection, lifecycle updates, cleanup, and merge execution. They remain design requirements for future autonomous source modification workflows.

@@ -23,6 +23,7 @@ RaptorCode v0.1 focuses on:
 - Four v0.1 swarm roles: `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent`.
 - DeepSeek-generated role plans written as `RAPTOR_PLAN.md`.
 - DeepSeek-generated supervised implementation proposals written as `RAPTOR_IMPLEMENTATION_PROPOSAL.md`.
+- A live four-specialist agent swarm through `raptor swarm run "mission"` (or `/swarm` in the interactive REPL) implementing in parallel isolated role worktrees under a real-time dashboard, with all changes left uncommitted for review.
 - Role-aware review and diff inspection.
 - Supervised test execution inside validated worktrees.
 - Supervised merge preflight and explicit local merge execution.
@@ -138,6 +139,12 @@ Generate an implementation proposal for one role:
 raptor swarm implement <task-id> frontend-agent
 ```
 
+Run the live four-specialist agent swarm with the real-time dashboard:
+
+```bash
+raptor swarm run "Build a SaaS landing page with auth"
+```
+
 Review, diff, and test the work:
 
 ```bash
@@ -172,6 +179,7 @@ raptor agent policy
 raptor chat "Explain this project"
 raptor swarm "Add GitHub OAuth to this Next.js app"
 raptor swarm implement <task-id> frontend-agent
+raptor swarm run "Build a SaaS landing page with auth"
 raptor review <task-id>
 raptor diff <task-id>
 raptor test <task-id>
@@ -198,6 +206,7 @@ raptor task abandon <id>
 raptor task cleanup <id>
 raptor swarm "task description"
 raptor swarm implement <task-id> <role>
+raptor swarm run "mission description"
 raptor review <task-id> [role]
 raptor diff <task-id> [role]
 raptor test <task-id> [-- <command>]
@@ -223,9 +232,9 @@ Current v0.1 controls:
 - `raptor swarm` sends only the task description and role prompt to DeepSeek.
 - `raptor swarm` writes only `RAPTOR_PLAN.md` planning artifacts in role worktrees.
 - `raptor swarm implement` writes only `RAPTOR_IMPLEMENTATION_PROPOSAL.md` in the selected role worktree.
-- Model output is never executed.
-- Patches are not applied automatically.
-- Source files are not automatically modified by model output.
+- Model output is never executed in the planning (`raptor swarm`) and proposal (`raptor swarm implement`) paths.
+- Patches are not applied automatically in those paths.
+- `raptor swarm run` and consent-gated interactive agentic mode execute model-requested tools under the interactive tool policy, inside isolated role worktrees for the swarm, with all changes left uncommitted for developer review.
 - The dashboard is read-only and performs no model calls, shell execution, metadata writes, commits, merges, or pushes.
 - Merge execution requires explicit `--execute` and exact typed confirmation.
 - Policy enforcement hooks are not implemented in v0.1.
