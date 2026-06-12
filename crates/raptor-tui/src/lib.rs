@@ -15,6 +15,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::{Frame, Terminal};
 
+mod swarm_dashboard;
+
+pub use swarm_dashboard::{
+    apply_swarm_event, render_swarm_snapshot, run_swarm_dashboard, SwarmAgentPhase,
+    SwarmAgentUiState, SwarmDashboardState, SwarmUiEvent,
+};
+
 pub const CRATE_PURPOSE: &str = "Terminal user interface boundaries for RaptorCode.";
 pub const RAPTOR_LABS_URL: &str = "https://raptorlabs.dev";
 
