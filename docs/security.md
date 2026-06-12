@@ -175,6 +175,25 @@ Company: RaptorLabs.dev
 - Worker outcomes (completed, aborted, failed, files written, steps) are recorded in `.raptor/swarms/<task-id>.toml` with live-run lifecycle statuses for auditability.
 - All resulting changes remain uncommitted inside role worktrees for developer review via `raptor review`, `raptor diff`, `raptor test`, and the supervised merge path.
 
+## Prompt IP Defense Layers
+
+Date: 2026-06-12
+Author: Bob Vasic
+Company: RaptorLabs.dev
+
+RaptorCode's system prompts (agent rules, swarm personas, planning and proposal instructions) are RaptorLabs proprietary IP. Three client-side defense layers are implemented; their honest limits are documented because no client-only mechanism makes prompts unextractable.
+
+- Layer 1 — anti-disclosure directives: every composed system prompt ends with a confidentiality directive (in `raptor-cli::prompts`) that forbids revealing, quoting, paraphrasing, summarizing, translating, reformatting, or encoding the instructions through any output channel, names common jailbreak framings to refuse, instructs a brief refusal plus continuation of the legitimate task, and embeds the non-secret `RPTR-IPC` canary token.
+- Layer 2 — output leak guard: `raptor-cli::prompt_guard` scans model output for the canary token and for normalized verbatim fragments (lowercased, whitespace-collapsed, sentence-level, 40-120 chars) of every protected prompt text, and replaces matches with a redaction marker before rendering. Enforced for interactive chat (streamed via a holdback-window stream redactor, and non-streamed), interactive agent final text, scripted `raptor chat`, swarm `RAPTOR_PLAN.md` and `RAPTOR_IMPLEMENTATION_PROPOSAL.md` artifacts before writing, and live swarm worker completion summaries.
+- Layer 3 — at-rest obfuscation: prompt literals are XOR-encoded at compile time (`obfuscated_prompt!` in `raptor-cli::prompts`) so only encoded bytes exist in the shipped binary; `strings`-style extraction was verified to return no prompt text on the release binary. Decoding happens in memory at runtime.
+
+Known limitations:
+
+- Prompt injection is unsolved industry-wide; layer 1 deters casual extraction only.
+- Layer 2 matches verbatim fragments; paraphrased leakage and fragments under 40 normalized characters pass through. Redaction inside JSON-mode output favors safety over JSON validity. Live swarm agents could still write leaked text into worktree files through tools; artifact filtering covers only the planning/proposal paths.
+- Layer 3 is obscurity, not cryptography: a debugger, an instrumented build, or a local HTTPS proxy observing the DeepSeek request (sent with the user's own key) can still recover prompts.
+- The real containment is layer 4 — a RaptorLabs API gateway injecting prompts server-side so they never ship in the binary. It is explicitly out of scope until BOB green-lights hosting and billing decisions.
+
 ## v0.1 Model And Worktree Safety
 
 DeepSeek output remains untrusted.

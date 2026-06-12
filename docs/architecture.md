@@ -79,6 +79,8 @@ The second cleanup slice (2026-06-12) extracted the interactive agent tool bound
 
 The third cleanup slice (2026-06-12) added `raptor-cli::tool_policy`, a pure-decision module evaluated before every interactive agent tool call. It enforces workspace-scoped file writes with a one-time per-session override prompt, a small hard deny-list for unambiguously destructive shell commands, and confirm-on-prompt handling for gray-zone commands. Decisions are pure and unit-tested; `raptor-cli/src/lib.rs` owns the confirmation prompt and result rendering. See `docs/security.md` for the enforced policy details.
 
+The fourth slice (2026-06-12) added the prompt IP defense boundary: `raptor-cli::prompts` is the single owner of every proprietary system prompt, composing each with the anti-disclosure confidentiality directive and storing the literals XOR-obfuscated at compile time, and `raptor-cli::prompt_guard` redacts verbatim prompt leakage (canary token plus normalized fragments) from model output before rendering, including a holdback-window stream redactor for streamed responses. `lib.rs` and `swarm_orchestrator.rs` request composed prompts and redaction from these modules and no longer embed prompt text. See `docs/security.md` Prompt IP Defense Layers for controls and limitations.
+
 ## Swarm MVP Boundary
 
 The v0.1 swarm implementation proposal MVP is deliberately limited to metadata, worktree orchestration, planning artifacts, and proposal artifacts.

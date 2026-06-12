@@ -15,10 +15,12 @@ All notable RaptorCode changes will be documented in this file.
 - Ultrathink session defaults: thinking mode enabled and maximum reasoning effort from session start in chat and agentic mode.
 - Live swarm TUI dashboard with four specialist panels, live status one-liners, an activity feed, aggregated token usage, and policy confirmation modals.
 - Live swarm orchestrator: `raptor swarm run "mission"` and interactive `/swarm <mission>` spawn four live specialist agents (frontend, backend, test, security) in parallel isolated worktrees with worktree-scoped tool policy; outcomes are recorded in swarm metadata and all changes are left uncommitted for review.
+- Prompt IP defense layers: anti-disclosure confidentiality directives with an embedded canary token in every system prompt, a canary and verbatim-fragment leak guard that redacts system-prompt leakage from chat, agent, swarm artifact, and swarm summary output (including streamed responses), and compile-time XOR obfuscation of prompt strings at rest in the binary.
 
 ### Safety Notes
 
 - Live swarm agents and interactive agentic mode execute model-requested tools only after explicit developer consent and under the interactive tool policy; the planning and proposal swarm paths remain non-executing.
+- Prompt obfuscation and output redaction raise extraction cost but are not cryptographic protection; see docs/security.md Prompt IP Defense Layers for limitations.
 
 ## v0.1.0 - Released
 
