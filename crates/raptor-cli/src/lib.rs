@@ -899,12 +899,11 @@ pub fn run_interactive_chat(
         .default_model()
         .cloned()
         .ok_or_else(|| CliError::new("DeepSeek provider has no default model"))?;
+    // Ultrathink defaults: thinking mode enabled (provider default) and maximum
+    // reasoning effort from session start in both chat and agentic mode.
+    // /thinking and /effort remain available to back off.
     let mut request_options =
-        DeepSeekRequestOptions::default().with_reasoning_effort(if agent_mode {
-            DeepSeekReasoningEffort::Max
-        } else {
-            DeepSeekReasoningEffort::High
-        });
+        DeepSeekRequestOptions::default().with_reasoning_effort(DeepSeekReasoningEffort::Max);
     let mut streaming_enabled = true;
     let mut json_mode = false;
 
