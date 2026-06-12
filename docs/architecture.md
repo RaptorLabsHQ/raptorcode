@@ -75,6 +75,8 @@ Future refactors should preserve these boundaries:
 
 The first cleanup slice extracted DeepSeek context-budget decisions into `raptor-cli::context_budget`. That module owns token totals, warning thresholds, chat compaction, and agent compaction decisions. `raptor-cli/src/lib.rs` now only renders the resulting terminal notices. This is the preferred SOLID direction for upcoming iterations: isolate one reason to change, keep public behavior stable, and add focused tests around the extracted boundary.
 
+The second cleanup slice (2026-06-12) extracted the interactive agent tool boundary into `raptor-cli::agent_tools`. That module owns the local tool definitions sent to DeepSeek, tool-call execution (`write_file`, `read_file`, `list_directory`, `create_directory`, `change_directory`, `run_command`), tool path resolution, the 120-second shell timeout with Unix process-group termination, and the human-readable tool-call descriptions shown in the spinner. Behavior is unchanged: the per-session consent prompt stays in `raptor-cli/src/lib.rs`, and the extracted functions are crate-private. This module is the single privileged local-execution boundary and is where explicit path/command policy hooks must be added before any new tools are introduced.
+
 ## Swarm MVP Boundary
 
 The v0.1 swarm implementation proposal MVP is deliberately limited to metadata, worktree orchestration, planning artifacts, and proposal artifacts.
