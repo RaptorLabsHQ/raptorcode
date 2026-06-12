@@ -107,8 +107,6 @@ pub(crate) fn swarm_role_system_prompt(role: &str) -> String {
 /// Every proprietary prompt text protected by the output leak guard
 /// (IP defense layer 2). Fragments of these texts appearing verbatim in
 /// model output are treated as system-prompt leakage.
-// Consumed by the prompt_guard module in the layer 2 slice.
-#[allow(dead_code)]
 pub(crate) fn protected_prompt_texts() -> Vec<String> {
     vec![
         CHAT_BASE.to_owned(),

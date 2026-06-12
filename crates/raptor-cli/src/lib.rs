@@ -12,12 +12,14 @@ use std::time::Duration;
 
 mod agent_tools;
 mod context_budget;
+mod prompt_guard;
 mod prompts;
 mod swarm_orchestrator;
 mod tool_policy;
 
 use agent_tools::{build_agent_tools, describe_tool_call, execute_tool_call};
 use context_budget::ContextBudgetState;
+use prompt_guard::{PromptGuard, StreamRedactor};
 use raptor_agent::{
     build_role_planning_prompt, role_prompt_template, AgentId, AgentRole, AgentSession,
     PermissionPolicy,
@@ -38,10 +40,10 @@ use raptor_git::{
 };
 use raptor_providers::{
     AgentMessage, AgentStep, AgentStepResult, CompletionMessage, CompletionRequest,
-    CompletionResponse, CompletionStreamDelta, DeepSeekProvider, DeepSeekReasoningEffort,
-    DeepSeekRequestOptions, DeepSeekResponseFormat, DeepSeekThinkingMode, ModelId, Provider,
-    ProviderCatalog, ProviderConfiguration, ProviderError, ProviderId, ProviderSummary, TokenUsage,
-    ToolDefinition, DEEPSEEK_API_KEY_ENV, DEEPSEEK_API_KEY_URL,
+    CompletionResponse, DeepSeekProvider, DeepSeekReasoningEffort, DeepSeekRequestOptions,
+    DeepSeekResponseFormat, DeepSeekThinkingMode, ModelId, Provider, ProviderCatalog,
+    ProviderConfiguration, ProviderError, ProviderId, ProviderSummary, TokenUsage, ToolDefinition,
+    DEEPSEEK_API_KEY_ENV, DEEPSEEK_API_KEY_URL,
 };
 use raptor_store::{
     init_project_config, list_agent_sessions, list_swarm_metadata, list_task_metadata,
@@ -817,9 +819,10 @@ pub fn chat_with_provider(message: &str, provider: &dyn Provider) -> Result<Stri
             CompletionMessage::user(message),
         ],
     );
-    let response = provider
+    let mut response = provider
         .complete(request)
         .map_err(|error| CliError::new(error.to_string()))?;
+    response.content = PromptGuard::from_prompts().redact(&response.content);
 
     Ok(render_chat_response(&response))
 }
@@ -927,6 +930,7 @@ pub fn run_interactive_chat(
     let tools = build_agent_tools();
     let mut agent_working_dir = current_dir.to_path_buf();
     let mut context_budget = ContextBudgetState::default();
+    let prompt_guard = PromptGuard::from_prompts();
     let mut agent_tool_policy = ToolPolicy::new(
         current_dir
             .canonicalize()
@@ -1210,6 +1214,7 @@ pub fn run_interactive_chat(
             let mut agent_loop_context = AgentLoopContext {
                 context_budget: &mut context_budget,
                 model_id: &model_id,
+                prompt_guard: &prompt_guard,
                 provider: &provider,
                 request_options: &request_options,
                 streaming_enabled,
@@ -1226,7 +1231,7 @@ pub fn run_interactive_chat(
                     if output.streamed {
                         println!("\n");
                     } else {
-                        println!("{content}\n");
+                        println!("{}\n", prompt_guard.redact(&content));
                     }
                     if let Some(usage) = output.usage.as_ref() {
                         println!(
@@ -1273,9 +1278,19 @@ pub fn run_interactive_chat(
             let response = if streaming_enabled {
                 print!("  {C_DIM}Streaming DeepSeek response...{C_RESET}\n\n");
                 std::io::stdout().flush().ok();
-                provider.complete_streaming(request, |delta| {
-                    print_stream_delta(delta);
-                })
+                let mut redactor = StreamRedactor::new(&prompt_guard);
+                let response = provider.complete_streaming(request, |delta| {
+                    if delta.reasoning_content.is_some() {
+                        return;
+                    }
+                    if let Some(content) = delta.content {
+                        print!("{}", redactor.push(&content));
+                        std::io::stdout().flush().ok();
+                    }
+                });
+                print!("{}", redactor.finish());
+                std::io::stdout().flush().ok();
+                response
             } else {
                 provider.complete(request)
             };
@@ -1286,7 +1301,7 @@ pub fn run_interactive_chat(
                     if streaming_enabled {
                         println!("\n");
                     } else {
-                        println!("{content}\n");
+                        println!("{}\n", prompt_guard.redact(&content));
                     }
                     if let Some(usage) = response.usage.as_ref() {
                         println!(
@@ -1345,17 +1360,6 @@ fn read_boxed_agent_prompt_line(color_mode: ColorMode) -> std::io::Result<Option
         Ok(0) => Ok(None),
         Ok(_) => Ok(Some(input.trim().to_owned())),
         Err(error) => Err(error),
-    }
-}
-
-fn print_stream_delta(delta: CompletionStreamDelta) {
-    if delta.reasoning_content.is_some() {
-        return;
-    }
-
-    if let Some(content) = delta.content {
-        print!("{content}");
-        std::io::stdout().flush().ok();
     }
 }
 
@@ -1597,6 +1601,7 @@ struct AgentLoopOutput {
 struct AgentLoopContext<'a> {
     context_budget: &'a mut context_budget::ContextBudgetState,
     model_id: &'a ModelId,
+    prompt_guard: &'a PromptGuard,
     provider: &'a DeepSeekProvider,
     request_options: &'a DeepSeekRequestOptions,
     streaming_enabled: bool,
@@ -1656,7 +1661,8 @@ fn run_agent_loop(
         let step = if context.streaming_enabled {
             print!("  {C_DIM}Streaming DeepSeek agent response...{C_RESET}\n\n");
             std::io::stdout().flush().ok();
-            context.provider.complete_agent_step_streaming(
+            let mut redactor = StreamRedactor::new(context.prompt_guard);
+            let step = context.provider.complete_agent_step_streaming(
                 context.model_id,
                 history,
                 context.tools,
@@ -1665,9 +1671,18 @@ fn run_agent_loop(
                     if delta.content.is_some() {
                         streamed_text = true;
                     }
-                    print_stream_delta(delta);
+                    if delta.reasoning_content.is_some() {
+                        return;
+                    }
+                    if let Some(content) = delta.content {
+                        print!("{}", redactor.push(&content));
+                        std::io::stdout().flush().ok();
+                    }
                 },
-            )
+            );
+            print!("{}", redactor.finish());
+            std::io::stdout().flush().ok();
+            step
         } else {
             let spinner = Spinner::start("Thinking...");
             let step = context.provider.complete_agent_step(
@@ -2152,6 +2167,7 @@ fn plan_swarm_agents(
         .default_model()
         .cloned()
         .ok_or_else(|| CliError::new("DeepSeek provider has no default model configured"))?;
+    let guard = PromptGuard::from_prompts();
     let mut failed_roles = Vec::new();
 
     for agent in &mut metadata.agents {
@@ -2167,7 +2183,8 @@ fn plan_swarm_agents(
         );
 
         match provider.complete(request) {
-            Ok(response) => {
+            Ok(mut response) => {
+                response.content = guard.redact(&response.content);
                 let plan_file_path = plan_file_path_for_agent(
                     repository_root.path(),
                     task_id.as_str(),
@@ -2474,13 +2491,14 @@ fn generate_swarm_implementation_proposal(
             CompletionMessage::user(prompt),
         ],
     );
-    let response = match provider.complete(request) {
+    let mut response = match provider.complete(request) {
         Ok(response) => response,
         Err(error) => {
             mark_swarm_role_implementation_failed(repository_root, metadata, agent_index)?;
             return Err(CliError::new(error.to_string()));
         }
     };
+    response.content = PromptGuard::from_prompts().redact(&response.content);
     let proposal_file_path =
         proposal_file_path_for_agent(repository_root, task_id, role, &agent.worktree_path)?;
     let proposal = render_swarm_implementation_proposal(task_id, role, &response);
