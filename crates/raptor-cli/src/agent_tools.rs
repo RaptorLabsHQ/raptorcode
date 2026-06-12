@@ -124,7 +124,7 @@ fn describe_shell_command(cmd: &str) -> String {
     }
 }
 
-fn resolve_tool_path(working_dir: &Path, path_str: &str) -> PathBuf {
+pub(crate) fn resolve_tool_path(working_dir: &Path, path_str: &str) -> PathBuf {
     let path = Path::new(path_str);
     if path.is_absolute() {
         path.to_path_buf()

@@ -12,6 +12,7 @@ use std::time::Duration;
 
 mod agent_tools;
 mod context_budget;
+mod tool_policy;
 
 use agent_tools::{build_agent_tools, describe_tool_call, execute_tool_call};
 use context_budget::ContextBudgetState;
@@ -58,6 +59,7 @@ use raptor_tui::{
     AgentDashboardSummary, ColorMode, DashboardState, StartupBannerOptions, SwarmDashboardSummary,
     TaskDashboardSummary,
 };
+use tool_policy::{ConfirmationKind, PolicyDecision, ToolPolicy};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
@@ -929,6 +931,11 @@ pub fn run_interactive_chat(
     let tools = build_agent_tools();
     let mut agent_working_dir = current_dir.to_path_buf();
     let mut context_budget = ContextBudgetState::default();
+    let mut agent_tool_policy = ToolPolicy::new(
+        current_dir
+            .canonicalize()
+            .unwrap_or_else(|_| current_dir.to_path_buf()),
+    );
 
     let mut agent_history: Vec<AgentMessage> = vec![agent_system_message(current_dir, json_mode)];
     let mut chat_history: Vec<CompletionMessage> =
@@ -1176,6 +1183,7 @@ pub fn run_interactive_chat(
                 provider: &provider,
                 request_options: &request_options,
                 streaming_enabled,
+                tool_policy: &mut agent_tool_policy,
                 tools: &tools,
             };
             match run_agent_loop(
@@ -1487,6 +1495,24 @@ fn prompt_file_access_consent(_current_dir: &Path) -> bool {
     answer == "y" || answer == "yes"
 }
 
+fn prompt_tool_policy_confirmation(message: &str) -> bool {
+    use std::io::Write as _;
+
+    println!();
+    println!("  {C_YELLOW_BOLD}⚠  Policy check{C_RESET}");
+    println!("  {message}");
+    print!("  Allow? [y/{C_DIM}N{C_RESET}]: ");
+    std::io::stdout().flush().ok();
+
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).is_err() {
+        return false;
+    }
+
+    let answer = answer.trim().to_lowercase();
+    answer == "y" || answer == "yes"
+}
+
 const HACKING_QUOTES_RAW: &str = include_str!("../../../assets/200_hacking_quotes.md");
 
 static HACKING_QUOTES: OnceLock<Vec<String>> = OnceLock::new();
@@ -1544,6 +1570,7 @@ struct AgentLoopContext<'a> {
     provider: &'a DeepSeekProvider,
     request_options: &'a DeepSeekRequestOptions,
     streaming_enabled: bool,
+    tool_policy: &'a mut ToolPolicy,
     tools: &'a [ToolDefinition],
 }
 
@@ -1654,14 +1681,58 @@ fn run_agent_loop(
                     println!("  {C_DIM}→ {action}{C_RESET}");
                     std::io::stdout().flush().ok();
 
-                    let spinner = Spinner::start(action.clone());
-                    let result = execute_tool_call(working_dir, &call.name, &call.arguments);
-                    spinner.stop();
+                    let mut approved = true;
+                    let result = match context.tool_policy.evaluate(
+                        working_dir,
+                        &call.name,
+                        &call.arguments,
+                    ) {
+                        PolicyDecision::Deny { reason } => {
+                            approved = false;
+                            println!(
+                                "  {C_RED}✗ blocked by policy{C_RESET}  {C_DIM}{reason}{C_RESET}"
+                            );
+                            format!(
+                                "error: blocked by RaptorCode policy ({reason}). Choose a safer approach and continue."
+                            )
+                        }
+                        PolicyDecision::Confirm(request) => {
+                            if prompt_tool_policy_confirmation(&request.message) {
+                                if request.kind == ConfirmationKind::OutsideWorkspaceWrite {
+                                    context.tool_policy.allow_outside_writes_for_session();
+                                    println!(
+                                        "  {C_DIM}Outside-workspace writes allowed for this session.{C_RESET}"
+                                    );
+                                }
+                                let spinner = Spinner::start(action.clone());
+                                let result =
+                                    execute_tool_call(working_dir, &call.name, &call.arguments);
+                                spinner.stop();
+                                result
+                            } else {
+                                approved = false;
+                                println!("  {C_RED}✗ denied by developer{C_RESET}");
+                                format!(
+                                    "error: the developer declined this action ({}). Ask for guidance or choose a different approach.",
+                                    request.message
+                                )
+                            }
+                        }
+                        PolicyDecision::Allow => {
+                            let spinner = Spinner::start(action.clone());
+                            let result =
+                                execute_tool_call(working_dir, &call.name, &call.arguments);
+                            spinner.stop();
+                            result
+                        }
+                    };
 
-                    if result.starts_with("error:") {
-                        println!("  {C_RED}✗ action needs adjustment{C_RESET}");
-                    } else {
-                        println!("  {C_GREEN}✓ done{C_RESET}");
+                    if approved {
+                        if result.starts_with("error:") {
+                            println!("  {C_RED}✗ action needs adjustment{C_RESET}");
+                        } else {
+                            println!("  {C_GREEN}✓ done{C_RESET}");
+                        }
                     }
 
                     history.push(AgentMessage {

@@ -105,7 +105,31 @@ Interactive agentic mode has a broader trust boundary than the metadata-only `ra
 - Shell commands run with a 120-second timeout and Unix process-group termination to reduce orphaned process risk.
 - Tool results are appended to provider history as tool messages for auditability inside the active session.
 - DeepSeek usage telemetry is monitored; context warnings and local compaction reduce runaway context growth.
-- Future hardening should move tool execution into its own module with explicit path and command policy hooks before adding more tools.
+
+## Interactive Tool Policy Hooks
+
+Date: 2026-06-12
+Author: Bob Vasic
+Company: RaptorLabs.dev
+
+Tool execution now lives in the dedicated `raptor-cli::agent_tools` module, and every interactive agent tool call passes through `raptor-cli::tool_policy` before execution. The policy decisions were approved by BOB and are enforced in `run_agent_loop` before the spinner starts, so confirmation prompts are interactive and auditable.
+
+File write policy:
+
+- `write_file` and `create_directory` targets are resolved against the agent working directory and lexically normalized (`.` and `..`) so non-existent targets can be compared.
+- Writes inside the workspace root (the directory where `raptor` was launched, canonicalized at session start) are allowed.
+- The first write attempt outside the workspace prompts the developer explicitly; approval applies for the rest of the session, denial returns a policy error to the model without executing.
+- `read_file` and `list_directory` remain unrestricted reads under the existing session consent.
+- Known limitation: normalization is lexical, so a symlink inside the workspace pointing outside it can bypass the boundary; shell commands can also write anywhere, which the command policy below only partially mitigates.
+
+Shell command policy (`run_command`):
+
+- Hard deny-list, never executed: recursive deletion of the filesystem root (including `--no-preserve-root` and `/*`), `mkfs*`, `dd of=/dev/*`, output redirection onto block devices, recursive `chmod`/`chown` on `/`, and fork-bomb patterns. Denials are reported to the developer and returned to the model as policy errors.
+- Confirm-on-prompt gray zone: `sudo`/`doas`, recursive force deletes targeting absolute paths or the home directory, `git push --force` (including `--force-with-lease`), and power-cycle commands (`shutdown`, `reboot`, `poweroff`, `halt`). The developer approves or denies each occurrence; denial returns a policy error to the model.
+- Commands are split on shell separators and each segment is evaluated; the most severe decision wins, and `sudo`-wrapped segments are also evaluated without the prefix so hard denials cannot hide behind privilege escalation.
+- Everything else executes as before under the session consent, 120-second timeout, and process-group termination.
+
+The deny-list is intentionally small and unambiguous. It is a safety net for catastrophic operations, not a sandbox; the per-session consent prompt remains the primary trust boundary, and `raptor-sandbox` remains the future home for stronger isolation.
 
 Current agent controls:
 

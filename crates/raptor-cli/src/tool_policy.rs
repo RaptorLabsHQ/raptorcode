@@ -1,0 +1,459 @@
+use std::path::{Component, Path, PathBuf};
+
+use crate::agent_tools::resolve_tool_path;
+
+/// Policy boundary for interactive agent tool execution.
+///
+/// File writes are workspace-scoped by default: writing outside the directory
+/// where `raptor` was launched requires one explicit developer confirmation,
+/// which then applies for the rest of the session. Shell commands pass through
+/// a small hard deny-list for unambiguously destructive operations and a
+/// confirm-on-prompt list for gray-zone operations.
+pub(crate) struct ToolPolicy {
+    outside_writes_allowed: bool,
+    workspace_root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PolicyDecision {
+    Allow,
+    Confirm(ConfirmationRequest),
+    Deny { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConfirmationRequest {
+    pub(crate) kind: ConfirmationKind,
+    pub(crate) message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConfirmationKind {
+    OutsideWorkspaceWrite,
+    ShellCommand,
+}
+
+impl ToolPolicy {
+    pub(crate) fn new(workspace_root: PathBuf) -> Self {
+        Self {
+            outside_writes_allowed: false,
+            workspace_root: normalize_path(&workspace_root),
+        }
+    }
+
+    pub(crate) fn allow_outside_writes_for_session(&mut self) {
+        self.outside_writes_allowed = true;
+    }
+
+    pub(crate) fn evaluate(
+        &self,
+        working_dir: &Path,
+        tool_name: &str,
+        arguments: &str,
+    ) -> PolicyDecision {
+        let Ok(args) = serde_json::from_str::<serde_json::Value>(arguments) else {
+            // Malformed arguments are allowed through so tool execution can
+            // report its own argument error back to the model.
+            return PolicyDecision::Allow;
+        };
+
+        match tool_name {
+            "write_file" | "create_directory" => {
+                let Some(path_str) = args["path"].as_str() else {
+                    return PolicyDecision::Allow;
+                };
+                self.evaluate_write_target(working_dir, path_str)
+            }
+            "run_command" => {
+                let Some(command) = args["command"].as_str() else {
+                    return PolicyDecision::Allow;
+                };
+                evaluate_shell_command(command)
+            }
+            _ => PolicyDecision::Allow,
+        }
+    }
+
+    fn evaluate_write_target(&self, working_dir: &Path, path_str: &str) -> PolicyDecision {
+        if self.outside_writes_allowed {
+            return PolicyDecision::Allow;
+        }
+
+        let target = normalize_path(&resolve_tool_path(working_dir, path_str));
+        if target.starts_with(&self.workspace_root) {
+            return PolicyDecision::Allow;
+        }
+
+        PolicyDecision::Confirm(ConfirmationRequest {
+            kind: ConfirmationKind::OutsideWorkspaceWrite,
+            message: format!(
+                "The agent wants to write outside the workspace: {}. Allow writes outside the workspace for the rest of this session?",
+                target.display()
+            ),
+        })
+    }
+}
+
+/// Lexically normalizes `.` and `..` components so non-existent targets can be
+/// compared against the workspace root. Symlink escapes are documented as a
+/// known limitation of this boundary.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::CurDir => {}
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn evaluate_shell_command(command: &str) -> PolicyDecision {
+    if command.contains(":(){") || command.contains(":|:&") {
+        return PolicyDecision::Deny {
+            reason: "fork bomb pattern".to_owned(),
+        };
+    }
+
+    let mut worst = PolicyDecision::Allow;
+    for segment in split_shell_segments(command) {
+        let decision = evaluate_shell_segment(&segment);
+        worst = worse_decision(worst, decision);
+    }
+    worst
+}
+
+fn split_shell_segments(command: &str) -> Vec<String> {
+    command
+        .split([';', '|', '&'])
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn worse_decision(left: PolicyDecision, right: PolicyDecision) -> PolicyDecision {
+    match (&left, &right) {
+        (PolicyDecision::Deny { .. }, _) => left,
+        (_, PolicyDecision::Deny { .. }) => right,
+        (PolicyDecision::Confirm(_), _) => left,
+        (_, PolicyDecision::Confirm(_)) => right,
+        _ => left,
+    }
+}
+
+fn evaluate_shell_segment(segment: &str) -> PolicyDecision {
+    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    let Some(&first) = tokens.first() else {
+        return PolicyDecision::Allow;
+    };
+
+    if let Some(decision) = evaluate_redirect_targets(&tokens) {
+        return decision;
+    }
+
+    match first {
+        "sudo" | "doas" => {
+            let nested = tokens[1..].join(" ");
+            let nested_decision = if nested.is_empty() {
+                PolicyDecision::Allow
+            } else {
+                evaluate_shell_segment(&nested)
+            };
+            worse_decision(
+                nested_decision,
+                PolicyDecision::Confirm(ConfirmationRequest {
+                    kind: ConfirmationKind::ShellCommand,
+                    message: format!("The agent wants to run a privileged command: {segment}"),
+                }),
+            )
+        }
+        "rm" => evaluate_rm(&tokens, segment),
+        "dd" => {
+            if tokens.iter().any(|t| t.starts_with("of=/dev/")) {
+                PolicyDecision::Deny {
+                    reason: format!("writes directly to a device: {segment}"),
+                }
+            } else {
+                PolicyDecision::Allow
+            }
+        }
+        "chmod" | "chown" => {
+            let recursive = tokens[1..].iter().any(|t| {
+                *t == "--recursive"
+                    || (t.starts_with('-') && !t.starts_with("--") && t.contains('R'))
+            });
+            let targets_root = tokens[1..].contains(&"/");
+            if recursive && targets_root {
+                PolicyDecision::Deny {
+                    reason: format!(
+                        "recursively changes permissions on the filesystem root: {segment}"
+                    ),
+                }
+            } else {
+                PolicyDecision::Allow
+            }
+        }
+        "shutdown" | "reboot" | "poweroff" | "halt" => {
+            PolicyDecision::Confirm(ConfirmationRequest {
+                kind: ConfirmationKind::ShellCommand,
+                message: format!("The agent wants to power-cycle this machine: {segment}"),
+            })
+        }
+        "git" => {
+            let is_push = tokens.contains(&"push");
+            let is_force = tokens
+                .iter()
+                .any(|t| *t == "--force" || *t == "-f" || t.starts_with("--force-with-lease"));
+            if is_push && is_force {
+                PolicyDecision::Confirm(ConfirmationRequest {
+                    kind: ConfirmationKind::ShellCommand,
+                    message: format!("The agent wants to force-push: {segment}"),
+                })
+            } else {
+                PolicyDecision::Allow
+            }
+        }
+        token if token.starts_with("mkfs") => PolicyDecision::Deny {
+            reason: format!("formats a filesystem: {segment}"),
+        },
+        _ => PolicyDecision::Allow,
+    }
+}
+
+fn evaluate_redirect_targets(tokens: &[&str]) -> Option<PolicyDecision> {
+    const BLOCK_DEVICE_PREFIXES: [&str; 5] =
+        ["/dev/sd", "/dev/nvme", "/dev/vd", "/dev/hd", "/dev/mmcblk"];
+
+    let mut redirect_targets: Vec<&str> = Vec::new();
+    let mut expect_target = false;
+    for token in tokens {
+        if expect_target {
+            redirect_targets.push(token);
+            expect_target = false;
+            continue;
+        }
+        if *token == ">" || *token == ">>" {
+            expect_target = true;
+        } else if let Some(target) = token.strip_prefix(">>").or_else(|| token.strip_prefix('>')) {
+            if !target.is_empty() {
+                redirect_targets.push(target);
+            } else {
+                expect_target = true;
+            }
+        }
+    }
+
+    for target in redirect_targets {
+        if BLOCK_DEVICE_PREFIXES
+            .iter()
+            .any(|prefix| target.starts_with(prefix))
+        {
+            return Some(PolicyDecision::Deny {
+                reason: format!("redirects output onto a block device: {target}"),
+            });
+        }
+    }
+    None
+}
+
+fn evaluate_rm(tokens: &[&str], segment: &str) -> PolicyDecision {
+    let mut recursive = false;
+    let mut force = false;
+    let mut no_preserve_root = false;
+    let mut targets: Vec<&str> = Vec::new();
+
+    for token in &tokens[1..] {
+        if *token == "--no-preserve-root" {
+            no_preserve_root = true;
+        } else if *token == "--recursive" {
+            recursive = true;
+        } else if *token == "--force" {
+            force = true;
+        } else if token.starts_with('-') && !token.starts_with("--") {
+            if token.contains('r') || token.contains('R') {
+                recursive = true;
+            }
+            if token.contains('f') {
+                force = true;
+            }
+        } else if !token.starts_with('-') {
+            targets.push(token);
+        }
+    }
+
+    let targets_root = targets.iter().any(|t| *t == "/" || *t == "/*");
+    if no_preserve_root || (recursive && targets_root) {
+        return PolicyDecision::Deny {
+            reason: format!("recursively deletes the filesystem root: {segment}"),
+        };
+    }
+
+    let targets_outside = targets
+        .iter()
+        .any(|t| t.starts_with('/') || *t == "~" || t.starts_with("~/") || t.starts_with("$HOME"));
+    if recursive && force && targets_outside {
+        return PolicyDecision::Confirm(ConfirmationRequest {
+            kind: ConfirmationKind::ShellCommand,
+            message: format!("The agent wants to force-delete outside the workspace: {segment}"),
+        });
+    }
+
+    PolicyDecision::Allow
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workspace_policy() -> ToolPolicy {
+        ToolPolicy::new(PathBuf::from("/work/project"))
+    }
+
+    fn confirm_kind(decision: &PolicyDecision) -> Option<ConfirmationKind> {
+        match decision {
+            PolicyDecision::Confirm(request) => Some(request.kind),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn write_inside_workspace_is_allowed() {
+        let policy = workspace_policy();
+        let decision = policy.evaluate(
+            Path::new("/work/project"),
+            "write_file",
+            "{\"path\":\"src/main.rs\",\"content\":\"x\"}",
+        );
+
+        assert_eq!(decision, PolicyDecision::Allow);
+    }
+
+    #[test]
+    fn write_outside_workspace_requires_confirmation() {
+        let policy = workspace_policy();
+        let decision = policy.evaluate(
+            Path::new("/work/project"),
+            "write_file",
+            "{\"path\":\"/etc/raptor.conf\",\"content\":\"x\"}",
+        );
+
+        assert_eq!(
+            confirm_kind(&decision),
+            Some(ConfirmationKind::OutsideWorkspaceWrite)
+        );
+    }
+
+    #[test]
+    fn parent_traversal_escaping_workspace_requires_confirmation() {
+        let policy = workspace_policy();
+        let decision = policy.evaluate(
+            Path::new("/work/project"),
+            "create_directory",
+            "{\"path\":\"../elsewhere/dir\"}",
+        );
+
+        assert_eq!(
+            confirm_kind(&decision),
+            Some(ConfirmationKind::OutsideWorkspaceWrite)
+        );
+    }
+
+    #[test]
+    fn session_override_allows_outside_writes() {
+        let mut policy = workspace_policy();
+        policy.allow_outside_writes_for_session();
+        let decision = policy.evaluate(
+            Path::new("/work/project"),
+            "write_file",
+            "{\"path\":\"/etc/raptor.conf\",\"content\":\"x\"}",
+        );
+
+        assert_eq!(decision, PolicyDecision::Allow);
+    }
+
+    #[test]
+    fn reads_outside_workspace_are_allowed() {
+        let policy = workspace_policy();
+        let decision = policy.evaluate(
+            Path::new("/work/project"),
+            "read_file",
+            "{\"path\":\"/etc/hosts\"}",
+        );
+
+        assert_eq!(decision, PolicyDecision::Allow);
+    }
+
+    #[test]
+    fn destructive_commands_are_denied() {
+        let policy = workspace_policy();
+        let working_dir = Path::new("/work/project");
+
+        for command in [
+            "rm -rf /",
+            "rm -rf --no-preserve-root /home",
+            "cd /tmp && rm -rf /*",
+            "mkfs.ext4 /dev/sda1",
+            "dd if=/dev/zero of=/dev/sda",
+            "echo gone > /dev/sda",
+            "chmod -R 777 /",
+            ":(){ :|:& };:",
+            "sudo rm -rf /",
+        ] {
+            let arguments = serde_json::json!({ "command": command }).to_string();
+            let decision = policy.evaluate(working_dir, "run_command", &arguments);
+            assert!(
+                matches!(decision, PolicyDecision::Deny { .. }),
+                "expected deny for: {command}, got {decision:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn gray_zone_commands_require_confirmation() {
+        let policy = workspace_policy();
+        let working_dir = Path::new("/work/project");
+
+        for command in [
+            "sudo apt install build-essential",
+            "rm -rf /tmp/scratch",
+            "rm -rf ~/old-project",
+            "git push --force origin main",
+            "reboot",
+        ] {
+            let arguments = serde_json::json!({ "command": command }).to_string();
+            let decision = policy.evaluate(working_dir, "run_command", &arguments);
+            assert_eq!(
+                confirm_kind(&decision),
+                Some(ConfirmationKind::ShellCommand),
+                "expected confirmation for: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_commands_are_allowed() {
+        let policy = workspace_policy();
+        let working_dir = Path::new("/work/project");
+
+        for command in [
+            "cargo build",
+            "npm install",
+            "git push origin main",
+            "rm -rf node_modules",
+            "grep -r raptor src/",
+            "echo done > build.log",
+        ] {
+            let arguments = serde_json::json!({ "command": command }).to_string();
+            let decision = policy.evaluate(working_dir, "run_command", &arguments);
+            assert_eq!(
+                decision,
+                PolicyDecision::Allow,
+                "expected allow for: {command}"
+            );
+        }
+    }
+}
