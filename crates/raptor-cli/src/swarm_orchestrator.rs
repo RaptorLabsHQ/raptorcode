@@ -25,13 +25,6 @@ pub(crate) const SWARM_MAX_STEPS: u32 = 100;
 const AGENT_SPAWN_STAGGER: Duration = Duration::from_millis(300);
 const SUMMARY_EVENT_MAX_CHARS: usize = 200;
 
-const SWARM_AGENT_BASE_PROMPT: &str = "You are RaptorCode, an autonomous specialist engineering agent working inside your own isolated git worktree as part of a four-agent swarm (frontend, backend, test, security) sharing one mission. Work only inside your assigned worktree; all relative paths resolve there. Inspect the existing project with list_directory and read_file before changing anything. Form a concise plan, implement in small coherent increments, and verify with build, lint, or test commands where available. Apply SOLID principles where they improve clarity, write performant, robust, clean code per best practices, and keep changes minimal and purposeful. Use write_file to create or update files directly; never print code instead of writing it. Do not run persistent foreground dev servers. Stay strictly within your specialty and do not duplicate the other specialists' work. When your share of the mission is complete, summarize the files you created or modified and what verification ran.";
-
-const FRONTEND_SPECIALIZATION: &str = "Your specialty is frontend engineering: user interface components, styling, accessibility, and client-side logic. Default to clean, readable, premium, minimal, enterprise-grade design: restrained palettes, strong hierarchy, accessible contrast, practical spacing, and no visual noise unless the mission explicitly requests a different style.";
-const BACKEND_SPECIALIZATION: &str = "Your specialty is backend engineering: APIs, data models, persistence, business logic, and integration points. Validate all external input, handle errors explicitly, and design clear module boundaries.";
-const TEST_SPECIALIZATION: &str = "Your specialty is test engineering: design and write the automated test suites covering the mission's critical paths, including unit and integration tests, and make sure the test commands actually run.";
-const SECURITY_SPECIALIZATION: &str = "Your specialty is security engineering: review the mission's attack surface, harden configuration, validate inputs, avoid secrets in code, and write a SECURITY_NOTES.md in the worktree root recording findings and the fixes you applied within your scope.";
-
 pub(crate) struct LiveSwarmConfig {
     pub api_key: String,
     pub mission: String,
@@ -63,14 +56,7 @@ struct SwarmWorkerConfig {
 }
 
 pub(crate) fn swarm_role_system_prompt(role: &str) -> String {
-    let specialization = match role {
-        "frontend-agent" => FRONTEND_SPECIALIZATION,
-        "backend-agent" => BACKEND_SPECIALIZATION,
-        "test-agent" => TEST_SPECIALIZATION,
-        "security-agent" => SECURITY_SPECIALIZATION,
-        other => return format!("{SWARM_AGENT_BASE_PROMPT} Your specialty is {other}."),
-    };
-    format!("{SWARM_AGENT_BASE_PROMPT} {specialization}")
+    crate::prompts::swarm_role_system_prompt(role)
 }
 
 fn swarm_mission_message(mission: &str, role: &str) -> String {

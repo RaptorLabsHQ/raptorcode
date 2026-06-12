@@ -12,6 +12,7 @@ use std::time::Duration;
 
 mod agent_tools;
 mod context_budget;
+mod prompts;
 mod swarm_orchestrator;
 mod tool_policy;
 
@@ -145,11 +146,6 @@ pub struct CliError {
 const SWARM_PROVIDER_ID: &str = "deepseek";
 const SWARM_PROVIDER_DISPLAY: &str = "DeepSeek";
 const SWARM_MODEL_ID: &str = "deepseek-v4-pro";
-const CHAT_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised coding assistant. Answer the developer's message directly. Do not claim to modify files, run commands, install dependencies, commit, merge, or push.";
-const AGENT_SYSTEM_PROMPT: &str = "You are RaptorCode, an autonomous coding agent for production software engineering. Work sequentially and deliberately: inspect the project, form a concise plan, make small coherent changes, run focused verification, then summarize the result. Coordinate specialist concerns internally like a swarm of frontend, backend, test, and security reviewers, but never perform conflicting parallel file edits. When asked to build or create files, use your tools to write them directly to the working directory; do not print code to the terminal. Use write_file to create or update files, read_file to check existing content, list_directory to explore the project, and create_directory for new folders. Do not run persistent foreground dev servers as blocking commands; prefer build, lint, test, and static inspection commands. For frontend work, default to clean, readable, premium, minimal, enterprise-grade design: restrained palettes, strong hierarchy, accessible contrast, practical spacing, no decorative gradient-heavy button systems, no generic vibecoding visual patterns, and no visual noise unless the user explicitly requests a different style. After completing a task, summarize what files you created or modified and what verification ran.";
-const JSON_OUTPUT_SYSTEM_INSTRUCTION: &str = "JSON output mode is enabled. Respond with valid JSON only. Do not include Markdown fences or prose outside the JSON value. If the user does not provide a schema, return an object with keys \"result\" and \"notes\".";
-const SWARM_PLANNING_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised v0.1 planning assistant for Raptor Labs. Produce role-specific implementation planning only. Do not modify files, execute commands, apply patches, run tests, claim work was completed, or propose Phase 2 features. DeepSeek is the only provider in scope before v0.1.";
-const SWARM_IMPLEMENTATION_SYSTEM_PROMPT: &str = "You are RaptorCode, a supervised v0.1 implementation proposal assistant for Raptor Labs. Produce a safe, reviewable implementation proposal only. Do not claim files were modified. Do not execute commands. Do not apply patches. Do not instruct RaptorCode to modify source files automatically. DeepSeek is the only provider in scope before v0.1.";
 const RAPTOR_PLAN_FILE_NAME: &str = "RAPTOR_PLAN.md";
 const RAPTOR_IMPLEMENTATION_PROPOSAL_FILE_NAME: &str = "RAPTOR_IMPLEMENTATION_PROPOSAL.md";
 
@@ -817,7 +813,7 @@ pub fn chat_with_provider(message: &str, provider: &dyn Provider) -> Result<Stri
         provider.id().clone(),
         model_id,
         vec![
-            CompletionMessage::system(CHAT_SYSTEM_PROMPT),
+            CompletionMessage::system(prompts::chat_system_prompt(false)),
             CompletionMessage::user(message),
         ],
     );
@@ -829,23 +825,11 @@ pub fn chat_with_provider(message: &str, provider: &dyn Provider) -> Result<Stri
 }
 
 fn chat_system_prompt(json_mode: bool) -> String {
-    if json_mode {
-        format!("{CHAT_SYSTEM_PROMPT}\n\n{JSON_OUTPUT_SYSTEM_INSTRUCTION}")
-    } else {
-        CHAT_SYSTEM_PROMPT.to_owned()
-    }
+    prompts::chat_system_prompt(json_mode)
 }
 
 fn agent_system_message(current_dir: &Path, json_mode: bool) -> AgentMessage {
-    let mut content = format!(
-        "{AGENT_SYSTEM_PROMPT}\n\nCurrent working directory: {}",
-        current_dir.display()
-    );
-
-    if json_mode {
-        content.push_str("\n\n");
-        content.push_str(JSON_OUTPUT_SYSTEM_INSTRUCTION);
-    }
+    let content = prompts::agent_system_prompt(&current_dir.display().to_string(), json_mode);
 
     AgentMessage {
         role: "system".to_owned(),
@@ -2177,7 +2161,7 @@ fn plan_swarm_agents(
             provider.id().clone(),
             model_id.clone(),
             vec![
-                CompletionMessage::system(SWARM_PLANNING_SYSTEM_PROMPT),
+                CompletionMessage::system(prompts::swarm_planning_system_prompt()),
                 CompletionMessage::user(prompt),
             ],
         );
@@ -2486,7 +2470,7 @@ fn generate_swarm_implementation_proposal(
         provider.id().clone(),
         model_id,
         vec![
-            CompletionMessage::system(SWARM_IMPLEMENTATION_SYSTEM_PROMPT),
+            CompletionMessage::system(prompts::swarm_implementation_system_prompt()),
             CompletionMessage::user(prompt),
         ],
     );
