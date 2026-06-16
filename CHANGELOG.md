@@ -8,6 +8,8 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+## v0.2.0 - 2026-06-16
+
 ### Added
 
 - Interactive `raptor` REPL with chat and consent-gated agentic mode: DeepSeek streaming, thinking mode, reasoning effort, JSON mode, model selection, balance, usage telemetry, context compaction, and six local tools with a 120-second shell timeout.

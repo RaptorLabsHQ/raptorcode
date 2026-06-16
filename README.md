@@ -6,7 +6,7 @@ RaptorCode is an open-source Rust-native multi-agent coding terminal from Raptor
 - Website: https://raptorlabs.dev
 - Repository: https://github.com/RaptorLabsHQ/raptor-code
 - License: `MIT OR Apache-2.0`
-- Current status: v0.1.0 released
+- Current status: v0.2.0 released
 
 RaptorCode v0.1 is a local-first supervised MVP. It is not a desktop app, a Warp clone, a full terminal emulator replacement, an enterprise policy platform, or an unsupervised developer replacement.
 
@@ -36,7 +36,7 @@ DeepSeek is the only implemented execution provider before v0.1. Other provider 
 Download the Debian package from a RaptorCode release, then install it:
 
 ```bash
-sudo apt install ./raptor-code_0.1.0_amd64.deb
+sudo apt install ./raptor-code_0.2.0_amd64.deb
 ```
 
 Verify the installed commands:
