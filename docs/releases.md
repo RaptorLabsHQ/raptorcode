@@ -4,7 +4,43 @@ Date: 2026-05-19
 Author: Bob Vasic
 Company: RaptorLabs.dev
 
-This document defines the v0.1 release preparation process for RaptorCode.
+This document defines the release process for RaptorCode.
+
+## Automated Releases (`scripts/release.sh`)
+
+`scripts/release.sh` is the single, authoritative way to cut a release. It
+guarantees the package version can never drift from the source, because every
+versioned artifact is produced by the same run.
+
+```bash
+./scripts/release.sh            # auto-derive bump from commits since last tag
+./scripts/release.sh --dry-run  # print the plan, change nothing
+./scripts/release.sh minor      # force a bump level
+./scripts/release.sh 1.0.0      # set an explicit version
+```
+
+Version policy (default, auto-derived from Conventional Commit subjects since
+the last `vX.Y.Z` tag):
+
+- `feat!:` / `BREAKING CHANGE` → major
+- `feat:` → minor
+- anything else (`fix`/`chore`/`docs`/`refactor`/`test`/…) → patch
+
+In one run the script:
+
+1. Computes the next version (or honors an explicit level/version argument).
+2. Runs the `cargo test --workspace` quality gate (skip with `--skip-tests`).
+3. Synchronizes the version across `Cargo.toml`, `Cargo.lock` (via the build),
+   `packaging/dev.raptorlabs.raptorcode.metainfo.xml` (new `<release>` entry),
+   `CHANGELOG.md` (rolls `Unreleased` into `vX.Y.Z` with a fresh `Unreleased`),
+   and `README.md` (status line + install filename).
+4. Builds the Debian installer via `scripts/package-deb.sh`.
+5. Commits `release: vX.Y.Z`, creates an annotated `vX.Y.Z` tag, and pushes both
+   (`--no-push` to hold).
+6. Publishes the GitHub Release with the `.deb` attached (`--no-release` to hold).
+
+Requires a clean working tree. The manual steps below remain valid for
+historical reference and for the one-time `v0.1.0` release.
 
 ## v0.1 Release Checklist
 

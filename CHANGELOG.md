@@ -16,6 +16,7 @@ All notable RaptorCode changes will be documented in this file.
 - Live swarm TUI dashboard with four specialist panels, live status one-liners, an activity feed, aggregated token usage, and policy confirmation modals.
 - Live swarm orchestrator: `raptor swarm run "mission"` and interactive `/swarm <mission>` spawn four live specialist agents (frontend, backend, test, security) in parallel isolated worktrees with worktree-scoped tool policy; outcomes are recorded in swarm metadata and all changes are left uncommitted for review.
 - Prompt IP defense layers: anti-disclosure confidentiality directives with an embedded canary token in every system prompt, a canary and verbatim-fragment leak guard that redacts system-prompt leakage from chat, agent, swarm artifact, and swarm summary output (including streamed responses), and compile-time XOR obfuscation of prompt strings at rest in the binary.
+- Automated versioned release pipeline (`scripts/release.sh`): derives the next semantic version from Conventional Commit history since the last tag, synchronizes that version across `Cargo.toml`, the AppStream metainfo, `CHANGELOG.md`, and `README.md`, builds the Debian installer, then commits, tags `vX.Y.Z`, pushes, and publishes the GitHub Release with the `.deb` attached. This makes the package version impossible to drift from the source.
 
 ### Safety Notes
 
