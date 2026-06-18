@@ -4496,7 +4496,10 @@ mod tests {
 
     #[test]
     fn renders_version_output() {
-        assert_eq!(render_version(), "raptor 0.1.0\n");
+        assert_eq!(
+            render_version(),
+            format!("raptor {}\n", env!("CARGO_PKG_VERSION"))
+        );
     }
 
     #[test]
@@ -4515,8 +4518,19 @@ mod tests {
         .unwrap();
         let dashboard = run(["tui"], &test_dir.path).unwrap();
 
-        assert_eq!(startup, "Raptor Code v0.1 - Raptor Labs\n");
-        assert!(dashboard.contains("Raptor Code v0.1"));
+        // Derive the displayed "vMAJOR.MINOR" form from the crate version so this
+        // test tracks version bumps automatically (mirrors raptor-tui display_version).
+        let mut version_parts = env!("CARGO_PKG_VERSION").split('.');
+        let short_version = format!(
+            "v{}.{}",
+            version_parts.next().unwrap(),
+            version_parts.next().unwrap()
+        );
+        assert_eq!(
+            startup,
+            format!("Raptor Code {short_version} - Raptor Labs\n")
+        );
+        assert!(dashboard.contains(&format!("Raptor Code {short_version}")));
         assert!(dashboard.contains("Raptor Labs"));
         assert!(dashboard.contains("frontend-agent"));
         assert!(dashboard.contains("read-only"));
