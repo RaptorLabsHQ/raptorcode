@@ -1,18 +1,24 @@
 # RaptorCode
 
-RaptorCode is an open-source Rust-native multi-agent coding terminal from Raptor Labs that runs AI coding workflows in isolated git worktrees with developer supervision.
+RaptorCode is a **proprietary, closed-source** Rust-native multi-agent coding terminal from RaptorLabs.dev that runs AI coding workflows in isolated git worktrees with developer supervision.
 
-- Company: Raptor Labs
+- Company: RaptorLabs.dev
 - Website: https://raptorlabs.dev
-- Repository: https://github.com/RaptorLabsHQ/raptor-code
-- License: `MIT OR Apache-2.0`
-- Current status: v0.2.0 released
+- Source repository: private (https://github.com/RaptorLabsHQ/raptor-code — access-controlled)
+- License: Proprietary — see [`LICENSE`](LICENSE) (RaptorLabs Proprietary EULA)
+- Distribution: official signed binaries for Linux, macOS, and Windows from https://raptorlabs.dev
+- Current status: v0.2.0
 
-RaptorCode v0.1 is a local-first supervised MVP. It is not a desktop app, a Warp clone, a full terminal emulator replacement, an enterprise policy platform, or an unsupervised developer replacement.
+> RaptorCode is a commercial product, not open source and not free software. The
+> source code, system prompts, and orchestration logic are RaptorLabs trade
+> secrets. Reverse engineering, decompilation, and redistribution are prohibited
+> by the license. Use requires a valid subscription or beta authorization.
+
+RaptorCode is a local-first supervised coding terminal. It is not a desktop app, a Warp clone, a full terminal emulator replacement, an enterprise policy platform, or an unsupervised developer replacement.
 
 ## What Works Today
 
-RaptorCode v0.1 focuses on:
+RaptorCode currently focuses on:
 
 - A Rust workspace with the `raptor` CLI binary.
 - A premium Raptor Labs / Raptor Code startup screen when running `raptor`.
@@ -20,7 +26,7 @@ RaptorCode v0.1 focuses on:
 - DeepSeek-first chat through `raptor chat`.
 - Local task metadata under `.raptor/`.
 - Isolated git worktrees for single tasks and swarm roles.
-- Four v0.1 swarm roles: `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent`.
+- Four swarm roles: `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent`.
 - DeepSeek-generated role plans written as `RAPTOR_PLAN.md`.
 - DeepSeek-generated supervised implementation proposals written as `RAPTOR_IMPLEMENTATION_PROPOSAL.md`.
 - A live four-specialist agent swarm through `raptor swarm run "mission"` (or `/swarm` in the interactive REPL) implementing in parallel isolated role worktrees under a real-time dashboard, with all changes left uncommitted for review.
@@ -29,11 +35,15 @@ RaptorCode v0.1 focuses on:
 - Supervised merge preflight and explicit local merge execution.
 - Read-only provider, agent, policy, and diagnostic inspection commands.
 
-DeepSeek is the only implemented execution provider before v0.1. Other provider names may appear only as future metadata boundaries; OpenAI, OpenRouter, Gemini, Ollama, LM Studio, MCP, cloud, desktop, team, marketplace, and enterprise systems are not implemented in v0.1.
+DeepSeek is the only implemented execution provider today. Other provider names may appear only as future metadata boundaries; OpenAI, OpenRouter, Gemini, Ollama, LM Studio, MCP, cloud, desktop, team, marketplace, and enterprise systems are not yet implemented.
 
-## Install From `.deb`
+## Install (Official Binaries)
 
-Download the Debian package from a RaptorCode release, then install it:
+The supported way to install RaptorCode is the official signed binary for your
+platform from https://raptorlabs.dev (Linux, macOS, and Windows). A valid
+subscription or beta authorization is required.
+
+On Debian/Ubuntu, install the official `.deb`:
 
 ```bash
 sudo apt install ./raptor-code_0.2.0_amd64.deb
@@ -54,14 +64,17 @@ Build the Debian package locally from the repository root:
 
 The package is written to `dist/`.
 
-## Install From Source
+## Build From Source (Authorized RaptorLabs Developers Only)
+
+The source repository is private and access-controlled. Building from source is
+restricted to authorized RaptorLabs developers under the proprietary license;
+it is not a public distribution channel.
 
 Prerequisites:
 
 - Linux, macOS, or another Rust-supported development environment.
-- Git.
-- Stable Rust toolchain.
-- Cargo.
+- Git, with authorized access to the private repository.
+- Stable Rust toolchain and Cargo.
 
 Clone and install the `raptor` command:
 
@@ -106,7 +119,7 @@ RaptorCode does not print, store, commit, or read API keys from `.env` files. If
 
 ## Quickstart
 
-Show the v0.1 startup screen:
+Show the startup screen:
 
 ```bash
 raptor
@@ -219,7 +232,7 @@ raptor doctor
 
 RaptorCode treats model output and user-provided identifiers as untrusted.
 
-Current v0.1 controls:
+Current controls:
 
 - Work happens in isolated git worktrees under `.raptor/worktrees/`.
 - Task metadata is stored under `.raptor/tasks/`.
@@ -237,13 +250,13 @@ Current v0.1 controls:
 - `raptor swarm run` and consent-gated interactive agentic mode execute model-requested tools under the interactive tool policy, inside isolated role worktrees for the swarm, with all changes left uncommitted for developer review.
 - The dashboard is read-only and performs no model calls, shell execution, metadata writes, commits, merges, or pushes.
 - Merge execution requires explicit `--execute` and exact typed confirmation.
-- Policy enforcement hooks are not implemented in v0.1.
+- Advanced policy enforcement hooks beyond the current interactive tool policy are not yet implemented.
 
 Developers remain responsible for reviewing plans, proposals, diffs, tests, and merges.
 
-## v0.1 Limitations
+## Current Limitations
 
-RaptorCode v0.1 does not include:
+RaptorCode does not yet include:
 
 - Fully autonomous coding loops.
 - Automatic patch application.
@@ -257,11 +270,11 @@ RaptorCode v0.1 does not include:
 - Production compliance certification.
 - Secure hosted sandboxing guarantees.
 
-Persisted agent sessions and permission policy modeling exist as early local metadata foundations, but they are frozen until after v0.1 and are not an active policy enforcement system.
+Persisted agent sessions and permission policy modeling exist as early local metadata foundations, but they are frozen and are not yet an active policy enforcement system.
 
-## Roadmap After v0.1
+## Roadmap
 
-After v0.1 is tagged, the next phase can evaluate:
+Future phases can evaluate:
 
 - Deeper supervised implementation workflows.
 - Stronger review, test, and merge ergonomics.
@@ -269,7 +282,7 @@ After v0.1 is tagged, the next phase can evaluate:
 - More capable TUI surfaces.
 - Policy and permission work only after BOB explicitly reopens that scope.
 
-Phase 2 work is intentionally separated from the v0.1 release path.
+Phase 2 work is intentionally separated from the current release path.
 
 ## Repository Layout
 
@@ -321,4 +334,14 @@ Phase 2 work is intentionally separated from the v0.1 release path.
 
 ## License
 
-RaptorCode is licensed under `MIT OR Apache-2.0`.
+RaptorCode is proprietary, closed-source software. © 2026 RaptorLabs.dev. All
+rights reserved. Use is governed by the RaptorLabs Proprietary EULA in
+[`LICENSE`](LICENSE). Reverse engineering, decompilation, redistribution, and
+derivative works are prohibited.
+
+Third-party open-source components bundled in the binary remain under their own
+permissive licenses; see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+Releases up to and including v0.2.0 were published under `MIT OR Apache-2.0`;
+that applies only to those prior releases. All releases after v0.2.0 are under
+the proprietary license above.

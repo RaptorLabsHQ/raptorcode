@@ -39,26 +39,19 @@ In one run the script:
    (`--no-push` to hold).
 6. Publishes the GitHub Release with the `.deb` attached (`--no-release` to hold).
 
-Requires a clean working tree. The manual steps below remain valid for
-historical reference and for the one-time `v0.1.0` release.
+Requires a clean working tree. The manual fallback process below documents the
+same steps for forensic reference or when the script cannot run.
 
-## v0.1 Release Checklist
+## Manual Fallback Process
 
-- [x] Confirm v0.1 scope lock.
-- [x] Confirm no Phase 2 features were added for release prep.
-- [x] Confirm DeepSeek is the only implemented execution provider.
-- [x] Confirm README public launch wording.
-- [x] Confirm changelog exists.
-- [x] Confirm release notes draft exists.
-- [x] Run final verification.
-- [x] Review final release notes.
-- [x] Tag `v0.1.0`.
-- [x] Push tag to GitHub.
-- [x] Create GitHub release.
+The automated pipeline above is the normal path. The steps below are the manual
+fallback, used only when `scripts/release.sh` cannot run or for forensic
+reproduction of what the script does. Throughout, `X.Y.Z` is the release version
+and `vX.Y.Z` its tag.
 
-## Final Verification Commands
+### Final verification commands
 
-Run these before tagging:
+Run these before tagging (the script runs the test gate automatically):
 
 ```bash
 cargo fmt --all -- --check
@@ -70,14 +63,16 @@ CI=true cargo run --quiet -p raptor-cli --bin raptor
 git diff --check
 ```
 
-Build the Linux Debian installer before publishing release assets:
+Build the Linux Debian installer and validate the artifacts (version-agnostic —
+the `.deb` filename is derived from the current `Cargo.toml` version):
 
 ```bash
 ./scripts/package-deb.sh
+DEB="$(ls -t dist/raptor-code_*_amd64.deb | head -1)"
 appstreamcli validate --no-net --pedantic packaging/dev.raptorlabs.raptorcode.metainfo.xml
-appstreamcli validate-tree --no-net target/debian/raptor-code_0.1.0_amd64/usr
-dpkg-deb --info dist/raptor-code_0.1.0_amd64.deb
-dpkg-deb --contents dist/raptor-code_0.1.0_amd64.deb
+appstreamcli validate-tree --no-net "target/debian/$(basename "${DEB%.deb}")/usr"
+dpkg-deb --info "$DEB"
+dpkg-deb --contents "$DEB"
 ```
 
 Verify the installed user-facing command from the repository root:
@@ -92,53 +87,35 @@ raptor tui
 
 Do not run live DeepSeek commands during release verification unless `DEEPSEEK_API_KEY` is intentionally configured and the release operator confirms the network call is safe.
 
-## Tagging Instructions
+### Tagging (fallback)
 
 Only tag after all verification passes and BOB explicitly approves tagging.
 
 ```bash
 git status -sb
 git log --oneline -5
-git tag -a v0.1.0 -m "v0.1.0"
-git push origin v0.1.0
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin vX.Y.Z
 ```
 
-## GitHub Release Notes Draft
+### Release notes
 
-Title:
+`scripts/release.sh` publishes the GitHub Release automatically and sources its
+notes from the `vX.Y.Z` section of `CHANGELOG.md`. Keep `CHANGELOG.md` current
+(roll the `Unreleased` section into the new version) — it is the single source of
+release notes. When publishing manually, paste the same `CHANGELOG.md` section
+as the GitHub Release body.
 
-```text
-RaptorCode v0.1.0
-```
+## Release History
 
-Body:
-
-```markdown
-RaptorCode v0.1.0 is the first open-source MVP release from Raptor Labs.
-
-RaptorCode is a Rust-native multi-agent coding terminal for local-first supervised AI coding workflows. It uses isolated git worktrees, DeepSeek-first planning and proposal generation, developer-reviewed diffs, supervised tests, and explicit merge control.
-
-Highlights:
-- `raptor` startup screen with Raptor Labs / Raptor Code branding.
-- `raptor tui` read-only Ratatui dashboard.
-- `raptor chat` DeepSeek chat smoke test.
-- `raptor swarm` role worktrees for frontend, backend, test, and security agents.
-- `RAPTOR_PLAN.md` planning artifacts per role.
-- `raptor swarm implement` supervised implementation proposal artifacts.
-- Role-aware `raptor review` and `raptor diff`.
-- `raptor test` supervised test execution inside validated worktrees.
-- Merge dry-run and explicit local merge execution.
-
-Safety:
-- DeepSeek is the only implemented execution provider in v0.1.
-- API keys are read from `DEEPSEEK_API_KEY` and are not printed or stored.
-- Model output is not executed.
-- Patches are not applied automatically.
-- The dashboard is read-only.
-- Policy enforcement hooks are not implemented in v0.1.
-
-Known limitations:
-- v0.1 is not a full terminal emulator replacement.
-- No desktop app, cloud sync, team features, marketplace, MCP, or enterprise policy engine exists.
-- OpenAI, OpenRouter, Gemini, Ollama, and LM Studio execution providers are not implemented.
-```
+- `v0.1.0` (2026-05-26) — initial MVP, published under `MIT OR Apache-2.0`.
+- `v0.2.0` (2026-06-16) — interactive REPL, agentic mode, live swarm, prompt IP
+  defense layers, and the automated release pipeline. Published under
+  `MIT OR Apache-2.0`.
+- After v0.2.0 — RaptorCode is relicensed as proprietary, closed-source software
+  (RaptorLabs Proprietary EULA, see `LICENSE`). Distribution moves to official
+  signed binaries for Linux, macOS, and Windows from https://raptorlabs.dev. The
+  release pipeline carries the proprietary `project_license` in the AppStream
+  metainfo; before public GA, wire third-party license attribution
+  (`THIRD-PARTY-NOTICES.md`) and a `cargo deny check licenses` gate into
+  `scripts/release.sh`.

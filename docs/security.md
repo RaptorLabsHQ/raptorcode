@@ -4,7 +4,7 @@ Date: 2026-05-18
 Author: Bob Vasic
 Company: RaptorLabs.dev
 
-RaptorCode is an open-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
+RaptorCode is a proprietary, closed-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
 
 V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emulator replacement.
 
@@ -193,6 +193,48 @@ Known limitations:
 - Layer 2 matches verbatim fragments; paraphrased leakage and fragments under 40 normalized characters pass through. Redaction inside JSON-mode output favors safety over JSON validity. Live swarm agents could still write leaked text into worktree files through tools; artifact filtering covers only the planning/proposal paths.
 - Layer 3 is obscurity, not cryptography: a debugger, an instrumented build, or a local HTTPS proxy observing the DeepSeek request (sent with the user's own key) can still recover prompts.
 - The real containment is layer 4 — a RaptorLabs API gateway injecting prompts server-side so they never ship in the binary. It is explicitly out of scope until BOB green-lights hosting and billing decisions.
+
+## Closed-Source Intellectual Property Protection
+
+Date: 2026-06-18
+Author: Bob Vasic
+Company: RaptorLabs.dev
+
+RaptorCode is proprietary, closed-source software (see `LICENSE`). Source code,
+system prompts, and orchestration logic are RaptorLabs trade secrets. Protection
+is layered across legal and technical controls, with honest limits stated.
+
+Legal controls:
+
+- The RaptorLabs Proprietary EULA (`LICENSE`) prohibits reverse engineering,
+  decompilation, disassembly, deobfuscation, circumvention of technical
+  protections, redistribution, and derivative works, and asserts trade-secret
+  and confidentiality protection over the source and prompts.
+- The source repository is private and access-controlled. Building from source
+  is restricted to authorized RaptorLabs developers.
+- `Cargo.toml` sets `publish = false` workspace-wide so no source crate can be
+  pushed to a public registry by accident.
+
+Technical controls (raise reverse-engineering cost; not absolute):
+
+- Release-profile hardening in `Cargo.toml`: `strip = "symbols"` removes symbol
+  and debug information, `lto = true` plus `codegen-units = 1` inline and merge
+  across crate boundaries so the shipped binary does not map cleanly back to the
+  module structure. The panic strategy is intentionally left as `unwind` (not
+  `abort`) so a single live-swarm worker panic stays isolated to its thread.
+- Prompt IP defense layers 1-3 (above) keep proprietary prompts out of the
+  binary in plaintext and redact verbatim leakage from model output.
+
+Known limitations (no client-side mechanism is unbreakable):
+
+- A determined attacker with the binary can disassemble it; stripping and LTO
+  raise the cost but do not prevent reverse engineering. The license prohibition
+  is the primary deterrent against it.
+- Anti-tamper, license/subscription enforcement, code signing, and the
+  server-side prompt gateway (layer 4) are the stronger controls and are tracked
+  for the hosted/GA phase, gated on BOB's hosting and billing decisions.
+- Third-party permissive dependencies remain under their own licenses and must
+  be attributed; see `THIRD-PARTY-NOTICES.md`.
 
 ## v0.1 Model And Worktree Safety
 
