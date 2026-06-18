@@ -43,6 +43,7 @@ done
 install -m 0644 "$ROOT_DIR/README.md" "$PACKAGE_ROOT/usr/share/doc/$PACKAGE_NAME/README.md"
 install -m 0644 "$ROOT_DIR/CHANGELOG.md" "$PACKAGE_ROOT/usr/share/doc/$PACKAGE_NAME/CHANGELOG.md"
 install -m 0644 "$ROOT_DIR/LICENSE" "$PACKAGE_ROOT/usr/share/doc/$PACKAGE_NAME/LICENSE"
+install -m 0644 "$ROOT_DIR/THIRD-PARTY-NOTICES.md" "$PACKAGE_ROOT/usr/share/doc/$PACKAGE_NAME/THIRD-PARTY-NOTICES.md"
 install -m 0644 "$ROOT_DIR/assets/raptorcode-icon.svg" "$PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/dev.raptorlabs.raptorcode.svg"
 install -m 0644 "$ROOT_DIR/packaging/dev.raptorlabs.raptorcode.metainfo.xml" "$PACKAGE_ROOT/usr/share/metainfo/dev.raptorlabs.raptorcode.metainfo.xml"
 

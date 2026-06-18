@@ -15,7 +15,10 @@ resolver = "2"
 [workspace.package]
 authors = ["RaptorLabs.dev"]
 edition = "2021"
-license = "MIT OR Apache-2.0"
+# Proprietary, closed-source. See LICENSE (RaptorLabs Proprietary EULA).
+license = "LicenseRef-RaptorLabs-Proprietary"
+# Hard guard: never publish RaptorCode source crates to a public registry.
+publish = false
 repository = "https://github.com/RaptorLabsHQ/raptor-code"
 rust-version = "1.75"
 version = "0.2.0"
@@ -35,3 +38,16 @@ ratatui = { version = "0.26", default-features = false, features = ["crossterm"]
 reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Release profile hardening. These raise the cost of reverse engineering the
+# shipped binary (symbol/debug stripping, aggressive cross-crate inlining) while
+# preserving runtime behavior. NOTE: panic strategy is intentionally left as the
+# default "unwind" — the live swarm runs each specialist on its own thread and
+# relies on unwinding to isolate a worker panic from the whole process; setting
+# panic = "abort" would tear down every worker on a single panic.
+[profile.release]
+strip = "symbols"
+lto = true
+codegen-units = 1
+debug = false
+

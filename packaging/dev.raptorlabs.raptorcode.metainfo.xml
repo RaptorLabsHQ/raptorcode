@@ -2,7 +2,7 @@
 <component type="console-application">
   <id>dev.raptorlabs.raptorcode</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>MIT OR Apache-2.0</project_license>
+  <project_license>LicenseRef-proprietary=https://raptorlabs.dev</project_license>
   <name>RaptorCode</name>
   <summary>Rust-native autonomous AI coding agent CLI</summary>
   <developer id="dev.raptorlabs">

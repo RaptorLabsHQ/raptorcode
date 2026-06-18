@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 
-pub const PROJECT_DESCRIPTION: &str = "An open-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.";
+pub const PROJECT_DESCRIPTION: &str = "A proprietary, closed-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.";
 pub const PROJECT_NAME: &str = "RaptorCode";
 pub const SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS: &str = "blocked_missing_deepseek_api_key";
 pub const SWARM_IMPLEMENTATION_FAILED_STATUS: &str = "failed";

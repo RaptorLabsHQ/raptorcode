@@ -8,6 +8,31 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **Relicensed to proprietary, closed-source.** RaptorCode is no longer open
+  source. `LICENSE` is now the RaptorLabs Proprietary EULA (reverse engineering,
+  decompilation, redistribution, and derivative works prohibited; trade-secret
+  and confidentiality protection asserted over source and system prompts).
+  `Cargo.toml` and the AppStream metainfo carry a proprietary license id, and
+  `publish = false` is set workspace-wide. Releases up to and including v0.2.0
+  remain validly `MIT OR Apache-2.0` for their recipients; the proprietary terms
+  apply to all releases after v0.2.0.
+- Reframed README and all docs from open-source to proprietary, closed-source,
+  binary-distribution framing. Official distribution is signed binaries for
+  Linux, macOS, and Windows from https://raptorlabs.dev; source builds are
+  restricted to authorized RaptorLabs developers.
+
+### Added
+
+- `THIRD-PARTY-NOTICES.md` documenting attribution obligations for the bundled
+  permissive open-source dependencies and how to regenerate the full manifest.
+- Release-profile hardening in `Cargo.toml` (`strip = "symbols"`, `lto = true`,
+  `codegen-units = 1`) to raise reverse-engineering cost; panic strategy left as
+  `unwind` to preserve live-swarm thread isolation.
+- `docs/security.md` Closed-Source Intellectual Property Protection section
+  documenting the legal and technical IP controls and their honest limits.
+
 ## v0.2.0 - 2026-06-16
 
 ### Added
