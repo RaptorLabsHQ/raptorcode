@@ -1,0 +1,99 @@
+name: release
+
+# Cross-platform release builds. Produces native, tested binaries on each OS:
+#   - Linux   → signed .deb (scripts/package-deb.sh)
+#   - macOS   → universal (arm64 + x86_64) tar.gz  [unsigned beta; notarization
+#               can be added later via Apple creds]
+#   - Windows → x86_64 zip  [unsigned beta]
+# Artifacts are uploaded to the workflow run (workflow_dispatch) and attached to
+# a GitHub Release on tag push. R2 distribution is handled from the website repo.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.kind }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, kind: linux }
+          - { os: macos-latest, kind: macos }
+          - { os: windows-latest, kind: windows }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # ---- Linux: .deb ----
+      - name: Build Linux .deb
+        if: matrix.kind == 'linux'
+        shell: bash
+        run: |
+          bash scripts/package-deb.sh
+          cd dist
+          for f in *.deb; do sha256sum "$f" > "$f.sha256"; done
+          ls -la
+
+      # ---- macOS: universal tar.gz ----
+      - name: Build macOS universal
+        if: matrix.kind == 'macos'
+        shell: bash
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          cargo build --release -p raptor-cli --bin raptor --bin raptorcode --target aarch64-apple-darwin
+          cargo build --release -p raptor-cli --bin raptor --bin raptorcode --target x86_64-apple-darwin
+          mkdir -p dist macos
+          for b in raptor raptorcode; do
+            lipo -create -output "macos/$b" \
+              "target/aarch64-apple-darwin/release/$b" \
+              "target/x86_64-apple-darwin/release/$b"
+          done
+          VERSION=$(awk -F' = ' '/^version = / { gsub(/"/,"",$2); print $2; exit }' Cargo.toml)
+          tar -czf "dist/raptor-code_${VERSION}_macos_universal.tar.gz" -C macos raptor raptorcode
+          cd dist
+          for f in *.tar.gz; do shasum -a 256 "$f" > "$f.sha256"; done
+          ls -la
+
+      # ---- Windows: x86_64 zip ----
+      - name: Build Windows zip
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        run: |
+          cargo build --release -p raptor-cli --bin raptor --bin raptorcode
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $zip = "dist/raptor-code_${version}_windows_x86_64.zip"
+          Compress-Archive -Path target/release/raptor.exe, target/release/raptorcode.exe -DestinationPath $zip -Force
+          (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() + "  " + (Split-Path $zip -Leaf) | Out-File "$zip.sha256" -Encoding ascii
+          Get-ChildItem dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: raptor-${{ matrix.kind }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: github release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
