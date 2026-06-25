@@ -191,7 +191,7 @@ awk -v ver="$NEW_VERSION" -v date="$DATE" '
 
 info "updating README.md version references"
 sed -i \
-  -e "s/Current status: v${CURRENT} /Current status: v${NEW_VERSION} /" \
+  -e "s/Current status: v${CURRENT}\b/Current status: v${NEW_VERSION}/" \
   -e "s/raptor-code_${CURRENT}_amd64\.deb/raptor-code_${NEW_VERSION}_amd64.deb/g" \
   "$README"
 

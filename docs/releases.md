@@ -119,3 +119,12 @@ as the GitHub Release body.
   metainfo; before public GA, wire third-party license attribution
   (`THIRD-PARTY-NOTICES.md`) and a `cargo deny check licenses` gate into
   `scripts/release.sh`.
+- `v0.3.0` (2026-06-25) — first cross-platform release: native binaries for
+  Linux (`.deb`), macOS (universal arm64+x86_64 `tar.gz`), and Windows
+  (`x86_64 .zip`), each with a SHA-256 checksum, built on native CI runners via
+  `.github/workflows/release.yml` and published to the GitHub Release. Adds
+  rotating prompt quotes, provider-neutral interactive status, a friendly
+  context/cache usage line, and a cross-platform `run_command` shell
+  (`sh -c` on Unix/macOS, `cmd /C` on Windows). Proprietary (RaptorLabs EULA);
+  macOS/Windows are unsigned beta builds (notarization / Azure Trusted Signing
+  pending).

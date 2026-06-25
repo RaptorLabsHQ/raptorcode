@@ -7,7 +7,7 @@ RaptorCode is a **proprietary, closed-source** Rust-native multi-agent coding te
 - Source repository: private (https://github.com/RaptorLabsHQ/raptor-code — access-controlled)
 - License: Proprietary — see [`LICENSE`](LICENSE) (RaptorLabs Proprietary EULA)
 - Distribution: official signed binaries for Linux, macOS, and Windows from https://raptorlabs.dev
-- Current status: v0.2.0
+- Current status: v0.3.0
 
 > RaptorCode is a commercial product, not open source and not free software. The
 > source code, system prompts, and orchestration logic are RaptorLabs trade

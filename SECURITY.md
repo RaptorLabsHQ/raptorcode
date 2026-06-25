@@ -10,7 +10,7 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 
 ## Supported Versions
 
-No tagged stable release exists yet. Security reports should target the current `main` branch until `v0.1.0` is tagged.
+The latest release is `v0.3.0`. Security reports should target the latest release or the current `main` branch.
 
 ## Reporting A Vulnerability
 
