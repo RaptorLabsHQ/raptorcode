@@ -4,6 +4,17 @@ use std::time::{Duration, Instant};
 
 use raptor_providers::ToolDefinition;
 
+/// Returns the host shell program and the flag that tells it to run a command
+/// string: `sh -c` on Unix/macOS, `cmd /C` on Windows. This keeps the agent's
+/// `run_command` tool functional across platforms instead of assuming `sh`.
+fn platform_shell() -> (&'static str, &'static str) {
+    if cfg!(windows) {
+        ("cmd", "/C")
+    } else {
+        ("sh", "-c")
+    }
+}
+
 pub(crate) fn describe_tool_call(name: &str, args_json: &str) -> String {
     let args =
         serde_json::from_str::<serde_json::Value>(args_json).unwrap_or(serde_json::Value::Null);
@@ -301,9 +312,10 @@ pub(crate) fn execute_tool_call(working_dir: &mut PathBuf, name: &str, arguments
             } else {
                 working_dir.clone()
             };
-            let mut command = std::process::Command::new("sh");
+            let (shell_program, shell_flag) = platform_shell();
+            let mut command = std::process::Command::new(shell_program);
             command
-                .arg("-c")
+                .arg(shell_flag)
                 .arg(&cmd)
                 .current_dir(&cmd_dir)
                 .stdout(std::process::Stdio::piped())
@@ -412,6 +424,16 @@ mod tests {
     impl Drop for TestDir {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn platform_shell_matches_the_host_os() {
+        let (program, flag) = platform_shell();
+        if cfg!(windows) {
+            assert_eq!((program, flag), ("cmd", "/C"));
+        } else {
+            assert_eq!((program, flag), ("sh", "-c"));
         }
     }
 
