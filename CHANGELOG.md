@@ -32,6 +32,20 @@ All notable RaptorCode changes will be documented in this file.
   `unwind` to preserve live-swarm thread isolation.
 - `docs/security.md` Closed-Source Intellectual Property Protection section
   documenting the legal and technical IP controls and their honest limits.
+- Rotating saved quotes on a reserved line beneath the input box while the
+  developer types and submits a prompt, for interactivity. Rendered as a single
+  atomic frame write so it never displaces typed input.
+- Cross-platform support for the agent `run_command` tool: the host shell is now
+  selected per platform (`sh -c` on Unix/macOS, `cmd /C` on Windows), making the
+  tool functional on Windows. Closes the last Windows runtime port gap.
+
+### Changed
+
+- Interactive status no longer names the model provider: the streaming line reads
+  "Streaming agent response..." and per-step token telemetry is shown as a
+  friendly "Context: N tokens · X% cached" line instead of raw
+  prompt/completion/cache-hit/cache-miss counts. Prefix-cache "misses" are simply
+  the new tokens added each turn, not failures.
 
 ## v0.2.0 - 2026-06-16
 
