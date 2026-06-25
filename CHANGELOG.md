@@ -8,6 +8,8 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+## v0.3.0 - 2026-06-25
+
 ### Changed
 
 - **Relicensed to proprietary, closed-source.** RaptorCode is no longer open

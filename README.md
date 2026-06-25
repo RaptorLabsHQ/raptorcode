@@ -46,7 +46,7 @@ subscription or beta authorization is required.
 On Debian/Ubuntu, install the official `.deb`:
 
 ```bash
-sudo apt install ./raptor-code_0.2.0_amd64.deb
+sudo apt install ./raptor-code_0.3.0_amd64.deb
 ```
 
 Verify the installed commands:
