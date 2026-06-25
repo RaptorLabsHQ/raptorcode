@@ -1203,65 +1203,96 @@ pub fn run_interactive_chat(
         println!();
 
         if agent_mode {
-            agent_history.push(AgentMessage {
-                role: "user".to_owned(),
-                content: Some(input.clone()),
-                reasoning_content: None,
-                tool_calls: None,
-                tool_call_id: None,
-            });
-
-            let mut agent_loop_context = AgentLoopContext {
-                context_budget: &mut context_budget,
-                model_id: &model_id,
-                prompt_guard: &prompt_guard,
-                provider: &provider,
-                request_options: &request_options,
-                streaming_enabled,
-                tool_policy: &mut agent_tool_policy,
-                tools: &tools,
-            };
-            match run_agent_loop(
-                &mut agent_working_dir,
-                &mut agent_history,
-                &mut agent_loop_context,
-            ) {
-                Ok(output) => {
-                    let content = output.content.trim().to_owned();
-                    if output.streamed {
-                        println!("\n");
-                    } else {
-                        println!("{}\n", prompt_guard.redact(&content));
-                    }
-                    if let Some(usage) = output.usage.as_ref() {
-                        let line = render_context_usage(usage);
-                        if !line.is_empty() {
-                            println!("  {C_DIM}{line}{C_RESET}\n");
-                        }
-                    }
-                    let assistant_message =
-                        output.assistant_message.unwrap_or_else(|| AgentMessage {
-                            role: "assistant".to_owned(),
-                            content: Some(content),
-                            reasoning_content: None,
-                            tool_calls: None,
-                            tool_call_id: None,
-                        });
-                    agent_history.push(assistant_message);
-                    handle_agent_context_budget(
-                        &mut agent_history,
-                        output.usage.as_ref(),
-                        &mut context_budget,
-                    );
+            // Default: every prompt launches the live 4-agent swarm with the
+            // dashboard. The single-agent loop below is only a fallback for when
+            // the swarm cannot run here (for example, outside a git repository).
+            let swarm_result = swarm_orchestrator::run_live_swarm(
+                current_dir,
+                swarm_orchestrator::LiveSwarmConfig {
+                    api_key: api_key.clone(),
+                    mission: input.clone(),
+                    model_label: format_model_display_name(model_id.as_str()),
+                    model_id: model_id.clone(),
+                    // Swarm agents always run ultrathink with text output,
+                    // independent of the session /json or /effort settings.
+                    request_options: DeepSeekRequestOptions::default()
+                        .with_reasoning_effort(DeepSeekReasoningEffort::Max),
+                },
+            );
+            let run_single_agent = match swarm_result {
+                Ok(summary) => {
+                    print!("{summary}");
+                    std::io::stdout().flush().ok();
+                    false
                 }
                 Err(error) => {
-                    let msg = error.to_string();
-                    eprintln!("Error: {msg}\n");
-                    if msg.contains("authentication") {
-                        eprintln!(
-                            "Delete ~/.raptor/.credentials or set DEEPSEEK_API_KEY to reset."
+                    println!(
+                        "  {C_DIM}Swarm unavailable here ({error}). Answering with a single agent.{C_RESET}\n"
+                    );
+                    true
+                }
+            };
+            if run_single_agent {
+                agent_history.push(AgentMessage {
+                    role: "user".to_owned(),
+                    content: Some(input.clone()),
+                    reasoning_content: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+
+                let mut agent_loop_context = AgentLoopContext {
+                    context_budget: &mut context_budget,
+                    model_id: &model_id,
+                    prompt_guard: &prompt_guard,
+                    provider: &provider,
+                    request_options: &request_options,
+                    streaming_enabled,
+                    tool_policy: &mut agent_tool_policy,
+                    tools: &tools,
+                };
+                match run_agent_loop(
+                    &mut agent_working_dir,
+                    &mut agent_history,
+                    &mut agent_loop_context,
+                ) {
+                    Ok(output) => {
+                        let content = output.content.trim().to_owned();
+                        if output.streamed {
+                            println!("\n");
+                        } else {
+                            println!("{}\n", prompt_guard.redact(&content));
+                        }
+                        if let Some(usage) = output.usage.as_ref() {
+                            let line = render_context_usage(usage);
+                            if !line.is_empty() {
+                                println!("  {C_DIM}{line}{C_RESET}\n");
+                            }
+                        }
+                        let assistant_message =
+                            output.assistant_message.unwrap_or_else(|| AgentMessage {
+                                role: "assistant".to_owned(),
+                                content: Some(content),
+                                reasoning_content: None,
+                                tool_calls: None,
+                                tool_call_id: None,
+                            });
+                        agent_history.push(assistant_message);
+                        handle_agent_context_budget(
+                            &mut agent_history,
+                            output.usage.as_ref(),
+                            &mut context_budget,
                         );
-                        break;
+                    }
+                    Err(error) => {
+                        let msg = error.to_string();
+                        eprintln!("Error: {msg}\n");
+                        if msg.contains("authentication") {
+                            eprintln!(
+                                "Delete ~/.raptor/.credentials or set DEEPSEEK_API_KEY to reset."
+                            );
+                            break;
+                        }
                     }
                 }
             }
