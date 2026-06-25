@@ -11,7 +11,7 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
@@ -19,7 +19,11 @@ use ratatui::{Frame, Terminal};
 
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const MAX_RECENT_ACTIVITY: usize = 64;
-const ACTIVITY_PANEL_LINES: usize = 4;
+
+/// Crimson accents, dim chrome, white emphasis — the RaptorCode terminal palette.
+const RAPTOR_RED: Color = Color::Rgb(0xFF, 0x19, 0x19);
+const RAPTOR_DIM: Color = Color::Rgb(0x63, 0x62, 0x62);
+const RAPTOR_TRACK: Color = Color::Rgb(0x3A, 0x20, 0x20);
 
 /// Events emitted by live swarm agent workers and consumed by the dashboard.
 #[derive(Debug)]
@@ -82,16 +86,6 @@ impl SwarmAgentPhase {
             SwarmAgentPhase::Failed => "stopped",
         }
     }
-
-    fn border_color(self) -> Color {
-        match self {
-            SwarmAgentPhase::Pending => Color::DarkGray,
-            SwarmAgentPhase::Working => Color::Red,
-            SwarmAgentPhase::AwaitingApproval => Color::Yellow,
-            SwarmAgentPhase::Done => Color::Green,
-            SwarmAgentPhase::Failed => Color::LightRed,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +125,7 @@ pub struct SwarmDashboardState {
     pub max_steps: u32,
     pub mission: String,
     pub model_label: String,
+    pub quote: String,
     pub recent_activity: VecDeque<String>,
     pub stopping: bool,
     pub total_tokens: u64,
@@ -143,6 +138,7 @@ impl SwarmDashboardState {
         model_label: impl Into<String>,
         roles: &[String],
         max_steps: u32,
+        quote: impl Into<String>,
     ) -> Self {
         Self {
             agents: roles
@@ -153,6 +149,7 @@ impl SwarmDashboardState {
             max_steps,
             mission: mission.into(),
             model_label: model_label.into(),
+            quote: quote.into(),
             recent_activity: VecDeque::new(),
             stopping: false,
             total_tokens: 0,
@@ -373,74 +370,75 @@ fn draw_swarm_dashboard(frame: &mut Frame<'_>, state: &SwarmDashboardState, elap
     let area = frame.size();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .margin(1)
+        .horizontal_margin(2)
+        .vertical_margin(1)
         .constraints([
-            Constraint::Length(4),
-            Constraint::Min(12),
-            Constraint::Length(ACTIVITY_PANEL_LINES as u16 + 2),
-            Constraint::Length(1),
+            Constraint::Length(1), // header bar
+            Constraint::Length(1), // dim divider
+            Constraint::Length(1), // command line
+            Constraint::Length(1), // bright red rule
+            Constraint::Min(8),    // 2x2 agent grid
+            Constraint::Length(1), // dim divider
+            Constraint::Length(1), // footer bar
         ])
         .split(area);
 
-    draw_swarm_header(frame, state, elapsed, chunks[0]);
-    draw_agent_grid(frame, state, elapsed, chunks[1]);
-    draw_activity_feed(frame, state, chunks[2]);
-    draw_footer(frame, state, chunks[3]);
+    draw_header_bar(frame, chunks[0]);
+    frame.render_widget(
+        rule_line(chunks[1].width as usize, "─", RAPTOR_DIM),
+        chunks[1],
+    );
+    draw_command_line(frame, state, chunks[2]);
+    frame.render_widget(
+        rule_line(chunks[3].width as usize, "─", RAPTOR_RED),
+        chunks[3],
+    );
+    draw_agent_grid(frame, state, elapsed, chunks[4]);
+    frame.render_widget(
+        rule_line(chunks[5].width as usize, "─", RAPTOR_DIM),
+        chunks[5],
+    );
+    draw_footer_bar(frame, state, elapsed, chunks[6]);
 
     if let Some(pending) = state.confirmations.front() {
         draw_confirmation_modal(frame, state, pending, area);
     }
 }
 
-fn draw_swarm_header(
-    frame: &mut Frame<'_>,
-    state: &SwarmDashboardState,
-    elapsed: Duration,
-    area: Rect,
-) {
-    let active = state
-        .agents
-        .iter()
-        .filter(|agent| !agent.phase.is_terminal())
-        .count();
-    let status = if state.stopping {
-        " · stopping".to_owned()
-    } else {
-        String::new()
-    };
-    let header = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled(
-                " ▟█▙ RAPTORCODE SWARM ",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(
-                    " {} · {} specialists active · {}{}",
-                    state.model_label,
-                    active,
-                    format_elapsed(elapsed),
-                    status
-                ),
-                Style::default().fg(Color::Gray),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Mission  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                truncate_line(&state.mission, 110),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-    ])
-    .block(
-        Block::default()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::Red)),
-    );
-    frame.render_widget(header, area);
+fn draw_header_bar(frame: &mut Frame<'_>, area: Rect) {
+    let width = area.width as usize;
+    let left = vec![
+        Span::styled("■ ", Style::default().fg(RAPTOR_RED)),
+        Span::styled(
+            "raptor — swarm orchestrator",
+            Style::default().fg(RAPTOR_DIM),
+        ),
+    ];
+    let right = vec![Span::styled(
+        "ULTRATHINK · EFFORT=MAX",
+        Style::default().fg(RAPTOR_DIM).add_modifier(Modifier::BOLD),
+    )];
+    frame.render_widget(Paragraph::new(padded_line(left, right, width)), area);
+}
+
+fn draw_command_line(frame: &mut Frame<'_>, state: &SwarmDashboardState, area: Rect) {
+    let mission = truncate_line(&state.mission, area.width.saturating_sub(24) as usize);
+    let line = Line::from(vec![
+        Span::styled(
+            "raptor",
+            Style::default().fg(RAPTOR_RED).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" ❯ ", Style::default().fg(RAPTOR_DIM)),
+        Span::styled(
+            "swarm run ",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("\"{mission}\""), Style::default().fg(Color::White)),
+        Span::styled(" █", Style::default().fg(RAPTOR_RED)),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_agent_grid(
@@ -451,19 +449,32 @@ fn draw_agent_grid(
 ) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
         .split(area);
 
-    for (row_index, row) in rows.iter().enumerate() {
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(*row);
-        for (col_index, column) in columns.iter().enumerate() {
-            let agent_index = row_index * 2 + col_index;
-            if let Some(agent) = state.agents.get(agent_index) {
-                draw_agent_panel(frame, state, agent, agent_index, elapsed, *column);
-            }
+    draw_agent_row(frame, state, elapsed, rows[0], 0);
+    frame.render_widget(rule_line(area.width as usize, "─", RAPTOR_RED), rows[1]);
+    draw_agent_row(frame, state, elapsed, rows[2], 2);
+}
+
+fn draw_agent_row(
+    frame: &mut Frame<'_>,
+    state: &SwarmDashboardState,
+    elapsed: Duration,
+    area: Rect,
+    first_index: usize,
+) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+    for (offset, column) in columns.iter().enumerate() {
+        if let Some(agent) = state.agents.get(first_index + offset) {
+            draw_agent_panel(frame, state, agent, elapsed, *column);
         }
     }
 }
@@ -472,135 +483,210 @@ fn draw_agent_panel(
     frame: &mut Frame<'_>,
     state: &SwarmDashboardState,
     agent: &SwarmAgentUiState,
-    agent_index: usize,
     elapsed: Duration,
     area: Rect,
 ) {
-    let phase_indicator = match agent.phase {
-        SwarmAgentPhase::Working | SwarmAgentPhase::Pending => spinner_frame(elapsed).to_owned(),
-        SwarmAgentPhase::AwaitingApproval => "⚠".to_owned(),
-        SwarmAgentPhase::Done => "✓".to_owned(),
-        SwarmAgentPhase::Failed => "✗".to_owned(),
+    // Pad each cell so the two columns read as separated, borderless tiles.
+    let inner = Rect {
+        x: area.x + 1,
+        y: area.y,
+        width: area.width.saturating_sub(2),
+        height: area.height,
     };
-    let title = format!(
-        " ◢ {} — {} {} ",
-        short_role(&agent.role).to_uppercase(),
-        agent.phase.label(),
-        phase_indicator
-    );
-    let border_color = if state.focused == Some(agent_index) {
-        Color::White
-    } else {
-        agent.phase.border_color()
-    };
+    if inner.width < 6 || inner.height < 3 {
+        return;
+    }
+    let width = inner.width as usize;
 
-    let mut lines = vec![
-        Line::from(Span::styled(
-            truncate_line(&agent.status_line, area.width.saturating_sub(4) as usize),
+    let parts = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // role header
+            Constraint::Min(1),    // current file + status (vertically centered)
+            Constraint::Length(1), // counts + progress bar
+        ])
+        .split(inner);
+
+    // --- header: indicator + ROLE ............ .wt/role ---
+    let (indicator, indicator_color) = match agent.phase {
+        SwarmAgentPhase::Working | SwarmAgentPhase::Pending => {
+            (spinner_frame(elapsed).to_owned(), RAPTOR_RED)
+        }
+        SwarmAgentPhase::AwaitingApproval => ("⚠".to_owned(), Color::Yellow),
+        SwarmAgentPhase::Done => ("✓".to_owned(), Color::Green),
+        SwarmAgentPhase::Failed => ("✗".to_owned(), RAPTOR_RED),
+    };
+    let header_left = vec![
+        Span::styled(
+            format!("{indicator} "),
+            Style::default().fg(indicator_color),
+        ),
+        Span::styled(
+            short_role(&agent.role).to_uppercase(),
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            agent
-                .detail
-                .as_deref()
-                .map(|detail| {
-                    format!(
-                        "└─ {}",
-                        truncate_line(detail, area.width.saturating_sub(7) as usize)
-                    )
-                })
-                .unwrap_or_default(),
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            format!(
-                "{} files · step {}/{}",
-                agent.files_written, agent.steps, state.max_steps
-            ),
-            Style::default().fg(Color::Gray),
-        )),
+        ),
     ];
+    let header_right = vec![Span::styled(
+        format!(".wt/{}", short_role(&agent.role)),
+        Style::default().fg(RAPTOR_DIM),
+    )];
+    frame.render_widget(
+        Paragraph::new(padded_line(header_left, header_right, width)),
+        parts[0],
+    );
 
-    if let Some(summary) = agent.summary.as_deref() {
-        lines.push(Line::from(Span::styled(
-            truncate_line(summary, area.width.saturating_sub(4) as usize),
-            Style::default().fg(Color::Green),
-        )));
+    // --- middle: current file (bold) + status (dim), vertically centered ---
+    let file = agent
+        .detail
+        .as_deref()
+        .map(|detail| truncate_line(detail, width))
+        .unwrap_or_default();
+    let status = truncate_line(&agent.status_line, width);
+    let mid_height = parts[1].height as usize;
+    let pad_top = mid_height.saturating_sub(2) / 2;
+    let mut mid_lines: Vec<Line<'_>> = Vec::with_capacity(mid_height);
+    for _ in 0..pad_top {
+        mid_lines.push(Line::from(""));
     }
-
-    let panel = Paragraph::new(lines).block(
-        Block::default()
-            .title(Span::styled(
-                title,
-                Style::default()
-                    .fg(border_color)
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color)),
+    mid_lines.push(Line::from(Span::styled(
+        file,
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )));
+    mid_lines.push(Line::from(Span::styled(
+        status,
+        Style::default().fg(RAPTOR_DIM),
+    )));
+    frame.render_widget(
+        Paragraph::new(mid_lines).alignment(Alignment::Center),
+        parts[1],
     );
-    frame.render_widget(panel, area);
-}
 
-fn draw_activity_feed(frame: &mut Frame<'_>, state: &SwarmDashboardState, area: Rect) {
-    let focus_role = state
-        .focused
-        .and_then(|index| state.agents.get(index))
-        .map(|agent| short_role(&agent.role));
-    let mut selected: Vec<&String> = state
-        .recent_activity
-        .iter()
-        .rev()
-        .filter(|line| {
-            focus_role
-                .map(|role| line.starts_with(role))
-                .unwrap_or(true)
-        })
-        .take(ACTIVITY_PANEL_LINES)
-        .collect();
-    selected.reverse();
-    let lines: Vec<Line<'_>> = selected
-        .into_iter()
-        .map(|line| {
-            Line::from(vec![
-                Span::styled("▸ ", Style::default().fg(Color::Red)),
-                Span::styled(line.clone(), Style::default().fg(Color::Gray)),
-            ])
-        })
-        .collect();
-
-    let title = match focus_role {
-        Some(role) => format!(" Activity — {role} "),
-        None => " Activity ".to_owned(),
-    };
-    let feed = Paragraph::new(lines).block(
-        Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray)),
-    );
-    frame.render_widget(feed, area);
-}
-
-fn draw_footer(frame: &mut Frame<'_>, state: &SwarmDashboardState, area: Rect) {
-    let hint = if state.all_agents_terminal() {
-        "all agents finished — press any key to close".to_owned()
-    } else if state.has_pending_confirmation() {
-        "[y] allow · [n] deny · [q] stop swarm".to_owned()
+    // --- footer: "N files  M steps" + progress bar ---
+    let mut counts = vec![
+        Span::styled(
+            agent.files_written.to_string(),
+            Style::default().fg(RAPTOR_RED).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" files  ", Style::default().fg(RAPTOR_DIM)),
+        Span::styled(
+            agent.steps.to_string(),
+            Style::default().fg(RAPTOR_RED).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" steps  ", Style::default().fg(RAPTOR_DIM)),
+    ];
+    let used = spans_width(&counts);
+    let bar_width = width.saturating_sub(used);
+    let fraction = if state.max_steps == 0 {
+        0.0
     } else {
-        "[1-4] focus agent · [q] stop swarm".to_owned()
+        (agent.steps as f64 / state.max_steps as f64).clamp(0.0, 1.0)
     };
-    let footer = Paragraph::new(Line::from(vec![
-        Span::styled(format!(" {hint}"), Style::default().fg(Color::DarkGray)),
+    counts.extend(progress_bar_spans(fraction, bar_width));
+    frame.render_widget(Paragraph::new(Line::from(counts)), parts[2]);
+}
+
+fn draw_footer_bar(
+    frame: &mut Frame<'_>,
+    state: &SwarmDashboardState,
+    elapsed: Duration,
+    area: Rect,
+) {
+    let width = area.width as usize;
+    let active = state
+        .agents
+        .iter()
+        .filter(|agent| !agent.phase.is_terminal())
+        .count();
+
+    let (dot_color, status_text, status_color) = if state.all_agents_terminal() {
+        (Color::Green, "swarm complete".to_owned(), Color::Green)
+    } else if state.stopping {
+        (
+            Color::Yellow,
+            format!("{active} agents live · stopping"),
+            Color::Yellow,
+        )
+    } else {
+        (RAPTOR_RED, format!("{active} agents live"), RAPTOR_RED)
+    };
+
+    let left = vec![
+        Span::styled("● ", Style::default().fg(dot_color)),
+        Span::styled(
+            status_text,
+            Style::default()
+                .fg(status_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("   elapsed {}", format_elapsed(elapsed)),
+            Style::default().fg(RAPTOR_DIM),
+        ),
         Span::styled(
             format!("   tokens {}", format_tokens(state.total_tokens)),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(RAPTOR_DIM),
         ),
-    ]));
-    frame.render_widget(footer, area);
+    ];
+
+    let quote_budget = width.saturating_sub(spans_width(&left) + 3);
+    let right = if quote_budget >= 12 && !state.quote.is_empty() {
+        vec![Span::styled(
+            format!(
+                "\"{}\"",
+                truncate_line(&state.quote, quote_budget.saturating_sub(2))
+            ),
+            Style::default()
+                .fg(RAPTOR_RED)
+                .add_modifier(Modifier::ITALIC),
+        )]
+    } else {
+        Vec::new()
+    };
+
+    frame.render_widget(Paragraph::new(padded_line(left, right, width)), area);
+}
+
+/// Builds a left-aligned, right-aligned single line: `left … right`, padding the
+/// gap so `right` hugs the far edge of `width`.
+fn padded_line(
+    mut left: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    width: usize,
+) -> Line<'static> {
+    let used = spans_width(&left) + spans_width(&right);
+    let pad = width.saturating_sub(used).max(1);
+    left.push(Span::raw(" ".repeat(pad)));
+    left.extend(right);
+    Line::from(left)
+}
+
+fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|span| span.content.chars().count()).sum()
+}
+
+fn rule_line(width: usize, ch: &str, color: Color) -> Paragraph<'static> {
+    Paragraph::new(Line::from(Span::styled(
+        ch.repeat(width),
+        Style::default().fg(color),
+    )))
+}
+
+fn progress_bar_spans(fraction: f64, width: usize) -> Vec<Span<'static>> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let filled = ((fraction * width as f64).round() as usize).min(width);
+    vec![
+        Span::styled("━".repeat(filled), Style::default().fg(RAPTOR_RED)),
+        Span::styled(
+            "─".repeat(width - filled),
+            Style::default().fg(RAPTOR_TRACK),
+        ),
+    ]
 }
 
 fn draw_confirmation_modal(
@@ -706,9 +792,9 @@ fn format_elapsed(elapsed: Duration) -> String {
 
 fn format_tokens(total: u64) -> String {
     if total >= 1_000_000 {
-        format!("{:.1}M", total as f64 / 1_000_000.0)
+        format!("{:.1}m", total as f64 / 1_000_000.0)
     } else if total >= 1_000 {
-        format!("{:.1}K", total as f64 / 1_000.0)
+        format!("{:.1}k", total as f64 / 1_000.0)
     } else {
         total.to_string()
     }
@@ -726,7 +812,13 @@ mod tests {
             "test-agent".to_owned(),
             "security-agent".to_owned(),
         ];
-        SwarmDashboardState::new("Build a SaaS app", "DeepSeek V4 Pro", &roles, 100)
+        SwarmDashboardState::new(
+            "Build a SaaS app",
+            "DeepSeek V4 Pro",
+            &roles,
+            100,
+            "the quieter you become, the more you are able to hear",
+        )
     }
 
     #[test]
@@ -816,6 +908,119 @@ mod tests {
         assert!(snapshot.contains("[stopped] security"));
     }
 
+    fn buffer_rows(backend: &ratatui::backend::TestBackend) -> Vec<String> {
+        let buffer = backend.buffer();
+        let area = *buffer.area();
+        (0..area.height)
+            .map(|y| {
+                let mut row = String::new();
+                for x in 0..area.width {
+                    row.push_str(buffer.get(x, y).symbol());
+                }
+                row.trim_end().to_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dashboard_renders_screenshot_layout() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let mut state = test_state();
+        // Drive the four agents into a working state resembling the reference UI.
+        let scenario = [
+            (
+                0usize,
+                "writing payment element + card validation",
+                "src/checkout/StripeForm.tsx",
+                12u32,
+                4usize,
+            ),
+            (
+                1,
+                "wiring PaymentIntent + idempotency keys",
+                "api/payments/create_intent.rs",
+                18,
+                6,
+            ),
+            (
+                2,
+                "covering decline + 3DS challenge paths",
+                "tests/checkout_flow.spec.ts",
+                9,
+                3,
+            ),
+            (
+                3,
+                "verifying webhook signatures, scrubbing logs",
+                "api/payments/webhook.rs",
+                7,
+                2,
+            ),
+        ];
+        for (agent, status, file, steps, files) in scenario {
+            apply_swarm_event(&mut state, SwarmUiEvent::AgentSpawned { agent });
+            apply_swarm_event(
+                &mut state,
+                SwarmUiEvent::AgentStatus {
+                    agent,
+                    line: status.to_owned(),
+                    detail: Some(file.to_owned()),
+                },
+            );
+            apply_swarm_event(&mut state, SwarmUiEvent::AgentStep { agent, step: steps });
+            for _ in 0..files {
+                apply_swarm_event(
+                    &mut state,
+                    SwarmUiEvent::AgentFileWritten {
+                        agent,
+                        path: file.to_owned(),
+                    },
+                );
+            }
+        }
+        apply_swarm_event(
+            &mut state,
+            SwarmUiEvent::AgentUsage {
+                agent: 0,
+                total_tokens: 318_400,
+            },
+        );
+
+        let backend = TestBackend::new(92, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_swarm_dashboard(frame, &state, Duration::from_secs(49)))
+            .unwrap();
+        let rows = buffer_rows(terminal.backend());
+        let rendered = rows.join("\n");
+        eprintln!("\n{rendered}\n");
+
+        for expected in [
+            "raptor — swarm orchestrator",
+            "ULTRATHINK · EFFORT=MAX",
+            "swarm run",
+            "FRONTEND",
+            ".wt/frontend",
+            "BACKEND",
+            ".wt/backend",
+            "src/checkout/StripeForm.tsx",
+            "writing payment element + card validation",
+            "files",
+            "steps",
+            "agents live",
+            "elapsed 00:49",
+            "tokens 318.4k",
+            "the quieter you become",
+        ] {
+            assert!(
+                rendered.contains(expected),
+                "missing {expected:?} in:\n{rendered}"
+            );
+        }
+    }
+
     #[test]
     fn usage_events_accumulate_tokens() {
         let mut state = test_state();
@@ -835,6 +1040,6 @@ mod tests {
         );
 
         assert_eq!(state.total_tokens, 2_200);
-        assert_eq!(format_tokens(state.total_tokens), "2.2K");
+        assert_eq!(format_tokens(state.total_tokens), "2.2k");
     }
 }

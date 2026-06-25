@@ -124,6 +124,7 @@ pub(crate) fn run_live_swarm(
         config.model_label.clone(),
         &roles,
         SWARM_MAX_STEPS,
+        crate::random_quote(),
     );
 
     let cancel = Arc::new(AtomicBool::new(false));
