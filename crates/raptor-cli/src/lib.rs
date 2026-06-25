@@ -1234,10 +1234,10 @@ pub fn run_interactive_chat(
                         println!("{}\n", prompt_guard.redact(&content));
                     }
                     if let Some(usage) = output.usage.as_ref() {
-                        println!(
-                            "  {C_DIM}Usage: {}{C_RESET}\n",
-                            render_token_usage(Some(usage))
-                        );
+                        let line = render_context_usage(usage);
+                        if !line.is_empty() {
+                            println!("  {C_DIM}{line}{C_RESET}\n");
+                        }
                     }
                     let assistant_message =
                         output.assistant_message.unwrap_or_else(|| AgentMessage {
@@ -1276,7 +1276,7 @@ pub fn run_interactive_chat(
             .with_options(request_options.clone());
 
             let response = if streaming_enabled {
-                print!("  {C_DIM}Streaming DeepSeek response...{C_RESET}\n\n");
+                print!("  {C_DIM}Streaming agent response...{C_RESET}\n\n");
                 std::io::stdout().flush().ok();
                 let mut redactor = StreamRedactor::new(&prompt_guard);
                 let response = provider.complete_streaming(request, |delta| {
@@ -1304,10 +1304,10 @@ pub fn run_interactive_chat(
                         println!("{}\n", prompt_guard.redact(&content));
                     }
                     if let Some(usage) = response.usage.as_ref() {
-                        println!(
-                            "  {C_DIM}Usage: {}{C_RESET}\n",
-                            render_token_usage(Some(usage))
-                        );
+                        let line = render_context_usage(usage);
+                        if !line.is_empty() {
+                            println!("  {C_DIM}{line}{C_RESET}\n");
+                        }
                     }
                     chat_history.push(CompletionMessage::assistant(&content));
                     handle_chat_context_budget(
@@ -1344,17 +1344,36 @@ fn read_boxed_agent_prompt_line(color_mode: ColorMode) -> std::io::Result<Option
         "{}",
         render_prompt_input_box(width, color_mode, AGENT_INPUT_LABEL)
     );
+    // Reserve a line beneath the box for the rotating quote hint.
+    println!();
     stdout.flush()?;
+    // Move the cursor up onto the input line — past the reserved quote line and
+    // the box's bottom border — and into the input column.
     execute!(
         stdout,
-        cursor::MoveUp(1),
+        cursor::MoveUp(2),
         cursor::MoveToColumn(prompt_input_cursor_column(AGENT_INPUT_LABEL))
     )?;
     stdout.flush()?;
 
+    // Rotate saved quotes on the reserved line while the developer types and
+    // submits the prompt. Purely decorative; it never touches stdin.
+    let ticker = PromptQuoteTicker::start(width);
+
     let mut input = String::new();
     let read = std::io::stdin().read_line(&mut input);
-    execute!(stdout, cursor::MoveDown(1), cursor::MoveToColumn(0)).ok();
+    ticker.stop();
+
+    // The terminal echoed the submit newline, dropping the cursor onto the box's
+    // bottom border. Step onto the (now stale) quote line, clear it, and leave the
+    // cursor there so conversation output starts on a clean line below the box.
+    execute!(
+        stdout,
+        cursor::MoveDown(1),
+        cursor::MoveToColumn(0),
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine)
+    )
+    .ok();
 
     match read {
         Ok(0) => Ok(None),
@@ -1586,6 +1605,72 @@ fn random_quote() -> &'static str {
     &quotes[seed % quotes.len()]
 }
 
+/// Truncates a quote to fit the available terminal width, appending an ellipsis
+/// when it had to cut. Counts characters (not bytes) so multi-byte glyphs stay
+/// intact.
+fn truncate_quote(quote: &str, max_chars: usize) -> String {
+    if quote.chars().count() <= max_chars {
+        return quote.to_owned();
+    }
+    let mut out: String = quote.chars().take(max_chars.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// Decorative, rotating quote shown on a reserved line beneath the input box
+/// while the developer is typing a prompt. It only writes to stdout (never reads
+/// stdin) and restores the cursor after every frame so it does not disturb typing.
+struct PromptQuoteTicker {
+    stop_flag: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl PromptQuoteTicker {
+    /// Starts rotating quotes on the line two rows below the input cursor. The
+    /// caller must have reserved that line and positioned the cursor on the input
+    /// line before calling this.
+    fn start(width: u16) -> Self {
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop_flag);
+
+        let handle = thread::spawn(move || {
+            while !flag.load(Ordering::Relaxed) {
+                Self::render_frame(width);
+                // Sleep in short slices so a stop request is honored promptly.
+                for _ in 0..25 {
+                    if flag.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+        });
+
+        PromptQuoteTicker {
+            stop_flag,
+            handle: Some(handle),
+        }
+    }
+
+    fn render_frame(width: u16) {
+        let max_chars = (width as usize).saturating_sub(6).max(8);
+        let quote = truncate_quote(random_quote(), max_chars);
+        // One atomic write: save cursor (DECSC), drop two rows to the reserved
+        // quote line, clear it, draw the quote, then restore the cursor (DECRC).
+        // Writing the whole sequence at once keeps the terminal from splitting it
+        // across the echo of a keystroke, so typing is never displaced.
+        print!("\x1b7\x1b[2B\r\x1b[2K  {C_DIM}{C_RED}{quote}{C_RESET}\x1b8");
+        std::io::stdout().flush().ok();
+    }
+
+    fn stop(mut self) {
+        self.stop_flag.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            handle.join().ok();
+        }
+    }
+}
+
 struct Spinner {
     stop_flag: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
@@ -1659,7 +1744,7 @@ fn run_agent_loop(
     for _ in 0..100 {
         let mut streamed_text = false;
         let step = if context.streaming_enabled {
-            print!("  {C_DIM}Streaming DeepSeek agent response...{C_RESET}\n\n");
+            print!("  {C_DIM}Streaming agent response...{C_RESET}\n\n");
             std::io::stdout().flush().ok();
             let mut redactor = StreamRedactor::new(context.prompt_guard);
             let step = context.provider.complete_agent_step_streaming(
@@ -1714,10 +1799,10 @@ fn run_agent_loop(
                 usage,
             }) => {
                 if let Some(usage) = usage.as_ref() {
-                    println!(
-                        "  {C_DIM}Usage: {}{C_RESET}",
-                        render_token_usage(Some(usage))
-                    );
+                    let line = render_context_usage(usage);
+                    if !line.is_empty() {
+                        println!("  {C_DIM}{line}{C_RESET}");
+                    }
                 }
                 history.push(assistant_message);
 
@@ -3368,6 +3453,44 @@ fn render_token_usage(usage: Option<&TokenUsage>) -> String {
     )
 }
 
+/// Friendly, non-alarming context-usage line for interactive mode. Reframes the
+/// raw DeepSeek prefix-cache accounting as a positive efficiency signal: prompt
+/// caching is automatic and prefix-based, so the "miss" tokens are simply the new
+/// tokens added this turn — never a failure. We surface the context size and the
+/// cached share instead. Returns an empty string when there is nothing useful.
+fn render_context_usage(usage: &TokenUsage) -> String {
+    let Some(context_tokens) = usage.prompt_tokens else {
+        return String::new();
+    };
+
+    match (usage.prompt_cache_hit_tokens, context_tokens) {
+        (Some(hit), total) if total > 0 => {
+            // Round to the nearest percent so e.g. 89.97% reads as 90%.
+            let cached_percent = ((hit as u64 * 100 + total as u64 / 2) / total as u64).min(100);
+            format!(
+                "Context: {} tokens · {}% cached",
+                group_thousands(total),
+                cached_percent
+            )
+        }
+        _ => format!("Context: {} tokens", group_thousands(context_tokens)),
+    }
+}
+
+/// Formats an integer with thousands separators (e.g. 4268 → "4,268").
+fn group_thousands(value: u32) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    let len = digits.len();
+    for (index, character) in digits.chars().enumerate() {
+        if index > 0 && (len - index) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(character);
+    }
+    grouped
+}
+
 fn render_swarm_created(metadata: &SwarmMetadata, metadata_path: &Path) -> String {
     let mut output = format!(
         "RaptorCode Swarm Created\nTask: {}\nDescription: {}\nProvider: {}\nModel: {}\nStatus: {}\nPlanning status: {}\nMetadata: {}\n",
@@ -4604,6 +4727,55 @@ mod tests {
         let error = chat_with_provider("   ", &provider).unwrap_err();
 
         assert!(error.to_string().contains("chat message"));
+    }
+
+    #[test]
+    fn truncate_quote_keeps_short_quotes_and_ellipsizes_long_ones() {
+        let short = "Code never lies";
+        assert_eq!(truncate_quote(short, 40), short);
+
+        let long = "Simplicity is the ultimate sophistication in software";
+        let truncated = truncate_quote(long, 12);
+        assert_eq!(truncated.chars().count(), 12);
+        assert!(truncated.ends_with('…'));
+        assert!(long.starts_with(&truncated[..truncated.len() - '…'.len_utf8()]));
+    }
+
+    #[test]
+    fn groups_thousands_with_commas() {
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(48), "48");
+        assert_eq!(group_thousands(4268), "4,268");
+        assert_eq!(group_thousands(1234567), "1,234,567");
+    }
+
+    #[test]
+    fn context_usage_reframes_cache_as_efficiency_not_failure() {
+        let usage = TokenUsage {
+            prompt_tokens: Some(4268),
+            completion_tokens: Some(124),
+            prompt_cache_hit_tokens: Some(3840),
+            prompt_cache_miss_tokens: Some(428),
+            total_tokens: Some(4637),
+        };
+
+        let line = render_context_usage(&usage);
+        assert_eq!(line, "Context: 4,268 tokens · 90% cached");
+        // The alarming "miss" wording must not surface to the user.
+        assert!(!line.contains("miss"));
+    }
+
+    #[test]
+    fn context_usage_omits_percent_without_cache_data() {
+        let usage = TokenUsage {
+            prompt_tokens: Some(1500),
+            completion_tokens: Some(10),
+            prompt_cache_hit_tokens: None,
+            prompt_cache_miss_tokens: None,
+            total_tokens: Some(1510),
+        };
+
+        assert_eq!(render_context_usage(&usage), "Context: 1,500 tokens");
     }
 
     #[test]
