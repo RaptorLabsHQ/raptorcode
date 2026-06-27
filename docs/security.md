@@ -59,7 +59,7 @@ Security-relevant actions should be logged or surfaced clearly to the developer:
 Current provider controls:
 
 - Base `raptor` checks whether `DEEPSEEK_API_KEY` or a saved local DeepSeek key is present, never prints the raw key, and never reads `.env` files.
-- Interactive key onboarding stores the user-provided DeepSeek key in `~/.raptor/.credentials` with owner-only permissions. Repository files and `raptor.toml` remain secrets-free.
+- Interactive key onboarding stores the user-provided DeepSeek key in `~/.raptor/.credentials` with owner-only permissions: `0600` on Unix/macOS, and on Windows a `0600`-equivalent ACL applied via `icacls /inheritance:r /grant:r <user>:F` (inherited ACEs stripped, full control granted to the current user only). Repository files and `raptor.toml` remain secrets-free.
 - Base `raptor` prints `https://platform.deepseek.com/api_keys` when the DeepSeek key is missing.
 - Base `raptor` uses minimal plain-text output for non-TTY output and `CI=true`; `NO_COLOR` disables ANSI color.
 - `raptor tui` is read-only and does not call models, run shell commands, modify files, write metadata, commit, merge, or push.
@@ -102,7 +102,7 @@ Interactive agentic mode has a broader trust boundary than the metadata-only `ra
 - Agentic mode starts only after an explicit local file-system consent prompt.
 - Available tools are `write_file`, `read_file`, `list_directory`, `create_directory`, `change_directory`, and `run_command`.
 - `run_command` uses a shell command string from the model, so the consent prompt must be treated as granting privileged local execution for that session.
-- Shell commands run with a 120-second timeout and Unix process-group termination to reduce orphaned process risk.
+- Shell commands run with a 120-second timeout and process-tree termination to reduce orphaned process risk: Unix process-group `kill` on Unix/macOS, and `taskkill /T /F /PID` on Windows (the std `child.kill()` only terminates `cmd.exe`, leaving any spawned child processes orphaned).
 - Tool results are appended to provider history as tool messages for auditability inside the active session.
 - DeepSeek usage telemetry is monitored; context warnings and local compaction reduce runaway context growth.
 

@@ -380,6 +380,20 @@ pub(crate) fn execute_tool_call(working_dir: &mut PathBuf, name: &str, arguments
                                     .arg(&process_group)
                                     .status();
                             }
+                            #[cfg(windows)]
+                            {
+                                // `cmd /C` spawns child processes (e.g. a dev
+                                // server) that survive killing cmd.exe alone, so
+                                // `child.kill()` would orphan them. `taskkill /T`
+                                // terminates the whole process tree rooted at the
+                                // shell PID, mirroring the Unix process-group kill.
+                                let _ = std::process::Command::new("taskkill")
+                                    .args(["/T", "/F", "/PID"])
+                                    .arg(child.id().to_string())
+                                    .stdout(std::process::Stdio::null())
+                                    .stderr(std::process::Stdio::null())
+                                    .status();
+                            }
                             let _ = child.kill();
                             let _ = child.wait();
                             return "error: command exceeded the 120-second execution limit and was stopped".to_owned();

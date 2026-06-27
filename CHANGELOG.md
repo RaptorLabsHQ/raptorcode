@@ -8,6 +8,20 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **Windows hardening for the credentials file and command timeout.** The saved
+  DeepSeek API key now gets a `0600`-equivalent ACL on Windows: after writing
+  `~/.raptor/.credentials`, `icacls /inheritance:r /grant:r <user>:F` strips
+  inherited ACEs and grants full control to the current user only (hard-fails
+  like the Unix `chmod`, so a key is never left readable by other principals).
+  The credentials directory now also resolves on Windows via `%USERPROFILE%`
+  (falling back from `$HOME`), which previously left the path unresolved. The
+  `run_command` 120-second timeout now terminates the whole process tree on
+  Windows with `taskkill /T /F /PID` (mirroring the Unix process-group kill)
+  instead of `child.kill()`, which only killed `cmd.exe` and orphaned any
+  child dev servers it spawned.
+
 ## v0.3.0 - 2026-06-25
 
 ### Changed

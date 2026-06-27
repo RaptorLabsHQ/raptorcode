@@ -1540,11 +1540,61 @@ fn write_stored_deepseek_api_key(key: &str) -> Result<(), CliError> {
         )?;
     }
 
+    #[cfg(windows)]
+    {
+        restrict_windows_credentials_acl(&path)?;
+    }
+
+    Ok(())
+}
+
+/// Locks the credentials file down to the current user on Windows, the closest
+/// equivalent to the Unix `0600` mode. `icacls /inheritance:r` strips inherited
+/// ACEs (which can grant Administrators/SYSTEM read access) and `/grant:r` then
+/// re-grants full control to the current user only. icacls is a built-in Windows
+/// tool, so this needs no extra crate dependency — matching the existing pattern
+/// of shelling out to `kill` for process control. Hard-fails like the Unix chmod
+/// so an API key is never left readable by other principals.
+#[cfg(windows)]
+fn restrict_windows_credentials_acl(path: &Path) -> Result<(), CliError> {
+    let username = std::env::var("USERNAME").map_err(|_| {
+        CliError::new("cannot determine current Windows user to secure credentials file")
+    })?;
+    let status = std::process::Command::new("icacls")
+        .arg(path)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(format!("{username}:F"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|error| {
+            CliError::new(format!(
+                "failed to set credentials file permissions: {error}"
+            ))
+        })?;
+    if !status.success() {
+        return Err(CliError::new(
+            "icacls failed to restrict credentials file permissions",
+        ));
+    }
     Ok(())
 }
 
 fn user_raptor_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".raptor"))
+    // Unix/macOS key off $HOME; Windows has no $HOME by default, so fall back to
+    // %USERPROFILE% (with $HOME honored first if a shell set it) — otherwise the
+    // credentials path never resolves and the saved API key is unreachable.
+    #[cfg(windows)]
+    {
+        std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(|home| PathBuf::from(home).join(".raptor"))
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".raptor"))
+    }
 }
 
 fn user_credentials_path() -> Option<PathBuf> {
