@@ -81,6 +81,8 @@ The third cleanup slice (2026-06-12) added `raptor-cli::tool_policy`, a pure-dec
 
 The fourth slice (2026-06-12) added the prompt IP defense boundary: `raptor-cli::prompts` is the single owner of every proprietary system prompt, composing each with the anti-disclosure confidentiality directive and storing the literals XOR-obfuscated at compile time, and `raptor-cli::prompt_guard` redacts verbatim prompt leakage (canary token plus normalized fragments) from model output before rendering, including a holdback-window stream redactor for streamed responses. `lib.rs` and `swarm_orchestrator.rs` request composed prompts and redaction from these modules and no longer embed prompt text. See `docs/security.md` Prompt IP Defense Layers for controls and limitations.
 
+The fifth slice (2026-06-28) extracted interactive slash-command handling into `raptor-cli::slash_command`. That module owns a pure `parse()` that classifies a prompt line into a typed `SlashCommand` (or `None` for a normal prompt) and a `dispatch()` that runs each command's handler against a borrowed `SlashSession` of the live REPL state, returning a `ReplControl` (continue or break). The REPL loop in `lib.rs` previously inlined a `/swarm` prefix check plus a large `match` over the lowercased input; it now constructs the session and acts on the returned control signal only. Classification is unit-tested (case sensitivity, the `/swarm` word boundary, command aliases). Behavior is unchanged.
+
 ## Swarm MVP Boundary
 
 The v0.1 swarm implementation proposal MVP is deliberately limited to metadata, worktree orchestration, planning artifacts, and proposal artifacts.

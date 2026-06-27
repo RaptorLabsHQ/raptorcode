@@ -8,6 +8,17 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **Extracted interactive slash-command handling into `slash_command.rs`.** The
+  REPL's `/swarm`, `/exit`, `/help`, `/clear`, `/thinking`, `/effort`, `/stream`,
+  `/json`, `/balance`, `/api`, and `/model` commands moved out of the ~7.2k-line
+  `lib.rs` REPL loop into a dedicated module: a pure `parse()` classifier (now
+  unit-tested for case sensitivity, the `/swarm` word boundary, and aliases) plus
+  a `dispatch()` that runs each handler against a borrowed `SlashSession`. The
+  main loop now just constructs the session and acts on the returned
+  `ReplControl`. Behavior is unchanged.
+
 ### Added
 
 - **Live swarm dashboard footer quote now rotates during the run.** Previously a

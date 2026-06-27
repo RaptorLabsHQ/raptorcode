@@ -14,6 +14,7 @@ mod agent_tools;
 mod context_budget;
 mod prompt_guard;
 mod prompts;
+mod slash_command;
 mod swarm_orchestrator;
 mod tool_policy;
 
@@ -40,10 +41,9 @@ use raptor_git::{
 };
 use raptor_providers::{
     AgentMessage, AgentStep, AgentStepResult, CompletionMessage, CompletionRequest,
-    CompletionResponse, DeepSeekProvider, DeepSeekReasoningEffort, DeepSeekRequestOptions,
-    DeepSeekResponseFormat, DeepSeekThinkingMode, ModelId, Provider, ProviderCatalog,
-    ProviderConfiguration, ProviderError, ProviderId, ProviderSummary, TokenUsage, ToolDefinition,
-    DEEPSEEK_API_KEY_ENV, DEEPSEEK_API_KEY_URL,
+    CompletionResponse, DeepSeekProvider, DeepSeekReasoningEffort, DeepSeekRequestOptions, ModelId,
+    Provider, ProviderCatalog, ProviderConfiguration, ProviderError, ProviderId, ProviderSummary,
+    TokenUsage, ToolDefinition, DEEPSEEK_API_KEY_ENV, DEEPSEEK_API_KEY_URL,
 };
 use raptor_store::{
     init_project_config, list_agent_sessions, list_swarm_metadata, list_task_metadata,
@@ -151,20 +151,20 @@ const SWARM_MODEL_ID: &str = "deepseek-v4-pro";
 const RAPTOR_PLAN_FILE_NAME: &str = "RAPTOR_PLAN.md";
 const RAPTOR_IMPLEMENTATION_PROPOSAL_FILE_NAME: &str = "RAPTOR_IMPLEMENTATION_PROPOSAL.md";
 
-const C_RESET: &str = "\x1b[0m";
-const C_BOLD: &str = "\x1b[1m";
-const C_DIM: &str = "\x1b[2m";
-const C_RED: &str = "\x1b[91m";
-const C_RED_BOLD: &str = "\x1b[1;91m";
-const C_GREEN_BOLD: &str = "\x1b[1;32m";
+pub(crate) const C_RESET: &str = "\x1b[0m";
+pub(crate) const C_BOLD: &str = "\x1b[1m";
+pub(crate) const C_DIM: &str = "\x1b[2m";
+pub(crate) const C_RED: &str = "\x1b[91m";
+pub(crate) const C_RED_BOLD: &str = "\x1b[1;91m";
+pub(crate) const C_GREEN_BOLD: &str = "\x1b[1;32m";
 const C_GREEN: &str = "\x1b[32m";
 const C_YELLOW_BOLD: &str = "\x1b[1;33m";
-const C_CYAN: &str = "\x1b[36m";
+pub(crate) const C_CYAN: &str = "\x1b[36m";
 
-struct MenuItem {
-    label: String,
-    sublabel: Option<String>,
-    enabled: bool,
+pub(crate) struct MenuItem {
+    pub(crate) label: String,
+    pub(crate) sublabel: Option<String>,
+    pub(crate) enabled: bool,
 }
 
 fn render_menu_lines(items: &[MenuItem], cursor: usize, raw_mode: bool) {
@@ -190,7 +190,7 @@ fn render_menu_lines(items: &[MenuItem], cursor: usize, raw_mode: bool) {
     std::io::stdout().flush().ok();
 }
 
-fn interactive_select(items: &[MenuItem]) -> Option<usize> {
+pub(crate) fn interactive_select(items: &[MenuItem]) -> Option<usize> {
     use crossterm::{
         event::{self, Event, KeyCode, KeyModifiers},
         terminal::{disable_raw_mode, enable_raw_mode},
@@ -596,7 +596,7 @@ pub fn startup_banner_options(
     }
 }
 
-fn format_model_display_name(id: &str) -> String {
+pub(crate) fn format_model_display_name(id: &str) -> String {
     let stripped = id.strip_prefix("deepseek-").unwrap_or(id);
     let parts: Vec<String> = stripped
         .split('-')
@@ -827,11 +827,11 @@ pub fn chat_with_provider(message: &str, provider: &dyn Provider) -> Result<Stri
     Ok(render_chat_response(&response))
 }
 
-fn chat_system_prompt(json_mode: bool) -> String {
+pub(crate) fn chat_system_prompt(json_mode: bool) -> String {
     prompts::chat_system_prompt(json_mode)
 }
 
-fn agent_system_message(current_dir: &Path, json_mode: bool) -> AgentMessage {
+pub(crate) fn agent_system_message(current_dir: &Path, json_mode: bool) -> AgentMessage {
     let content = prompts::agent_system_prompt(&current_dir.display().to_string(), json_mode);
 
     AgentMessage {
@@ -958,246 +958,24 @@ pub fn run_interactive_chat(
             continue;
         }
 
-        if let Some(mission) = input
-            .strip_prefix("/swarm")
-            .filter(|rest| rest.is_empty() || rest.starts_with(' '))
-        {
-            let mission = mission.trim();
-            if mission.is_empty() {
-                println!("  usage: /swarm <mission description>\n");
-                continue;
-            }
-            if !agent_mode {
-                println!("  {C_RED}✗ /swarm needs agentic mode.{C_RESET}  {C_DIM}Restart raptor and grant file system access.{C_RESET}\n");
-                continue;
-            }
-            println!();
-            let result = swarm_orchestrator::run_live_swarm(
+        if let Some(command) = slash_command::parse(&input) {
+            let mut session = slash_command::SlashSession {
                 current_dir,
-                swarm_orchestrator::LiveSwarmConfig {
-                    api_key: api_key.clone(),
-                    mission: mission.to_owned(),
-                    model_label: format_model_display_name(model_id.as_str()),
-                    model_id: model_id.clone(),
-                    // Swarm agents always run ultrathink with text output,
-                    // independent of the session /json or /effort settings.
-                    request_options: DeepSeekRequestOptions::default()
-                        .with_reasoning_effort(DeepSeekReasoningEffort::Max),
-                },
-            );
-            match result {
-                Ok(summary) => println!("{summary}"),
-                Err(error) => println!("  {C_RED}✗ swarm failed:{C_RESET} {error}\n"),
+                agent_mode,
+                provider: &mut provider,
+                api_key: &mut api_key,
+                model_id: &mut model_id,
+                request_options: &mut request_options,
+                streaming_enabled: &mut streaming_enabled,
+                json_mode: &mut json_mode,
+                agent_history: &mut agent_history,
+                chat_history: &mut chat_history,
+                context_budget: &mut context_budget,
+            };
+            match slash_command::dispatch(command, &mut session) {
+                slash_command::ReplControl::Continue => continue,
+                slash_command::ReplControl::Break => break,
             }
-            continue;
-        }
-
-        match input.to_lowercase().as_str() {
-            "/exit" | "/quit" => {
-                println!("Goodbye.");
-                break;
-            }
-            "/help" | "?" => {
-                print!("{}", render_interactive_help());
-                continue;
-            }
-            "/clear" => {
-                agent_history = vec![agent_system_message(current_dir, json_mode)];
-                chat_history = vec![CompletionMessage::system(chat_system_prompt(json_mode))];
-                context_budget = ContextBudgetState::default();
-                println!("Conversation cleared.\n");
-                continue;
-            }
-            "/thinking" => {
-                request_options.thinking_mode = match request_options.thinking_mode {
-                    DeepSeekThinkingMode::Enabled => DeepSeekThinkingMode::Disabled,
-                    DeepSeekThinkingMode::Disabled => DeepSeekThinkingMode::Enabled,
-                };
-                agent_history = vec![agent_system_message(current_dir, json_mode)];
-                chat_history = vec![CompletionMessage::system(chat_system_prompt(json_mode))];
-                context_budget = ContextBudgetState::default();
-                println!(
-                    "  {C_GREEN_BOLD}✓  DeepSeek {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}\n",
-                    request_options.thinking_mode.label()
-                );
-                continue;
-            }
-            "/effort" => {
-                request_options.reasoning_effort = match request_options.reasoning_effort {
-                    DeepSeekReasoningEffort::High => DeepSeekReasoningEffort::Max,
-                    DeepSeekReasoningEffort::Max => DeepSeekReasoningEffort::High,
-                };
-                agent_history = vec![agent_system_message(current_dir, json_mode)];
-                chat_history = vec![CompletionMessage::system(chat_system_prompt(json_mode))];
-                context_budget = ContextBudgetState::default();
-                println!(
-                    "  {C_GREEN_BOLD}✓  DeepSeek {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}\n",
-                    request_options.reasoning_effort.label()
-                );
-                continue;
-            }
-            "/stream" => {
-                streaming_enabled = !streaming_enabled;
-                println!(
-                    "  {C_GREEN_BOLD}✓  Streaming {}{C_RESET}\n",
-                    if streaming_enabled { "on" } else { "off" }
-                );
-                continue;
-            }
-            "/json" => {
-                json_mode = !json_mode;
-                request_options.response_format = if json_mode {
-                    DeepSeekResponseFormat::JsonObject
-                } else {
-                    DeepSeekResponseFormat::Text
-                };
-                agent_history = vec![agent_system_message(current_dir, json_mode)];
-                chat_history = vec![CompletionMessage::system(chat_system_prompt(json_mode))];
-                context_budget = ContextBudgetState::default();
-                println!(
-                    "  {C_GREEN_BOLD}✓  JSON output {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}\n",
-                    if json_mode { "on" } else { "off" }
-                );
-                continue;
-            }
-            "/balance" => {
-                println!();
-                print!("  {C_DIM}Fetching DeepSeek balance...{C_RESET}");
-                std::io::stdout().flush().ok();
-                match provider.get_user_balance() {
-                    Ok(balance) => {
-                        println!(" done\r");
-                        println!(
-                            "  {C_BOLD}DeepSeek balance{C_RESET}  {}",
-                            if balance.is_available {
-                                format!("{C_GREEN_BOLD}available{C_RESET}")
-                            } else {
-                                format!("{C_RED_BOLD}unavailable{C_RESET}")
-                            }
-                        );
-                        if balance.balance_infos.is_empty() {
-                            println!("  {C_DIM}No balance rows returned.{C_RESET}");
-                        }
-                        for info in balance.balance_infos {
-                            println!(
-                                "  {C_DIM}{}:{C_RESET} total={} granted={} topped_up={}",
-                                info.currency,
-                                info.total_balance,
-                                info.granted_balance,
-                                info.topped_up_balance
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        println!();
-                        eprintln!("  {C_RED}✗  {error}{C_RESET}");
-                    }
-                }
-                println!();
-                continue;
-            }
-            "/api" => {
-                println!();
-                println!("  {C_BOLD}API Key Settings{C_RESET}  {C_DIM}↑/↓ · Enter{C_RESET}");
-                println!();
-                let api_items = vec![
-                    MenuItem {
-                        label: "Change API Key".to_owned(),
-                        sublabel: None,
-                        enabled: true,
-                    },
-                    MenuItem {
-                        label: "Show current API Key".to_owned(),
-                        sublabel: None,
-                        enabled: true,
-                    },
-                    MenuItem {
-                        label: "Cancel".to_owned(),
-                        sublabel: None,
-                        enabled: true,
-                    },
-                ];
-                match interactive_select(&api_items) {
-                    Some(0) => match prompt_provider_and_api_key() {
-                        Ok(new_key) => {
-                            print!("\n  {C_DIM}⟳  Testing connection...{C_RESET}");
-                            std::io::stdout().flush().ok();
-                            match DeepSeekProvider::new(&new_key) {
-                                Ok(new_prov) => match test_deepseek_connection(&new_prov) {
-                                    Ok(()) => match write_stored_deepseek_api_key(&new_key) {
-                                        Ok(()) => {
-                                            provider = new_prov;
-                                            api_key = new_key;
-                                            println!("\n  {C_GREEN_BOLD}✓  API key updated and saved.{C_RESET}");
-                                        }
-                                        Err(e) => eprintln!("\n  failed to save key: {e}"),
-                                    },
-                                    Err(e) => eprintln!("\n  {C_RED}✗  {e}{C_RESET}"),
-                                },
-                                Err(e) => eprintln!("\n  {C_RED}✗  {e}{C_RESET}"),
-                            }
-                        }
-                        Err(e) => eprintln!("  {e}"),
-                    },
-                    Some(1) => {
-                        let masked = if api_key.len() > 12 {
-                            format!("{}...{}", &api_key[..8], &api_key[api_key.len() - 4..])
-                        } else {
-                            "***".to_owned()
-                        };
-                        println!("  {C_DIM}Current API key:{C_RESET} {C_CYAN}{masked}{C_RESET}");
-                    }
-                    _ => {}
-                }
-                println!();
-                continue;
-            }
-            "/model" => {
-                println!();
-                print!("  {C_DIM}Fetching available models...{C_RESET}");
-                std::io::stdout().flush().ok();
-                let model_list = match provider.list_models() {
-                    Ok(models) if !models.is_empty() => {
-                        println!(" done\r");
-                        models
-                    }
-                    _ => {
-                        println!(" using defaults\r");
-                        vec!["deepseek-v4-pro".to_owned(), "deepseek-v4-flash".to_owned()]
-                    }
-                };
-                println!();
-                println!("  {C_BOLD}Select model{C_RESET}  {C_DIM}↑/↓ · Enter{C_RESET}");
-                println!();
-                let model_items: Vec<MenuItem> = model_list
-                    .iter()
-                    .map(|m| MenuItem {
-                        label: m.clone(),
-                        sublabel: if m.as_str() == model_id.as_str() {
-                            Some("current".to_owned())
-                        } else {
-                            None
-                        },
-                        enabled: true,
-                    })
-                    .collect();
-                if let Some(idx) = interactive_select(&model_items) {
-                    if let Ok(new_model) = ModelId::new(&model_list[idx]) {
-                        model_id = new_model;
-                        agent_history = vec![agent_system_message(current_dir, json_mode)];
-                        chat_history =
-                            vec![CompletionMessage::system(chat_system_prompt(json_mode))];
-                        context_budget = ContextBudgetState::default();
-                        println!(
-                            "  {C_GREEN_BOLD}✓  Model: {}{C_RESET}  {C_DIM}(conversation reset){C_RESET}",
-                            model_id.as_str()
-                        );
-                    }
-                }
-                println!();
-                continue;
-            }
-            _ => {}
         }
 
         println!();
@@ -1413,7 +1191,7 @@ fn read_boxed_agent_prompt_line(color_mode: ColorMode) -> std::io::Result<Option
     }
 }
 
-fn test_deepseek_connection(provider: &DeepSeekProvider) -> Result<(), CliError> {
+pub(crate) fn test_deepseek_connection(provider: &DeepSeekProvider) -> Result<(), CliError> {
     let model_id = provider
         .default_model()
         .cloned()
@@ -1437,7 +1215,7 @@ fn test_deepseek_connection(provider: &DeepSeekProvider) -> Result<(), CliError>
         })
 }
 
-fn prompt_provider_and_api_key() -> Result<String, CliError> {
+pub(crate) fn prompt_provider_and_api_key() -> Result<String, CliError> {
     use std::io::Write as _;
 
     println!();
@@ -1520,7 +1298,7 @@ fn read_stored_deepseek_api_key() -> Option<String> {
     }
 }
 
-fn write_stored_deepseek_api_key(key: &str) -> Result<(), CliError> {
+pub(crate) fn write_stored_deepseek_api_key(key: &str) -> Result<(), CliError> {
     let dir = user_raptor_dir().ok_or_else(|| CliError::new("cannot determine home directory"))?;
     std::fs::create_dir_all(&dir)
         .map_err(|error| CliError::new(format!("failed to create {}: {error}", dir.display())))?;
@@ -1601,7 +1379,7 @@ fn user_credentials_path() -> Option<PathBuf> {
     user_raptor_dir().map(|dir| dir.join(".credentials"))
 }
 
-fn render_interactive_help() -> String {
+pub(crate) fn render_interactive_help() -> String {
     format!(
         "\n{C_BOLD}RaptorCode commands:{C_RESET}\n  /help or ?   Show this help\n  /swarm <mission>  Launch the live four-specialist agent swarm\n  /clear       Clear conversation history\n  /api         Change or view API key\n  /model       Select AI model\n  /thinking    Toggle DeepSeek thinking mode on/off\n  /effort      Toggle DeepSeek reasoning effort high/max\n  /stream      Toggle streaming responses\n  /json        Toggle DeepSeek JSON output mode\n  /balance     Show DeepSeek account balance\n  /exit        Exit\n  /quit        Exit\n\nJust type your coding request and press Enter.\n\n"
     )
