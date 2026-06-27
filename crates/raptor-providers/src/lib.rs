@@ -768,6 +768,17 @@ impl DeepSeekProvider {
         })
     }
 
+    /// Authenticated POST to the configured endpoint. Centralizes bearer-auth so
+    /// the key is attached the same way for every request.
+    fn authed_post(&self) -> reqwest::blocking::RequestBuilder {
+        self.client.post(&self.endpoint).bearer_auth(&self.api_key)
+    }
+
+    /// Authenticated GET to an arbitrary DeepSeek endpoint (models, balance).
+    fn authed_get(&self, url: &str) -> reqwest::blocking::RequestBuilder {
+        self.client.get(url).bearer_auth(&self.api_key)
+    }
+
     pub fn complete_agent_step(
         &self,
         model_id: &ModelId,
@@ -776,17 +787,7 @@ impl DeepSeekProvider {
         options: &DeepSeekRequestOptions,
     ) -> Result<AgentStep, ProviderError> {
         let request_body = deepseek_agent_request(model_id, messages, tools, options, false);
-        let response = self
-            .client
-            .post(&self.endpoint)
-            .bearer_auth(&self.api_key)
-            .json(&request_body)
-            .send()
-            .map_err(|e| ProviderError::HttpTransport(e.to_string()))?;
-        let status = response.status().as_u16();
-        let body = response
-            .text()
-            .map_err(|e| ProviderError::HttpTransport(e.to_string()))?;
+        let (status, body) = send_collect(self.authed_post().json(&request_body))?;
 
         if status != 200 {
             return Err(map_deepseek_error_status(status, &body));
@@ -856,13 +857,7 @@ impl DeepSeekProvider {
         F: FnMut(CompletionStreamDelta),
     {
         let request_body = deepseek_agent_request(model_id, messages, tools, options, true);
-        let response = self
-            .client
-            .post(&self.endpoint)
-            .bearer_auth(&self.api_key)
-            .json(&request_body)
-            .send()
-            .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+        let response = send_request(self.authed_post().json(&request_body))?;
         let status = response.status().as_u16();
 
         if status != 200 {
@@ -876,16 +871,7 @@ impl DeepSeekProvider {
     }
 
     pub fn list_models(&self) -> Result<Vec<String>, ProviderError> {
-        let response = self
-            .client
-            .get(DEEPSEEK_MODELS_ENDPOINT)
-            .bearer_auth(&self.api_key)
-            .send()
-            .map_err(|e| ProviderError::HttpTransport(e.to_string()))?;
-        let status = response.status().as_u16();
-        let body = response
-            .text()
-            .map_err(|e| ProviderError::HttpTransport(e.to_string()))?;
+        let (status, body) = send_collect(self.authed_get(DEEPSEEK_MODELS_ENDPOINT))?;
 
         if status != 200 {
             return Err(map_deepseek_error_status(status, &body));
@@ -899,16 +885,7 @@ impl DeepSeekProvider {
     }
 
     pub fn get_user_balance(&self) -> Result<DeepSeekUserBalance, ProviderError> {
-        let response = self
-            .client
-            .get(DEEPSEEK_USER_BALANCE_ENDPOINT)
-            .bearer_auth(&self.api_key)
-            .send()
-            .map_err(|e| ProviderError::HttpTransport(e.to_string()))?;
-        let status = response.status().as_u16();
-        let body = response
-            .text()
-            .map_err(|e| ProviderError::HttpTransport(e.to_string()))?;
+        let (status, body) = send_collect(self.authed_get(DEEPSEEK_USER_BALANCE_ENDPOINT))?;
 
         if status != 200 {
             return Err(map_deepseek_error_status(status, &body));
@@ -932,13 +909,7 @@ impl DeepSeekProvider {
         }
 
         let request_body = request.for_streaming()?;
-        let response = self
-            .client
-            .post(&self.endpoint)
-            .bearer_auth(&self.api_key)
-            .json(&request_body)
-            .send()
-            .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+        let response = send_request(self.authed_post().json(&request_body))?;
         let status = response.status().as_u16();
 
         if status != 200 {
@@ -986,17 +957,7 @@ impl Provider for DeepSeekProvider {
         }
 
         let request_body = deepseek_chat_request_from_completion(&request)?;
-        let response = self
-            .client
-            .post(&self.endpoint)
-            .bearer_auth(&self.api_key)
-            .json(&request_body)
-            .send()
-            .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
-        let status = response.status().as_u16();
-        let body = response
-            .text()
-            .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+        let (status, body) = send_collect(self.authed_post().json(&request_body))?;
 
         parse_deepseek_chat_response(status, &body, &request.provider_id, &request.model_id)
     }
@@ -1609,6 +1570,31 @@ fn deepseek_definition() -> ProviderDefinition {
         ],
         ProviderCapabilities::network_chat(),
     )
+}
+
+/// Sends a prepared request, mapping any transport failure to a uniform error.
+/// Used by the streaming paths, which need the raw [`reqwest::blocking::Response`]
+/// to read the SSE body.
+fn send_request(
+    builder: reqwest::blocking::RequestBuilder,
+) -> Result<reqwest::blocking::Response, ProviderError> {
+    builder
+        .send()
+        .map_err(|error| ProviderError::HttpTransport(error.to_string()))
+}
+
+/// Sends a prepared request and collects the `(status, body)` pair. Used by the
+/// non-streaming paths, which parse a fully buffered response. Transport failures
+/// on both send and body read map to a uniform error.
+fn send_collect(
+    builder: reqwest::blocking::RequestBuilder,
+) -> Result<(u16, String), ProviderError> {
+    let response = send_request(builder)?;
+    let status = response.status().as_u16();
+    let body = response
+        .text()
+        .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+    Ok((status, body))
 }
 
 fn map_deepseek_error_status(status: u16, body: &str) -> ProviderError {
