@@ -1158,20 +1158,17 @@ pub fn parse_deepseek_stream_chunk(
     }))
 }
 
-fn read_deepseek_streaming_response<F>(
+/// Iterates the `data:` payloads of a Server-Sent Events stream: blank lines and
+/// `:` comments are skipped and `[DONE]` ends the stream. The SSE framing lives
+/// here so the chat and agent stream readers share one correct implementation
+/// and differ only in how they handle each decoded payload.
+fn for_each_sse_data_line<F>(
     response: reqwest::blocking::Response,
-    provider_id: &ProviderId,
-    fallback_model_id: &ModelId,
-    on_delta: &mut F,
-) -> Result<CompletionResponse, ProviderError>
+    mut handle: F,
+) -> Result<(), ProviderError>
 where
-    F: FnMut(CompletionStreamDelta),
+    F: FnMut(&str) -> Result<(), ProviderError>,
 {
-    let mut content = String::new();
-    let mut finish_reason = None;
-    let mut model_id = fallback_model_id.clone();
-    let mut reasoning_content = String::new();
-    let mut usage = None;
     let reader = BufReader::new(response);
 
     for line in reader.lines() {
@@ -1190,43 +1187,38 @@ where
             break;
         }
 
-        let parsed: DeepSeekChatStreamChunk = serde_json::from_str(data).map_err(|error| {
-            ProviderError::MalformedResponse(format!(
-                "failed to parse DeepSeek stream chunk: {error}"
-            ))
-        })?;
-
-        if let Some(model) = parsed.model.filter(|model| !model.trim().is_empty()) {
-            model_id = ModelId::new(model)?;
-        }
-
-        if let Some(chunk_usage) = parsed.usage {
-            usage = Some(token_usage_from_deepseek_usage(chunk_usage));
-        }
-
-        let Some(choice) = parsed.choices.into_iter().next() else {
-            continue;
-        };
-        if choice.finish_reason.is_some() {
-            finish_reason = choice.finish_reason.clone();
-        }
-        if let Some(reasoning_delta) = choice.delta.reasoning_content {
-            reasoning_content.push_str(&reasoning_delta);
-            on_delta(CompletionStreamDelta {
-                content: None,
-                finish_reason: choice.finish_reason.clone(),
-                reasoning_content: Some(reasoning_delta),
-            });
-        }
-        if let Some(content_delta) = choice.delta.content {
-            content.push_str(&content_delta);
-            on_delta(CompletionStreamDelta {
-                content: Some(content_delta),
-                finish_reason: choice.finish_reason,
-                reasoning_content: None,
-            });
-        }
+        handle(data)?;
     }
+
+    Ok(())
+}
+
+fn read_deepseek_streaming_response<F>(
+    response: reqwest::blocking::Response,
+    provider_id: &ProviderId,
+    fallback_model_id: &ModelId,
+    on_delta: &mut F,
+) -> Result<CompletionResponse, ProviderError>
+where
+    F: FnMut(CompletionStreamDelta),
+{
+    let mut content = String::new();
+    let mut finish_reason = None;
+    let mut model_id = fallback_model_id.clone();
+    let mut reasoning_content = String::new();
+    let mut usage = None;
+
+    for_each_sse_data_line(response, |data| {
+        apply_deepseek_chat_stream_data(
+            data,
+            &mut content,
+            &mut reasoning_content,
+            &mut finish_reason,
+            &mut model_id,
+            &mut usage,
+            on_delta,
+        )
+    })?;
 
     Ok(CompletionResponse {
         provider_id: provider_id.clone(),
@@ -1242,6 +1234,55 @@ where
     })
 }
 
+fn apply_deepseek_chat_stream_data<F>(
+    data: &str,
+    content: &mut String,
+    reasoning_content: &mut String,
+    finish_reason: &mut Option<String>,
+    model_id: &mut ModelId,
+    usage: &mut Option<TokenUsage>,
+    on_delta: &mut F,
+) -> Result<(), ProviderError>
+where
+    F: FnMut(CompletionStreamDelta),
+{
+    let parsed: DeepSeekChatStreamChunk = serde_json::from_str(data).map_err(|error| {
+        ProviderError::MalformedResponse(format!("failed to parse DeepSeek stream chunk: {error}"))
+    })?;
+
+    if let Some(model) = parsed.model.filter(|model| !model.trim().is_empty()) {
+        *model_id = ModelId::new(model)?;
+    }
+    if let Some(chunk_usage) = parsed.usage {
+        *usage = Some(token_usage_from_deepseek_usage(chunk_usage));
+    }
+
+    let Some(choice) = parsed.choices.into_iter().next() else {
+        return Ok(());
+    };
+    if choice.finish_reason.is_some() {
+        *finish_reason = choice.finish_reason.clone();
+    }
+    if let Some(reasoning_delta) = choice.delta.reasoning_content {
+        reasoning_content.push_str(&reasoning_delta);
+        on_delta(CompletionStreamDelta {
+            content: None,
+            finish_reason: choice.finish_reason.clone(),
+            reasoning_content: Some(reasoning_delta),
+        });
+    }
+    if let Some(content_delta) = choice.delta.content {
+        content.push_str(&content_delta);
+        on_delta(CompletionStreamDelta {
+            content: Some(content_delta),
+            finish_reason: choice.finish_reason,
+            reasoning_content: None,
+        });
+    }
+
+    Ok(())
+}
+
 fn read_deepseek_agent_streaming_response<F>(
     response: reqwest::blocking::Response,
     on_delta: &mut F,
@@ -1254,24 +1295,8 @@ where
     let mut tool_calls = BTreeMap::new();
     let mut finish_reason = None;
     let mut usage = None;
-    let reader = BufReader::new(response);
 
-    for line in reader.lines() {
-        let line = line.map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
-        let trimmed = line.trim();
-
-        if trimmed.is_empty() || trimmed.starts_with(':') {
-            continue;
-        }
-
-        let Some(data) = trimmed.strip_prefix("data:") else {
-            continue;
-        };
-        let data = data.trim();
-        if data == "[DONE]" {
-            break;
-        }
-
+    for_each_sse_data_line(response, |data| {
         apply_deepseek_agent_stream_data(
             data,
             &mut content,
@@ -1280,8 +1305,8 @@ where
             &mut finish_reason,
             &mut usage,
             on_delta,
-        )?;
-    }
+        )
+    })?;
 
     finish_deepseek_agent_stream(content, reasoning_content, tool_calls, finish_reason, usage)
 }
@@ -1967,6 +1992,58 @@ mod tests {
             .is_none()
         );
         assert!(parse_deepseek_stream_chunk("[DONE]").unwrap().is_none());
+    }
+
+    #[test]
+    fn deepseek_chat_stream_accumulates_content_reasoning_model_and_usage() {
+        let mut content = String::new();
+        let mut reasoning_content = String::new();
+        let mut finish_reason = None;
+        let mut model_id = ModelId::new("fallback-model").unwrap();
+        let mut usage = None;
+        let mut deltas = Vec::new();
+
+        apply_deepseek_chat_stream_data(
+            r#"{"choices":[{"delta":{"reasoning_content":"think"},"finish_reason":null}],"model":"deepseek-v4-pro"}"#,
+            &mut content,
+            &mut reasoning_content,
+            &mut finish_reason,
+            &mut model_id,
+            &mut usage,
+            &mut |delta| deltas.push(delta),
+        )
+        .unwrap();
+        apply_deepseek_chat_stream_data(
+            r#"{"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}"#,
+            &mut content,
+            &mut reasoning_content,
+            &mut finish_reason,
+            &mut model_id,
+            &mut usage,
+            &mut |delta| deltas.push(delta),
+        )
+        .unwrap();
+        apply_deepseek_chat_stream_data(
+            r#"{"choices":[{"delta":{"content":" world"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}"#,
+            &mut content,
+            &mut reasoning_content,
+            &mut finish_reason,
+            &mut model_id,
+            &mut usage,
+            &mut |delta| deltas.push(delta),
+        )
+        .unwrap();
+
+        // The streamed `model` overrides the fallback, deltas accumulate in order,
+        // and the final finish_reason plus usage are captured.
+        assert_eq!(model_id.as_str(), "deepseek-v4-pro");
+        assert_eq!(content, "Hello world");
+        assert_eq!(reasoning_content, "think");
+        assert_eq!(finish_reason.as_deref(), Some("stop"));
+        assert_eq!(usage.as_ref().unwrap().total_tokens, Some(7));
+        assert_eq!(deltas.len(), 3);
+        assert_eq!(deltas[0].reasoning_content.as_deref(), Some("think"));
+        assert_eq!(deltas[1].content.as_deref(), Some("Hello"));
     }
 
     #[test]

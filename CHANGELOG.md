@@ -10,6 +10,15 @@ All notable RaptorCode changes will be documented in this file.
 
 ### Changed
 
+- **De-duplicated the DeepSeek SSE streaming readers.** The chat and agent
+  streaming response readers each carried their own copy of the Server-Sent
+  Events framing loop (line iteration, blank/`:`-comment skipping, `data:`
+  stripping, `[DONE]` termination). That framing now lives in one
+  `for_each_sse_data_line` helper that both readers share, and the chat reader's
+  per-chunk assembly moved into a tested `apply_deepseek_chat_stream_data`
+  mirroring the agent path. New unit test covers chat-stream content/reasoning/
+  model/usage accumulation, which previously had no direct coverage. No behavior
+  change.
 - **Extracted interactive slash-command handling into `slash_command.rs`.** The
   REPL's `/swarm`, `/exit`, `/help`, `/clear`, `/thinking`, `/effort`, `/stream`,
   `/json`, `/balance`, `/api`, and `/model` commands moved out of the ~7.2k-line
