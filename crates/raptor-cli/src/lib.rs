@@ -1679,11 +1679,35 @@ fn random_quote() -> &'static str {
     if quotes.is_empty() {
         return "The best way to predict the future is to invent it";
     }
+    &quotes[random_quote_index(quotes.len())]
+}
+
+fn random_quote_index(len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos() as usize)
         .unwrap_or(42);
-    &quotes[seed % quotes.len()]
+    seed % len
+}
+
+/// Builds the rotating footer-quote pool for a live swarm run: the full quote set
+/// rotated to start at a pseudo-random offset, so each run opens on a different
+/// quote and the dashboard then cycles through the rest in order. Falls back to a
+/// single default when no quotes are embedded.
+pub(crate) fn swarm_quote_pool() -> Vec<String> {
+    let quotes = hacking_quotes();
+    if quotes.is_empty() {
+        return vec!["The best way to predict the future is to invent it".to_owned()];
+    }
+    let start = random_quote_index(quotes.len());
+    quotes[start..]
+        .iter()
+        .chain(quotes[..start].iter())
+        .cloned()
+        .collect()
 }
 
 /// Truncates a quote to fit the available terminal width, appending an ellipsis
@@ -4820,6 +4844,27 @@ mod tests {
         assert_eq!(truncated.chars().count(), 12);
         assert!(truncated.ends_with('…'));
         assert!(long.starts_with(&truncated[..truncated.len() - '…'.len_utf8()]));
+    }
+
+    #[test]
+    fn swarm_quote_pool_holds_every_quote_once_for_rotation() {
+        let pool = swarm_quote_pool();
+        let all = hacking_quotes();
+        if all.is_empty() {
+            // No embedded quotes: the pool still yields the single fallback so the
+            // dashboard always has something to show.
+            assert_eq!(pool.len(), 1);
+        } else {
+            assert_eq!(pool.len(), all.len());
+            let mut sorted_pool = pool.clone();
+            sorted_pool.sort();
+            let mut sorted_all: Vec<String> = all.to_vec();
+            sorted_all.sort();
+            assert_eq!(
+                sorted_pool, sorted_all,
+                "pool is a rotation of the full quote set (no drops or dupes)"
+            );
+        }
     }
 
     #[test]

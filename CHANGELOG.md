@@ -8,6 +8,14 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Live swarm dashboard footer quote now rotates during the run.** Previously a
+  single quote was chosen once and frozen for the whole run; the dashboard now
+  cycles through the embedded quote pool every 8 seconds. The orchestrator passes
+  the full pool (rotated to a pseudo-random start), and `raptor-tui` advances it
+  on a timer inside the render loop, keeping the crate free of the quote asset.
+
 ### Changed
 
 - **Windows hardening for the credentials file and command timeout.** The saved

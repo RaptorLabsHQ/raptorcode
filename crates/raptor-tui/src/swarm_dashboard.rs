@@ -19,6 +19,9 @@ use ratatui::{Frame, Terminal};
 
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const MAX_RECENT_ACTIVITY: usize = 64;
+/// How long each footer quote stays on screen before the dashboard rotates to the
+/// next one in the pool.
+const QUOTE_ROTATION_INTERVAL: Duration = Duration::from_secs(8);
 
 /// Crimson accents, dim chrome, white emphasis — the RaptorCode terminal palette.
 const RAPTOR_RED: Color = Color::Rgb(0xFF, 0x19, 0x19);
@@ -125,11 +128,18 @@ pub struct SwarmDashboardState {
     pub max_steps: u32,
     pub mission: String,
     pub model_label: String,
+    /// The footer quote currently on screen. Sourced from `quotes` and advanced
+    /// during the run by [`SwarmDashboardState::rotate_quote`].
     pub quote: String,
     pub recent_activity: VecDeque<String>,
     pub stopping: bool,
     pub total_tokens: u64,
     confirmations: VecDeque<PendingConfirmation>,
+    /// Pool of footer quotes to cycle through while the swarm runs. The caller
+    /// supplies the pool (and its starting order) so this crate stays free of the
+    /// embedded quote asset.
+    quotes: Vec<String>,
+    quote_cursor: usize,
 }
 
 impl SwarmDashboardState {
@@ -138,8 +148,9 @@ impl SwarmDashboardState {
         model_label: impl Into<String>,
         roles: &[String],
         max_steps: u32,
-        quote: impl Into<String>,
+        quotes: Vec<String>,
     ) -> Self {
+        let quote = quotes.first().cloned().unwrap_or_default();
         Self {
             agents: roles
                 .iter()
@@ -149,12 +160,24 @@ impl SwarmDashboardState {
             max_steps,
             mission: mission.into(),
             model_label: model_label.into(),
-            quote: quote.into(),
+            quote,
             recent_activity: VecDeque::new(),
             stopping: false,
             total_tokens: 0,
             confirmations: VecDeque::new(),
+            quotes,
+            quote_cursor: 0,
         }
+    }
+
+    /// Advances the footer to the next quote in the pool, wrapping around. A
+    /// no-op when the pool has fewer than two quotes (nothing to rotate to).
+    pub fn rotate_quote(&mut self) {
+        if self.quotes.len() < 2 {
+            return;
+        }
+        self.quote_cursor = (self.quote_cursor + 1) % self.quotes.len();
+        self.quote = self.quotes[self.quote_cursor].clone();
     }
 
     pub fn all_agents_terminal(&self) -> bool {
@@ -303,6 +326,7 @@ fn run_swarm_dashboard_loop(
 ) -> io::Result<bool> {
     let started_at = Instant::now();
     let mut workers_disconnected = false;
+    let mut last_quote_rotation = Instant::now();
 
     loop {
         loop {
@@ -314,6 +338,13 @@ fn run_swarm_dashboard_loop(
                     break;
                 }
             }
+        }
+
+        // Cycle the footer quote periodically so a long run shows variety rather
+        // than a single quote frozen for its whole duration.
+        if last_quote_rotation.elapsed() >= QUOTE_ROTATION_INTERVAL {
+            state.rotate_quote();
+            last_quote_rotation = Instant::now();
         }
 
         let elapsed = started_at.elapsed();
@@ -817,8 +848,36 @@ mod tests {
             "DeepSeek V4 Pro",
             &roles,
             100,
-            "the quieter you become, the more you are able to hear",
+            vec!["the quieter you become, the more you are able to hear".to_owned()],
         )
+    }
+
+    #[test]
+    fn rotate_quote_cycles_through_the_pool_and_wraps() {
+        let roles = vec!["frontend-agent".to_owned()];
+        let mut state = SwarmDashboardState::new(
+            "mission",
+            "model",
+            &roles,
+            100,
+            vec!["first".to_owned(), "second".to_owned(), "third".to_owned()],
+        );
+
+        assert_eq!(state.quote, "first");
+        state.rotate_quote();
+        assert_eq!(state.quote, "second");
+        state.rotate_quote();
+        assert_eq!(state.quote, "third");
+        state.rotate_quote();
+        assert_eq!(state.quote, "first", "rotation wraps back to the start");
+    }
+
+    #[test]
+    fn rotate_quote_is_a_noop_for_a_single_quote_pool() {
+        let mut state = test_state();
+        let original = state.quote.clone();
+        state.rotate_quote();
+        assert_eq!(state.quote, original);
     }
 
     #[test]
