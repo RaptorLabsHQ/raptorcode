@@ -10,6 +10,16 @@ All notable RaptorCode changes will be documented in this file.
 
 ### Changed
 
+- **Split `lib.rs` into focused modules: `repl`, `render`, and `task_commands`.**
+  The crate root previously mixed CLI parsing/dispatch, the interactive terminal,
+  the task/swarm command handlers, and all presentation. Those concerns now live
+  in dedicated sibling modules — `repl` (the interactive read-eval-print loop,
+  agent loop, spinner, prompt input, credential storage), `render` (all `render_*`
+  result formatters and shared number/path/diff helpers), and `task_commands`
+  (the `raptor task`/`raptor swarm`/review/diff/merge handlers). `lib.rs` is now a
+  thin root (~940 lines of production code) holding the CLI types, `parse_args`,
+  the `run` dispatch, and module wiring. Handlers are re-exported (`pub use`) so
+  dispatch and tests call them unqualified; no behavior change.
 - **Extracted the task & swarm command layer into `task_commands.rs`.** The
   `raptor task`/`raptor swarm`/review/diff/test/merge command handlers and their
   `render_*` presentation helpers (~1.5k lines) moved out of `lib.rs` into a
