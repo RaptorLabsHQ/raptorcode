@@ -10,6 +10,13 @@ All notable RaptorCode changes will be documented in this file.
 
 ### Changed
 
+- **Extracted the task & swarm command layer into `task_commands.rs`.** The
+  `raptor task`/`raptor swarm`/review/diff/test/merge command handlers and their
+  `render_*` presentation helpers (~1.5k lines) moved out of `lib.rs` into a
+  dedicated module, shrinking `lib.rs` from ~7.0k to ~5.5k lines (-22%). Generic
+  display utilities stay in `lib.rs`, shared via `pub(crate)`. The handlers are
+  re-exported (`pub use task_commands::*`) so dispatch and tests keep calling
+  them unqualified. No behavior change.
 - **De-duplicated the DeepSeek SSE streaming readers.** The chat and agent
   streaming response readers each carried their own copy of the Server-Sent
   Events framing loop (line iteration, blank/`:`-comment skipping, `data:`
