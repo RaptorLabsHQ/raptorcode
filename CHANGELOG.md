@@ -8,6 +8,8 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+## v0.4.0 - 2026-06-28
+
 ### Changed
 
 - **Split `lib.rs` into focused modules: `repl`, `render`, and `task_commands`.**
