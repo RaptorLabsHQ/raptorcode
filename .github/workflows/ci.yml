@@ -1,0 +1,61 @@
+name: ci
+
+# Continuous integration gate for every push and pull request. Before this
+# workflow existed the only automated gate was `cargo test --workspace` inside
+# scripts/release.sh (skippable with --skip-tests), and Windows/macOS code was
+# exercised only at release time. This runs the same checks the release
+# protocol documents — fmt, clippy -D warnings, and the full test suite — with
+# tests on native runners for all three supported platforms.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: test (${{ matrix.kind }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, kind: linux }
+          - { os: macos-latest, kind: macos }
+          - { os: windows-latest, kind: windows }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Check release profile compiles
+        if: matrix.kind == 'linux'
+        run: cargo check --workspace --release

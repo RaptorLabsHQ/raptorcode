@@ -1,0 +1,18 @@
+# Dependency hygiene (AGENTS.md security standards: dependency hygiene is an
+# ISO 27001-style control). Weekly batched updates keep the surface small.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
