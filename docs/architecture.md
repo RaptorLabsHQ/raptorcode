@@ -201,6 +201,6 @@ The first merge version must remain local and supervised. It must not auto-merge
 
 - `raptor-cli`: prints the cleanup plan, requires exact `CLEANUP <task-id>` confirmation, and reports what was retained.
 - `raptor-store`: loads existing task metadata; cleanup does not delete metadata in V1.
-- `raptor-git`: validates the stored worktree path under `.raptor/worktrees/<task-id>` and deletes only that directory through filesystem APIs.
+- `raptor-git`: validates the stored worktree path under `.raptor/worktrees/<task-id>`, deletes only that directory through filesystem APIs, then runs `git worktree prune` in the repository root so the stale `.git/worktrees` registration is removed with it.
 
 Cleanup refuses unsafe task ids, unsafe stored paths, missing worktrees, and statuses other than `merged`, `completed`, or `abandoned`. It does not delete branches, push remotes, run tests, execute task metadata commands, or call AI models.

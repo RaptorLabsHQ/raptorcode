@@ -4168,6 +4168,13 @@ mod tests {
         assert!(!worktree_path.exists());
         assert!(sibling.exists());
         assert!(metadata_path.exists());
+        // The stale .git/worktrees registration must be pruned along with the
+        // directory, so git no longer lists the removed worktree.
+        let worktree_list = git_text(&test_dir.path, &["worktree", "list", "--porcelain"]);
+        assert!(
+            !worktree_list.contains(task_id.as_str()),
+            "worktree registration was not pruned:\n{worktree_list}"
+        );
         run_git(
             &test_dir.path,
             &["show-ref", "--verify", "--quiet", &branch_ref],

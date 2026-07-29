@@ -8,6 +8,25 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Continuous integration workflow (`.github/workflows/ci.yml`).** Every push
+  and pull request now runs `cargo fmt --check`, `cargo clippy -D warnings`,
+  and the full `cargo test --workspace` suite on native Linux, macOS, and
+  Windows runners. Previously the only automated gate was the release script's
+  test run, and Windows/macOS code paths were exercised only at release time.
+  Dependabot now files weekly grouped updates for cargo and GitHub Actions
+  dependencies.
+
+### Fixed
+
+- **`raptor task cleanup` now prunes the git worktree registration.** Cleanup
+  previously deleted only the worktree directory, leaving a stale prunable
+  entry under `.git/worktrees` that git kept listing and that blocked re-adding
+  a worktree at the same path. `execute_task_worktree_cleanup` now runs
+  `git worktree prune` in the repository root after deleting the directory.
+  Branch retention, metadata retention, and remote behavior are unchanged.
+
 ## v0.4.0 - 2026-06-28
 
 ### Changed

@@ -61,6 +61,7 @@ pub struct WorktreeDiff {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeCleanupPlan {
+    repository_root: PathBuf,
     worktree_path: PathBuf,
 }
 
@@ -462,7 +463,10 @@ pub fn plan_task_worktree_cleanup(
     let worktree_path =
         validate_task_worktree_path(repository_root, task_id, stored_worktree_path)?;
 
-    Ok(WorktreeCleanupPlan { worktree_path })
+    Ok(WorktreeCleanupPlan {
+        repository_root: repository_root.path().to_path_buf(),
+        worktree_path,
+    })
 }
 
 pub fn execute_task_worktree_cleanup(plan: &WorktreeCleanupPlan) -> Result<PathBuf, GitError> {
@@ -471,6 +475,10 @@ pub fn execute_task_worktree_cleanup(plan: &WorktreeCleanupPlan) -> Result<PathB
         path: plan.worktree_path.clone(),
         source,
     })?;
+    // Deleting the directory alone leaves a stale registration under
+    // .git/worktrees, which git keeps listing as prunable and which blocks
+    // re-adding a worktree at the same path.
+    git_output_text(&plan.repository_root, &["worktree", "prune"])?;
 
     Ok(plan.worktree_path.clone())
 }
