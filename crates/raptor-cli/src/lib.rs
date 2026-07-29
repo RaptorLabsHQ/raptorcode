@@ -975,6 +975,11 @@ mod tests {
                 .join(format!("raptor-cli-{name}-{}-{nonce}", std::process::id()));
 
             fs::create_dir_all(&path).unwrap();
+            // Canonicalize so expected paths match production behavior, which
+            // canonicalizes the repository root. On macOS the temp dir is a
+            // symlink (/var -> /private/var), so without this every path
+            // assertion diverges from the canonicalized root.
+            let path = path.canonicalize().unwrap_or(path);
 
             Self { path }
         }
