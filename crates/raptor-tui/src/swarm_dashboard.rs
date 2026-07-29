@@ -23,10 +23,24 @@ const MAX_RECENT_ACTIVITY: usize = 64;
 /// next one in the pool.
 const QUOTE_ROTATION_INTERVAL: Duration = Duration::from_secs(8);
 
-/// Crimson accents, dim chrome, white emphasis — the RaptorCode terminal palette.
-const RAPTOR_RED: Color = Color::Rgb(0xFF, 0x19, 0x19);
-const RAPTOR_DIM: Color = Color::Rgb(0x63, 0x62, 0x62);
-const RAPTOR_TRACK: Color = Color::Rgb(0x3A, 0x20, 0x20);
+/// Crimson accents, dim chrome, white emphasis — the RaptorCode terminal
+/// palette. The RGB values are owned by `crate::theme` alongside the banner
+/// colors so the brand palette has a single home.
+const RAPTOR_RED: Color = Color::Rgb(
+    crate::theme::LIVE_RED_RGB.0,
+    crate::theme::LIVE_RED_RGB.1,
+    crate::theme::LIVE_RED_RGB.2,
+);
+const RAPTOR_DIM: Color = Color::Rgb(
+    crate::theme::LIVE_DIM_RGB.0,
+    crate::theme::LIVE_DIM_RGB.1,
+    crate::theme::LIVE_DIM_RGB.2,
+);
+const RAPTOR_TRACK: Color = Color::Rgb(
+    crate::theme::LIVE_TRACK_RGB.0,
+    crate::theme::LIVE_TRACK_RGB.1,
+    crate::theme::LIVE_TRACK_RGB.2,
+);
 
 /// Events emitted by live swarm agent workers and consumed by the dashboard.
 #[derive(Debug)]

@@ -49,6 +49,13 @@ pub mod theme {
     pub const TEXT: &str = "D7D7D7";
     pub const DIM: &str = "7A7A7A";
     pub const ACCENT: &str = "FFFFFF";
+
+    /// Live swarm dashboard truecolor palette. Deliberately hotter than the
+    /// startup-banner `RAPTOR_RED` so live agent activity reads as high-energy,
+    /// but owned here so every brand color has a single home.
+    pub const LIVE_RED_RGB: (u8, u8, u8) = (0xFF, 0x19, 0x19);
+    pub const LIVE_DIM_RGB: (u8, u8, u8) = (0x63, 0x62, 0x62);
+    pub const LIVE_TRACK_RGB: (u8, u8, u8) = (0x3A, 0x20, 0x20);
 }
 
 pub const BRAND_BACKGROUND_HEX: &str = "0A0A0A";
