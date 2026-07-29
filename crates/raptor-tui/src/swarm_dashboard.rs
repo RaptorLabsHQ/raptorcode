@@ -287,6 +287,10 @@ pub fn apply_swarm_event(state: &mut SwarmDashboardState, event: SwarmUiEvent) {
             agent: _,
             total_tokens,
         } => {
+            // Cumulative spend, not context size: each event carries one API
+            // step's total_tokens (whose prompt side re-counts the growing
+            // history), so the footer figure is billed tokens across all
+            // agents and steps — intentionally mirroring what the run costs.
             state.total_tokens = state.total_tokens.saturating_add(total_tokens);
         }
         SwarmUiEvent::AgentFinished { agent, summary } => {

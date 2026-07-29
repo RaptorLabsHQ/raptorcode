@@ -28,6 +28,16 @@ All notable RaptorCode changes will be documented in this file.
 
 ### Fixed
 
+- **Non-streamed chat responses now surface `reasoning_content`.** The
+  buffered chat-completions parser dropped the thinking-mode reasoning text
+  that the streaming and agent paths already preserved; it is now parsed into
+  `CompletionResponse.reasoning_content`.
+- **Endpoint overrides now cover the models and balance calls.** The `/models`
+  and `/user/balance` URLs were hardcoded even when the chat endpoint was
+  overridden (tests, proxies); they are now derived from the configured
+  endpoint's base when it follows the official `.../chat/completions` shape.
+  The unused `parse_deepseek_stream_chunk` helper (superseded by the shared
+  SSE reader) was removed.
 - **`raptor task cleanup` now prunes the git worktree registration.** Cleanup
   previously deleted only the worktree directory, leaving a stale prunable
   entry under `.git/worktrees` that git kept listing and that blocked re-adding

@@ -258,6 +258,7 @@ struct DeepSeekChoice {
 #[derive(Debug, Deserialize)]
 struct DeepSeekResponseMessage {
     content: Option<String>,
+    reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -779,6 +780,24 @@ impl DeepSeekProvider {
         self.client.get(url).bearer_auth(&self.api_key)
     }
 
+    /// The models listing URL, derived from the configured chat endpoint when it
+    /// follows the official `.../chat/completions` shape so an endpoint override
+    /// (tests, proxies) redirects every call — not just chat completions.
+    fn models_endpoint(&self) -> String {
+        match self.endpoint.strip_suffix("/chat/completions") {
+            Some(base) => format!("{base}/models"),
+            None => DEEPSEEK_MODELS_ENDPOINT.to_owned(),
+        }
+    }
+
+    /// The user balance URL; same derivation rules as [`Self::models_endpoint`].
+    fn balance_endpoint(&self) -> String {
+        match self.endpoint.strip_suffix("/chat/completions") {
+            Some(base) => format!("{base}/user/balance"),
+            None => DEEPSEEK_USER_BALANCE_ENDPOINT.to_owned(),
+        }
+    }
+
     pub fn complete_agent_step(
         &self,
         model_id: &ModelId,
@@ -871,7 +890,7 @@ impl DeepSeekProvider {
     }
 
     pub fn list_models(&self) -> Result<Vec<String>, ProviderError> {
-        let (status, body) = send_collect(self.authed_get(DEEPSEEK_MODELS_ENDPOINT))?;
+        let (status, body) = send_collect(self.authed_get(&self.models_endpoint()))?;
 
         if status != 200 {
             return Err(map_deepseek_error_status(status, &body));
@@ -885,7 +904,7 @@ impl DeepSeekProvider {
     }
 
     pub fn get_user_balance(&self) -> Result<DeepSeekUserBalance, ProviderError> {
-        let (status, body) = send_collect(self.authed_get(DEEPSEEK_USER_BALANCE_ENDPOINT))?;
+        let (status, body) = send_collect(self.authed_get(&self.balance_endpoint()))?;
 
         if status != 200 {
             return Err(map_deepseek_error_status(status, &body));
@@ -1092,31 +1111,12 @@ pub fn parse_deepseek_chat_response(
         model_id,
         content,
         finish_reason: choice.finish_reason,
-        reasoning_content: None,
+        reasoning_content: choice
+            .message
+            .reasoning_content
+            .filter(|reasoning| !reasoning.is_empty()),
         usage: parsed.usage.map(token_usage_from_deepseek_usage),
     })
-}
-
-pub fn parse_deepseek_stream_chunk(
-    data: &str,
-) -> Result<Option<CompletionStreamDelta>, ProviderError> {
-    let trimmed = data.trim();
-    if trimmed.is_empty() || trimmed == "[DONE]" {
-        return Ok(None);
-    }
-
-    let parsed: DeepSeekChatStreamChunk = serde_json::from_str(trimmed).map_err(|error| {
-        ProviderError::MalformedResponse(format!("failed to parse DeepSeek stream chunk: {error}"))
-    })?;
-    let Some(choice) = parsed.choices.into_iter().next() else {
-        return Ok(None);
-    };
-
-    Ok(Some(CompletionStreamDelta {
-        content: choice.delta.content,
-        finish_reason: choice.finish_reason,
-        reasoning_content: choice.delta.reasoning_content,
-    }))
 }
 
 /// Iterates the `data:` payloads of a Server-Sent Events stream: blank lines and
@@ -1954,30 +1954,44 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_stream_chunk_parsing_reads_content_and_reasoning_deltas() {
-        let reasoning = parse_deepseek_stream_chunk(
-            r#"{"choices":[{"delta":{"reasoning_content":"thinking...","role":"assistant"},"finish_reason":null,"index":0}],"model":"deepseek-v4-pro"}"#,
+    fn derived_endpoints_follow_a_chat_completions_override() {
+        let overridden = DeepSeekProvider::with_endpoint(
+            "test-key",
+            "https://proxy.example.invalid/v1/chat/completions",
         )
-        .unwrap()
         .unwrap();
-        let content = parse_deepseek_stream_chunk(
-            r#"{"choices":[{"delta":{"content":"Hello","role":"assistant"},"finish_reason":null,"index":0}],"model":"deepseek-v4-pro"}"#,
-        )
-        .unwrap()
-        .unwrap();
-
-        assert_eq!(reasoning.reasoning_content.as_deref(), Some("thinking..."));
-        assert_eq!(reasoning.content, None);
-        assert_eq!(content.content.as_deref(), Some("Hello"));
-        assert_eq!(content.reasoning_content, None);
-        assert!(
-            parse_deepseek_stream_chunk(
-                r#"{"choices":[],"model":"deepseek-v4-pro","usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}"#,
-            )
-            .unwrap()
-            .is_none()
+        assert_eq!(
+            overridden.models_endpoint(),
+            "https://proxy.example.invalid/v1/models"
         );
-        assert!(parse_deepseek_stream_chunk("[DONE]").unwrap().is_none());
+        assert_eq!(
+            overridden.balance_endpoint(),
+            "https://proxy.example.invalid/v1/user/balance"
+        );
+
+        let unshaped =
+            DeepSeekProvider::with_endpoint("test-key", "https://example.invalid").unwrap();
+        assert_eq!(unshaped.models_endpoint(), DEEPSEEK_MODELS_ENDPOINT);
+        assert_eq!(unshaped.balance_endpoint(), DEEPSEEK_USER_BALANCE_ENDPOINT);
+    }
+
+    #[test]
+    fn deepseek_response_parsing_surfaces_reasoning_content() {
+        let provider_id = ProviderId::new("deepseek").unwrap();
+        let fallback = ModelId::new("deepseek-v4-pro").unwrap();
+        let body = r#"{"choices":[{"finish_reason":"stop","message":{"content":"Answer.","reasoning_content":"Chain of thought."}}]}"#;
+
+        let response = parse_deepseek_chat_response(200, body, &provider_id, &fallback).unwrap();
+
+        assert_eq!(response.content, "Answer.");
+        assert_eq!(
+            response.reasoning_content.as_deref(),
+            Some("Chain of thought.")
+        );
+
+        let without = r#"{"choices":[{"finish_reason":"stop","message":{"content":"Answer."}}]}"#;
+        let response = parse_deepseek_chat_response(200, without, &provider_id, &fallback).unwrap();
+        assert_eq!(response.reasoning_content, None);
     }
 
     #[test]
