@@ -18,6 +18,14 @@ All notable RaptorCode changes will be documented in this file.
   Dependabot now files weekly grouped updates for cargo and GitHub Actions
   dependencies.
 
+- **Swarm dashboard panel focus is now visible.** Keys `1`-`4` already
+  toggled a focused agent, but no renderer consumed the state. The focused
+  specialist's panel now leads with a crimson `▸` marker and tints the role
+  name red. The live dashboard palette also moved into the shared
+  `raptor-tui::theme` module (rendered values unchanged), and the two
+  identical wide/stacked startup-banner wrappers were collapsed into the
+  single premium renderer they both called.
+
 ### Fixed
 
 - **`raptor task cleanup` now prunes the git worktree registration.** Cleanup

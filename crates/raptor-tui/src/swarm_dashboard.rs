@@ -518,8 +518,10 @@ fn draw_agent_row(
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
     for (offset, column) in columns.iter().enumerate() {
-        if let Some(agent) = state.agents.get(first_index + offset) {
-            draw_agent_panel(frame, state, agent, elapsed, *column);
+        let index = first_index + offset;
+        if let Some(agent) = state.agents.get(index) {
+            let focused = state.focused == Some(index);
+            draw_agent_panel(frame, state, agent, elapsed, *column, focused);
         }
     }
 }
@@ -530,6 +532,7 @@ fn draw_agent_panel(
     agent: &SwarmAgentUiState,
     elapsed: Duration,
     area: Rect,
+    focused: bool,
 ) {
     // Pad each cell so the two columns read as separated, borderless tiles.
     let inner = Rect {
@@ -561,18 +564,21 @@ fn draw_agent_panel(
         SwarmAgentPhase::Done => ("✓".to_owned(), Color::Green),
         SwarmAgentPhase::Failed => ("✗".to_owned(), RAPTOR_RED),
     };
-    let header_left = vec![
-        Span::styled(
-            format!("{indicator} "),
-            Style::default().fg(indicator_color),
-        ),
-        Span::styled(
-            short_role(&agent.role).to_uppercase(),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ];
+    // Focused panels (keys 1-4) lead with a crimson marker and tint the role
+    // name so the selected specialist stands out at a glance.
+    let role_color = if focused { RAPTOR_RED } else { Color::White };
+    let mut header_left = Vec::with_capacity(3);
+    if focused {
+        header_left.push(Span::styled("▸ ", Style::default().fg(RAPTOR_RED)));
+    }
+    header_left.push(Span::styled(
+        format!("{indicator} "),
+        Style::default().fg(indicator_color),
+    ));
+    header_left.push(Span::styled(
+        short_role(&agent.role).to_uppercase(),
+        Style::default().fg(role_color).add_modifier(Modifier::BOLD),
+    ));
     let header_right = vec![Span::styled(
         format!(".wt/{}", short_role(&agent.role)),
         Style::default().fg(RAPTOR_DIM),
@@ -979,6 +985,35 @@ mod tests {
         let snapshot = render_swarm_snapshot(&state);
         assert!(snapshot.contains("[done] frontend"));
         assert!(snapshot.contains("[stopped] security"));
+    }
+
+    #[test]
+    fn focused_agent_panel_renders_focus_marker() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let mut state = test_state();
+        for agent in 0..4 {
+            apply_swarm_event(&mut state, SwarmUiEvent::AgentSpawned { agent });
+        }
+        state.focused = Some(2);
+
+        let backend = TestBackend::new(92, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_swarm_dashboard(frame, &state, Duration::from_secs(5)))
+            .unwrap();
+        let rendered = buffer_rows(terminal.backend()).join("\n");
+
+        let marker_line = rendered
+            .lines()
+            .find(|line| line.contains('▸'))
+            .expect("focused panel must render the ▸ marker");
+        assert!(
+            marker_line.contains("TEST"),
+            "marker must sit on the focused TEST panel's header: {marker_line}"
+        );
+        assert_eq!(rendered.matches('▸').count(), 1);
     }
 
     fn buffer_rows(backend: &ratatui::backend::TestBackend) -> Vec<String> {

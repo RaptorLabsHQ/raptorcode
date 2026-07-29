@@ -236,11 +236,7 @@ pub fn render_startup_banner(options: &StartupBannerOptions) -> String {
         return render_compact_startup_banner(options);
     }
 
-    if options.terminal_width >= 100 {
-        render_wide_startup_banner(options)
-    } else {
-        render_stacked_startup_banner(options)
-    }
+    render_premium_startup_banner(options)
 }
 
 pub fn render_dashboard_snapshot(state: &DashboardState) -> String {
@@ -429,14 +425,6 @@ fn render_compact_startup_banner(options: &StartupBannerOptions) -> String {
     trim_trailing_newline(&mut output);
 
     output
-}
-
-fn render_wide_startup_banner(options: &StartupBannerOptions) -> String {
-    render_premium_startup_banner(options)
-}
-
-fn render_stacked_startup_banner(options: &StartupBannerOptions) -> String {
-    render_premium_startup_banner(options)
 }
 
 fn render_premium_startup_banner(options: &StartupBannerOptions) -> String {
