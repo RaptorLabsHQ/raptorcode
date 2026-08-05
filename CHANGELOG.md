@@ -47,6 +47,14 @@ All notable RaptorCode changes will be documented in this file.
 - A streaming response cut off before completion now returns an error instead of
   being recorded as a complete assistant turn.
 
+### Security
+
+- Updated `reqwest` (0.11 → 0.12), which pulls a patched `rustls-webpki` and
+  resolves three TLS advisories the new `cargo audit` gate surfaced: two
+  certificate name-constraint bypasses and a reachable panic in
+  certificate-revocation-list parsing. No source changes were required — the
+  blocking + JSON + rustls usage is unchanged.
+
 ## v0.5.0 - 2026-08-05
 
 ### Added

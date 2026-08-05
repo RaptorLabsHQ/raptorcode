@@ -35,7 +35,7 @@ raptor-tools = { path = "crates/raptor-tools" }
 raptor-tui = { path = "crates/raptor-tui" }
 crossterm = "0.27"
 ratatui = { version = "0.26", default-features = false, features = ["crossterm"] }
-reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
