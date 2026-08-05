@@ -193,7 +193,7 @@ pub(crate) fn render_agent_session(stored: &StoredAgentSession) -> String {
 
 pub(crate) fn render_permission_policy(policy: &PermissionPolicy) -> String {
     format!(
-        "RaptorCode default permission policy\nApproval mode: {}\nFile read: {}\nFile write: {}\nShell execution: {}\nNetwork: {}\nModel execution: {}\nDangerous commands: {}\nFile write allowed: {}\nShell execution allowed: {}\nNetwork allowed: {}\nModel execution allowed: {}\nExecution: policy display only; no model calls, shell commands, network requests, or source file writes are performed.\n",
+        "RaptorCode default permission policy\nApproval mode: {}\nFile read: {}\nFile write: {}\nShell execution: {}\nNetwork: {}\nModel execution: {}\nDangerous commands: {}\nFile write allowed: {}\nShell execution allowed: {}\nNetwork allowed: {}\nModel execution allowed: {}\nScope: this is the declared default for stored agent records. A live raptor session enforces a separate runtime boundary — workspace-scoped file writes (confirmation required to write outside the workspace) plus a destructive-command deny-list backstop — not these blanket denials.\nExecution: policy display only; no model calls, shell commands, network requests, or source file writes are performed.\n",
         policy.approval_mode.as_str(),
         policy.file_read.as_str(),
         policy.file_write.as_str(),

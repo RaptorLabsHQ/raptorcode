@@ -1,3 +1,6 @@
+//! RaptorCode command-line interface: argument parsing, the interactive REPL,
+//! the live swarm orchestrator, and tool-execution policy.
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs;

@@ -135,6 +135,20 @@ fn describe_shell_command(cmd: &str) -> String {
     }
 }
 
+/// Truncates `text` to at most `max_bytes`, backing up to the nearest UTF-8
+/// character boundary. `String::truncate` panics on a non-boundary index, which
+/// arbitrary command output (cargo/npm logs with multi-byte characters) can hit.
+fn truncate_on_char_boundary(text: &mut String, max_bytes: usize) {
+    if text.len() <= max_bytes {
+        return;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+}
+
 pub(crate) fn resolve_tool_path(working_dir: &Path, path_str: &str) -> PathBuf {
     let path = Path::new(path_str);
     if path.is_absolute() {
@@ -347,7 +361,7 @@ pub(crate) fn execute_tool_call(working_dir: &mut PathBuf, name: &str, arguments
                                 result.push_str(&format!("[stderr] {}", stderr_str.trim_end()));
                             }
                             if result.len() > 4000 {
-                                result.truncate(4000);
+                                truncate_on_char_boundary(&mut result, 4000);
                                 result.push_str("\n...[truncated]");
                             }
                             if result.is_empty() {
@@ -413,6 +427,23 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn truncate_on_char_boundary_never_splits_a_codepoint() {
+        // A 2-byte 'é' straddling the limit must not panic; truncation backs up
+        // to the boundary before it.
+        let mut text = format!("{}é tail", "a".repeat(9));
+        truncate_on_char_boundary(&mut text, 10);
+        assert_eq!(text, "a".repeat(9));
+
+        let mut ascii = "abcdef".to_owned();
+        truncate_on_char_boundary(&mut ascii, 3);
+        assert_eq!(ascii, "abc");
+
+        let mut short = "hi".to_owned();
+        truncate_on_char_boundary(&mut short, 10);
+        assert_eq!(short, "hi");
+    }
 
     struct TestDir {
         path: PathBuf,

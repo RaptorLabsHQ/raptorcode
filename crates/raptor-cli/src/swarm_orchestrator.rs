@@ -150,18 +150,26 @@ pub(crate) fn run_live_swarm(
     }
     drop(event_tx);
 
-    let aborted = run_swarm_dashboard(dashboard_state, event_rx, Arc::clone(&cancel))
-        .map_err(|error| CliError::new(format!("swarm dashboard failed: {error}")))?;
+    // Run the dashboard on this thread. On dashboard failure we must still tear
+    // every worker down cleanly, so signal cancellation and remember the error
+    // rather than returning before the join loop.
+    let (aborted, dashboard_error) =
+        match run_swarm_dashboard(dashboard_state, event_rx, Arc::clone(&cancel)) {
+            Ok(aborted) => (aborted, None),
+            Err(error) => {
+                cancel.store(true, Ordering::Relaxed);
+                (true, Some(format!("swarm dashboard failed: {error}")))
+            }
+        };
 
+    // Join every worker so none is left detached mid-run. A panicked worker is
+    // recorded as failed and does not abort the rest of the teardown.
     let mut outcomes = Vec::with_capacity(worker_handles.len());
-    for handle in worker_handles {
+    let mut panicked_roles: Vec<String> = Vec::new();
+    for (handle, role) in worker_handles.into_iter().zip(roles.iter()) {
         match handle.join() {
             Ok(outcome) => outcomes.push(outcome),
-            Err(_) => {
-                return Err(CliError::new(
-                    "a swarm agent thread panicked; inspect worktrees manually".to_owned(),
-                ))
-            }
+            Err(_) => panicked_roles.push(role.clone()),
         }
     }
 
@@ -182,15 +190,35 @@ pub(crate) fn run_live_swarm(
             agent.implementation_status = Some(status.to_owned());
         }
     }
-    metadata.status = if outcomes.iter().all(|outcome| outcome.completed) {
-        SWARM_LIVE_RUN_COMPLETED_STATUS.to_owned()
-    } else if aborted || outcomes.iter().any(|outcome| outcome.aborted) {
-        SWARM_LIVE_RUN_ABORTED_STATUS.to_owned()
-    } else {
-        SWARM_LIVE_RUN_FAILED_STATUS.to_owned()
-    };
+    for role in &panicked_roles {
+        if let Some(agent) = metadata.agents.iter_mut().find(|agent| &agent.role == role) {
+            agent.status = SWARM_LIVE_RUN_FAILED_STATUS.to_owned();
+            agent.implementation_status = Some(SWARM_LIVE_RUN_FAILED_STATUS.to_owned());
+        }
+    }
+
+    metadata.status =
+        if panicked_roles.is_empty() && outcomes.iter().all(|outcome| outcome.completed) {
+            SWARM_LIVE_RUN_COMPLETED_STATUS.to_owned()
+        } else if aborted || outcomes.iter().any(|outcome| outcome.aborted) {
+            SWARM_LIVE_RUN_ABORTED_STATUS.to_owned()
+        } else {
+            SWARM_LIVE_RUN_FAILED_STATUS.to_owned()
+        };
+    // Always persist the final status so a panic or dashboard failure can never
+    // leave the swarm wedged at "running".
     update_swarm_metadata(repository_root.path(), &metadata)
         .map_err(|error| CliError::new(error.to_string()))?;
+
+    if let Some(error) = dashboard_error {
+        return Err(CliError::new(error));
+    }
+    if !panicked_roles.is_empty() {
+        return Err(CliError::new(format!(
+            "swarm agent thread(s) panicked ({}); final status persisted, inspect the worktrees manually",
+            panicked_roles.join(", ")
+        )));
+    }
 
     Ok(render_live_swarm_summary(task_id.as_str(), &outcomes))
 }

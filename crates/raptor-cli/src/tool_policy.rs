@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
 use crate::agent_tools::resolve_tool_path;
@@ -35,9 +36,15 @@ pub(crate) enum ConfirmationKind {
 
 impl ToolPolicy {
     pub(crate) fn new(workspace_root: PathBuf) -> Self {
+        // Canonicalize the root so the write boundary is compared against real,
+        // symlink-resolved paths. Falls back to lexical normalization when the
+        // root does not exist yet (e.g. in tests).
+        let workspace_root = workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| normalize_path(&workspace_root));
         Self {
             outside_writes_allowed: false,
-            workspace_root: normalize_path(&workspace_root),
+            workspace_root,
         }
     }
 
@@ -79,7 +86,7 @@ impl ToolPolicy {
             return PolicyDecision::Allow;
         }
 
-        let target = normalize_path(&resolve_tool_path(working_dir, path_str));
+        let target = canonical_target(&resolve_tool_path(working_dir, path_str));
         if target.starts_with(&self.workspace_root) {
             return PolicyDecision::Allow;
         }
@@ -111,6 +118,32 @@ fn normalize_path(path: &Path) -> PathBuf {
     normalized
 }
 
+/// Resolves the deepest existing ancestor of `path` through symlinks, then
+/// re-attaches the non-existent tail, so a symlinked directory inside the
+/// workspace cannot be used to escape it (`<ws>/link -> /` makes `<ws>/link/etc`
+/// resolve to `/etc`). Falls back to lexical normalization when nothing on the
+/// path exists yet.
+fn canonical_target(path: &Path) -> PathBuf {
+    let normalized = normalize_path(path);
+    let mut ancestor = normalized.clone();
+    let mut tail: Vec<OsString> = Vec::new();
+    loop {
+        if let Ok(mut resolved) = ancestor.canonicalize() {
+            for component in tail.iter().rev() {
+                resolved.push(component);
+            }
+            return resolved;
+        }
+        let Some(name) = ancestor.file_name().map(|name| name.to_owned()) else {
+            return normalized;
+        };
+        if !ancestor.pop() {
+            return normalized;
+        }
+        tail.push(name);
+    }
+}
+
 fn evaluate_shell_command(command: &str) -> PolicyDecision {
     if command.contains(":(){") || command.contains(":|:&") {
         return PolicyDecision::Deny {
@@ -127,12 +160,29 @@ fn evaluate_shell_command(command: &str) -> PolicyDecision {
 }
 
 fn split_shell_segments(command: &str) -> Vec<String> {
+    // Newlines separate commands to a shell just like `;` — splitting on them too
+    // stops a `first-line\nrm -rf /` payload from hiding the second command.
     command
-        .split([';', '|', '&'])
+        .split([';', '|', '&', '\n', '\r'])
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
         .map(str::to_owned)
         .collect()
+}
+
+/// Strips one matching layer of surrounding single or double quotes so that
+/// `rm -rf "/"` is analyzed as `rm -rf /`. A backstop against trivial evasion,
+/// not a substitute for a real shell parser.
+fn strip_quotes(token: &str) -> &str {
+    let bytes = token.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' || first == b'\'') && first == last {
+            return &token[1..token.len() - 1];
+        }
+    }
+    token
 }
 
 fn worse_decision(left: PolicyDecision, right: PolicyDecision) -> PolicyDecision {
@@ -146,7 +196,7 @@ fn worse_decision(left: PolicyDecision, right: PolicyDecision) -> PolicyDecision
 }
 
 fn evaluate_shell_segment(segment: &str) -> PolicyDecision {
-    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    let tokens: Vec<&str> = segment.split_whitespace().map(strip_quotes).collect();
     let Some(&first) = tokens.first() else {
         return PolicyDecision::Allow;
     };
@@ -455,5 +505,58 @@ mod tests {
                 "expected allow for: {command}"
             );
         }
+    }
+
+    #[test]
+    fn newline_separated_destructive_command_is_denied() {
+        let policy = workspace_policy();
+        let arguments = serde_json::json!({ "command": "echo start\nrm -rf /" }).to_string();
+        let decision = policy.evaluate(Path::new("/work/project"), "run_command", &arguments);
+
+        assert!(
+            matches!(decision, PolicyDecision::Deny { .. }),
+            "newline should not hide the second command: {decision:?}"
+        );
+    }
+
+    #[test]
+    fn quoted_root_target_is_still_denied() {
+        let policy = workspace_policy();
+        for command in ["rm -rf \"/\"", "rm -rf '/'", "chmod -R 777 \"/\""] {
+            let arguments = serde_json::json!({ "command": command }).to_string();
+            let decision = policy.evaluate(Path::new("/work/project"), "run_command", &arguments);
+            assert!(
+                matches!(decision, PolicyDecision::Deny { .. }),
+                "expected deny for quoted target: {command}, got {decision:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_escape_from_workspace_requires_confirmation() {
+        use std::os::unix::fs::symlink;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NONCE: AtomicU64 = AtomicU64::new(0);
+        let base = std::env::temp_dir().join(format!(
+            "raptor-policy-symlink-{}-{}",
+            std::process::id(),
+            NONCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let workspace = base.join("ws");
+        std::fs::create_dir_all(&workspace).unwrap();
+        symlink("/", workspace.join("escape")).unwrap();
+
+        let policy = ToolPolicy::new(workspace.clone());
+        let arguments = serde_json::json!({ "path": "escape/etc/x", "content": "y" }).to_string();
+        let decision = policy.evaluate(&workspace, "write_file", &arguments);
+
+        std::fs::remove_dir_all(&base).ok();
+        assert_eq!(
+            confirm_kind(&decision),
+            Some(ConfirmationKind::OutsideWorkspaceWrite),
+            "a symlink pointing outside the workspace must not be treated as inside: {decision:?}"
+        );
     }
 }
