@@ -21,7 +21,7 @@ license = "LicenseRef-RaptorLabs-Proprietary"
 publish = false
 repository = "https://github.com/RaptorLabsHQ/raptor-code"
 rust-version = "1.75"
-version = "0.4.0"
+version = "0.5.0"
 
 [workspace.dependencies]
 raptor-agent = { path = "crates/raptor-agent" }

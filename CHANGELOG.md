@@ -8,6 +8,8 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+## v0.5.0 - 2026-08-05
+
 ### Added
 
 - **Continuous integration workflow (`.github/workflows/ci.yml`).** Every push
