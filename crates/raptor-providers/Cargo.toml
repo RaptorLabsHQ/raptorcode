@@ -16,3 +16,6 @@ serde_json.workspace = true
 [lib]
 name = "raptor_providers"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

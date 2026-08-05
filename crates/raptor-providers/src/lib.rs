@@ -1,11 +1,27 @@
+//! LLM provider abstraction and the DeepSeek client: chat and agentic
+//! tool-calling completions, SSE streaming, and a typed provider-error taxonomy.
+
 use std::collections::BTreeMap;
 use std::env;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io::{BufRead, BufReader};
+use std::thread;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
+/// Fail fast when a connection cannot be established.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Whole-request ceiling. Generous because reasoning-mode turns legitimately run
+/// long; it exists only to bound a truly hung request, not to cut off real work.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+/// Total attempts (initial try + retries) for transient transport/HTTP failures.
+const MAX_ATTEMPTS: u32 = 3;
+/// Base delay for exponential backoff between retries.
+const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
+/// Upper bound on any single backoff wait.
+const RETRY_MAX_DELAY: Duration = Duration::from_secs(20);
 
 pub const CRATE_PURPOSE: &str = "Provider integration boundaries for RaptorCode.";
 pub const DEEPSEEK_API_KEY_ENV: &str = "DEEPSEEK_API_KEY";
@@ -757,7 +773,8 @@ impl DeepSeekProvider {
         }
 
         let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(60))
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
 
@@ -806,7 +823,7 @@ impl DeepSeekProvider {
         options: &DeepSeekRequestOptions,
     ) -> Result<AgentStep, ProviderError> {
         let request_body = deepseek_agent_request(model_id, messages, tools, options, false);
-        let (status, body) = send_collect(self.authed_post().json(&request_body))?;
+        let (status, body) = send_collect_with_retry(|| self.authed_post().json(&request_body))?;
 
         if status != 200 {
             return Err(map_deepseek_error_status(status, &body));
@@ -876,7 +893,7 @@ impl DeepSeekProvider {
         F: FnMut(CompletionStreamDelta),
     {
         let request_body = deepseek_agent_request(model_id, messages, tools, options, true);
-        let response = send_request(self.authed_post().json(&request_body))?;
+        let response = send_stream_with_retry(|| self.authed_post().json(&request_body))?;
         let status = response.status().as_u16();
 
         if status != 200 {
@@ -890,7 +907,7 @@ impl DeepSeekProvider {
     }
 
     pub fn list_models(&self) -> Result<Vec<String>, ProviderError> {
-        let (status, body) = send_collect(self.authed_get(&self.models_endpoint()))?;
+        let (status, body) = send_collect_with_retry(|| self.authed_get(&self.models_endpoint()))?;
 
         if status != 200 {
             return Err(map_deepseek_error_status(status, &body));
@@ -904,7 +921,7 @@ impl DeepSeekProvider {
     }
 
     pub fn get_user_balance(&self) -> Result<DeepSeekUserBalance, ProviderError> {
-        let (status, body) = send_collect(self.authed_get(&self.balance_endpoint()))?;
+        let (status, body) = send_collect_with_retry(|| self.authed_get(&self.balance_endpoint()))?;
 
         if status != 200 {
             return Err(map_deepseek_error_status(status, &body));
@@ -928,7 +945,7 @@ impl DeepSeekProvider {
         }
 
         let request_body = request.for_streaming()?;
-        let response = send_request(self.authed_post().json(&request_body))?;
+        let response = send_stream_with_retry(|| self.authed_post().json(&request_body))?;
         let status = response.status().as_u16();
 
         if status != 200 {
@@ -976,7 +993,7 @@ impl Provider for DeepSeekProvider {
         }
 
         let request_body = deepseek_chat_request_from_completion(&request)?;
-        let (status, body) = send_collect(self.authed_post().json(&request_body))?;
+        let (status, body) = send_collect_with_retry(|| self.authed_post().json(&request_body))?;
 
         parse_deepseek_chat_response(status, &body, &request.provider_id, &request.model_id)
     }
@@ -1126,7 +1143,7 @@ pub fn parse_deepseek_chat_response(
 fn for_each_sse_data_line<F>(
     response: reqwest::blocking::Response,
     mut handle: F,
-) -> Result<(), ProviderError>
+) -> Result<bool, ProviderError>
 where
     F: FnMut(&str) -> Result<(), ProviderError>,
 {
@@ -1145,13 +1162,16 @@ where
         };
         let data = data.trim();
         if data == "[DONE]" {
-            break;
+            // Clean end-of-stream marker.
+            return Ok(true);
         }
 
         handle(data)?;
     }
 
-    Ok(())
+    // Reached EOF without a `[DONE]` marker — the connection may have been cut
+    // mid-stream. The caller decides whether that is a truncation.
+    Ok(false)
 }
 
 fn read_deepseek_streaming_response<F>(
@@ -1169,7 +1189,7 @@ where
     let mut reasoning_content = String::new();
     let mut usage = None;
 
-    for_each_sse_data_line(response, |data| {
+    let stream_completed = for_each_sse_data_line(response, |data| {
         apply_deepseek_chat_stream_data(
             data,
             &mut content,
@@ -1180,6 +1200,14 @@ where
             on_delta,
         )
     })?;
+
+    // A stream that ended without `[DONE]` and without a finish reason was cut
+    // off; surface it rather than recording a truncated turn as complete.
+    if !stream_completed && finish_reason.is_none() {
+        return Err(ProviderError::MalformedResponse(
+            "stream ended before completion; the response may be truncated".to_owned(),
+        ));
+    }
 
     Ok(CompletionResponse {
         provider_id: provider_id.clone(),
@@ -1257,7 +1285,7 @@ where
     let mut finish_reason = None;
     let mut usage = None;
 
-    for_each_sse_data_line(response, |data| {
+    let stream_completed = for_each_sse_data_line(response, |data| {
         apply_deepseek_agent_stream_data(
             data,
             &mut content,
@@ -1268,6 +1296,14 @@ where
             on_delta,
         )
     })?;
+
+    // A stream that ended without `[DONE]` and without a finish reason was cut
+    // off; surface it rather than recording a truncated turn as complete.
+    if !stream_completed && finish_reason.is_none() {
+        return Err(ProviderError::MalformedResponse(
+            "stream ended before completion; the response may be truncated".to_owned(),
+        ));
+    }
 
     finish_deepseek_agent_stream(content, reasoning_content, tool_calls, finish_reason, usage)
 }
@@ -1583,18 +1619,100 @@ fn send_request(
         .map_err(|error| ProviderError::HttpTransport(error.to_string()))
 }
 
-/// Sends a prepared request and collects the `(status, body)` pair. Used by the
-/// non-streaming paths, which parse a fully buffered response. Transport failures
-/// on both send and body read map to a uniform error.
-fn send_collect(
-    builder: reqwest::blocking::RequestBuilder,
+/// Delay before a retry: exponential backoff (0.5s, 1s, 2s, …) capped at
+/// [`RETRY_MAX_DELAY`], but never shorter than a server-provided `Retry-After`.
+fn backoff_delay(attempt: u32, retry_after: Option<Duration>) -> Duration {
+    let shift = attempt.clamp(1, 6) - 1;
+    let exponential = RETRY_BASE_DELAY
+        .saturating_mul(1u32 << shift)
+        .min(RETRY_MAX_DELAY);
+    match retry_after {
+        Some(server) => server.clamp(exponential, RETRY_MAX_DELAY),
+        None => exponential,
+    }
+}
+
+/// Parses a `Retry-After` header given in whole seconds (the form DeepSeek and
+/// most JSON APIs use). The HTTP-date form is ignored; backoff then falls back
+/// to the exponential delay, which is safe.
+fn retry_after_delay(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let seconds = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    Some(Duration::from_secs(seconds))
+}
+
+/// Statuses worth retrying: rate limiting and server-side errors.
+fn is_retryable_status(status: u16) -> bool {
+    status == 429 || (500..=599).contains(&status)
+}
+
+/// Sends a request with bounded retries on transient failures (429, 5xx, and
+/// transport errors), rebuilding it each attempt and honoring `Retry-After`.
+/// Returns the final `(status, body)`; non-retryable statuses (including other
+/// 4xx) return on the first response for the caller to map.
+fn send_collect_with_retry(
+    build: impl Fn() -> reqwest::blocking::RequestBuilder,
 ) -> Result<(u16, String), ProviderError> {
-    let response = send_request(builder)?;
-    let status = response.status().as_u16();
-    let body = response
-        .text()
-        .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
-    Ok((status, body))
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let response = match send_request(build()) {
+            Ok(response) => response,
+            Err(error) => {
+                if attempt < MAX_ATTEMPTS {
+                    thread::sleep(backoff_delay(attempt, None));
+                    continue;
+                }
+                return Err(error);
+            }
+        };
+        let status = response.status().as_u16();
+        let retry_after = retry_after_delay(response.headers());
+        let body = response
+            .text()
+            .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+        if is_retryable_status(status) && attempt < MAX_ATTEMPTS {
+            thread::sleep(backoff_delay(attempt, retry_after));
+            continue;
+        }
+        return Ok((status, body));
+    }
+}
+
+/// Establishes a streaming request with the same retry policy, returning the
+/// response ready for the SSE reader. A retryable status is retried on a fresh
+/// connection; a 200 or an exhausted/non-retryable status is returned as-is for
+/// the caller to stream or map.
+fn send_stream_with_retry(
+    build: impl Fn() -> reqwest::blocking::RequestBuilder,
+) -> Result<reqwest::blocking::Response, ProviderError> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match send_request(build()) {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                if is_retryable_status(status) && attempt < MAX_ATTEMPTS {
+                    let retry_after = retry_after_delay(response.headers());
+                    thread::sleep(backoff_delay(attempt, retry_after));
+                    continue;
+                }
+                return Ok(response);
+            }
+            Err(error) => {
+                if attempt < MAX_ATTEMPTS {
+                    thread::sleep(backoff_delay(attempt, None));
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    }
 }
 
 fn map_deepseek_error_status(status: u16, body: &str) -> ProviderError {
