@@ -758,11 +758,11 @@ dependencies = [
 
 [[package]]
 name = "raptor-agent"
-version = "0.5.0"
+version = "0.6.0"
 
 [[package]]
 name = "raptor-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "crossterm",
  "raptor-agent",
@@ -777,18 +777,18 @@ dependencies = [
 
 [[package]]
 name = "raptor-core"
-version = "0.5.0"
+version = "0.6.0"
 
 [[package]]
 name = "raptor-git"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "raptor-core",
 ]
 
 [[package]]
 name = "raptor-providers"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "reqwest",
  "serde",
@@ -797,11 +797,11 @@ dependencies = [
 
 [[package]]
 name = "raptor-sandbox"
-version = "0.5.0"
+version = "0.6.0"
 
 [[package]]
 name = "raptor-store"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "raptor-agent",
  "raptor-core",
@@ -809,14 +809,14 @@ dependencies = [
 
 [[package]]
 name = "raptor-tools"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "raptor-tui"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "crossterm",
  "ratatui",

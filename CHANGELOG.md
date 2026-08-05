@@ -8,6 +8,8 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+## v0.6.0 - 2026-08-05
+
 ### Added
 
 - **Resilient DeepSeek transport.** Transient failures (HTTP 429, 5xx, and
