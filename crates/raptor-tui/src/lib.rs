@@ -1,3 +1,6 @@
+//! Terminal UI built on ratatui: the splash screen, status views, and the
+//! live swarm dashboard.
+
 use std::env;
 use std::io;
 use std::path::PathBuf;

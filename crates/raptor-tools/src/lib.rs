@@ -1,3 +1,5 @@
+//! Utilities for detecting and validating a project's test commands.
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};

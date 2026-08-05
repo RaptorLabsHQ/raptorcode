@@ -11,3 +11,6 @@ version.workspace = true
 [lib]
 name = "raptor_core"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

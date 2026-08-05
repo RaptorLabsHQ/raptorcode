@@ -1,3 +1,6 @@
+//! Shared domain kernel for RaptorCode: task and swarm identifiers, statuses,
+//! and the metadata value types used across the workspace.
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;

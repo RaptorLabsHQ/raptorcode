@@ -1,0 +1,5 @@
+# Pin the toolchain so local, CI, and release builds are reproducible.
+# Bump deliberately; keep at or above the workspace `rust-version` (MSRV).
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]

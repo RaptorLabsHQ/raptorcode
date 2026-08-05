@@ -1,3 +1,6 @@
+//! Agent-session domain model: identifiers, session state, role prompt
+//! templates, and the declared default permission descriptor.
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;

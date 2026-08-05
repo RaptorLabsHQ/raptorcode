@@ -1,0 +1,4 @@
+# Allow unwrap()/expect() inside tests; production code stays panic-free, which
+# is enforced by `unwrap_used = "deny"` in the workspace lints (see Cargo.toml).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

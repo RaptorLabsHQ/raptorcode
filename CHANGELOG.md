@@ -8,6 +8,45 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Resilient DeepSeek transport.** Transient failures (HTTP 429, 5xx, and
+  connection errors) are now retried with bounded exponential backoff that
+  honors a `Retry-After` header, so one rate-limited or slow step no longer
+  fails an entire swarm mission. Request timeouts were split into a 15-second
+  connect timeout plus a generous 600-second ceiling (previously a single
+  60-second cap that cut off legitimate reasoning-mode turns).
+- **Crash-safe local state.** Task, swarm, agent, and config files are written
+  atomically (temp file → fsync → rename) so a crash can never leave a torn or
+  empty file that wedges an id. Listing now skips an unreadable file instead of
+  failing the whole listing.
+- **Enforced panic-free convention.** A `[workspace.lints]` entry denies
+  `unwrap()` in production code (tests are exempted via `clippy.toml`), a pinned
+  `rust-toolchain.toml` makes builds reproducible, and a `cargo audit` CI job
+  scans dependencies for security advisories.
+- Crate-level `//!` documentation for all nine workspace crates.
+
+### Changed
+
+- The permission-policy display now states it is the declared default for stored
+  agent records, distinct from a live session's workspace-scoped enforcement, so
+  it can no longer be read as claiming the running agent denies all writes/shell.
+
+### Fixed
+
+- **Robust swarm teardown.** Every worker is always joined and the final status
+  is always persisted, so a worker panic or dashboard error can no longer leak
+  running threads or leave a mission wedged at `running`.
+- **Deny-list hardening (backstop).** Shell commands are split on newlines and
+  surrounding quotes are stripped before analysis, so `echo x⏎rm -rf /` and
+  `rm -rf "/"` are no longer allowed. The write boundary canonicalizes paths
+  through symlinks, closing a workspace escape via a symlinked directory.
+- Shell-tool output is truncated on a UTF-8 character boundary instead of with
+  `String::truncate`, which panics when a multi-byte character (common in
+  cargo/npm logs) straddles the limit.
+- A streaming response cut off before completion now returns an error instead of
+  being recorded as a complete assistant turn.
+
 ## v0.5.0 - 2026-08-05
 
 ### Added

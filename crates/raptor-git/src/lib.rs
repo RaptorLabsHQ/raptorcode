@@ -1,3 +1,6 @@
+//! Git worktree lifecycle and merge orchestration, driven through structured
+//! `git` argv invocations rather than a shell string.
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs;
