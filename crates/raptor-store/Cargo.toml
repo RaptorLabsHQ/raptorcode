@@ -15,3 +15,6 @@ raptor-core.workspace = true
 [lib]
 name = "raptor_store"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

@@ -1,8 +1,12 @@
+//! Local project state under `.raptor/` — tasks, swarms, agent sessions, and
+//! config — persisted as a small hand-rolled TOML subset with atomic writes.
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use raptor_agent::{AgentId, AgentSession};
@@ -17,6 +21,58 @@ pub const TASKS_DIR: &str = "tasks";
 
 const DEFAULT_CONFIG: &str =
     "# RaptorCode project configuration\nversion = 1\n\n[providers.deepseek]\nenabled = true\n";
+
+/// Monotonic counter for unique temp-file names during atomic writes.
+static ATOMIC_WRITE_NONCE: AtomicU64 = AtomicU64::new(0);
+
+/// Atomically writes `contents` to `path`: content is written to a sibling temp
+/// file, flushed to disk, then renamed over the target. A crash can leave the
+/// temp file behind but never a torn target — a concurrent or post-crash reader
+/// always sees either the old file or the fully-written new one. `fs::rename`
+/// replaces an existing destination on both Unix and Windows, so this serves
+/// both create-new (via [`atomic_create`]) and in-place update.
+fn atomic_write(path: &Path, contents: &str) -> io::Result<()> {
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let dir = dir.unwrap_or_else(|| Path::new("."));
+    let base = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "metadata".to_owned());
+    let nonce = ATOMIC_WRITE_NONCE.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = dir.join(format!(".{base}.tmp.{}.{nonce}", std::process::id()));
+
+    let write = || -> io::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()
+    };
+    if let Err(error) = write() {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(error);
+    }
+    if let Err(error) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Atomically creates `path`, failing with `AlreadyExists` if it is already
+/// present. The check→write window is acceptable for content-addressed ids and,
+/// unlike `create_new` + a separate write, never leaves a torn/empty target that
+/// would permanently wedge the id after a crash.
+fn atomic_create(path: &Path, contents: &str) -> io::Result<()> {
+    if path.try_exists()? {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "metadata file already exists",
+        ));
+    }
+    atomic_write(path, contents)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InitConfigOutcome {
@@ -366,30 +422,16 @@ pub fn init_project_config(base_dir: &Path) -> Result<InitConfigOutcome, InitCon
         return Ok(InitConfigOutcome::Exists(config_path));
     }
 
-    let mut file = match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&config_path)
-    {
-        Ok(file) => file,
+    match atomic_create(&config_path, DEFAULT_CONFIG) {
+        Ok(()) => Ok(InitConfigOutcome::Created(config_path)),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            return Ok(InitConfigOutcome::Exists(config_path));
+            Ok(InitConfigOutcome::Exists(config_path))
         }
-        Err(source) => {
-            return Err(InitConfigError::Io {
-                path: config_path,
-                source,
-            });
-        }
-    };
-
-    file.write_all(DEFAULT_CONFIG.as_bytes())
-        .map_err(|source| InitConfigError::Io {
-            path: config_path.clone(),
+        Err(source) => Err(InitConfigError::Io {
+            path: config_path,
             source,
-        })?;
-
-    Ok(InitConfigOutcome::Created(config_path))
+        }),
+    }
 }
 
 pub fn read_project_config(base_dir: &Path) -> Result<ProjectConfig, ProjectConfigError> {
@@ -450,28 +492,16 @@ pub fn persist_agent_session(
         stored_session.audit_entries.len()
     ));
 
-    let mut file = match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&metadata_path)
-    {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            return Err(AgentStoreError::AlreadyExists(metadata_path));
-        }
-        Err(source) => {
-            return Err(AgentStoreError::Io {
-                path: metadata_path,
+    atomic_create(&metadata_path, &stored_session.to_metadata()).map_err(|source| {
+        if source.kind() == io::ErrorKind::AlreadyExists {
+            AgentStoreError::AlreadyExists(metadata_path.clone())
+        } else {
+            AgentStoreError::Io {
+                path: metadata_path.clone(),
                 source,
-            });
+            }
         }
-    };
-
-    file.write_all(stored_session.to_metadata().as_bytes())
-        .map_err(|source| AgentStoreError::Io {
-            path: metadata_path.clone(),
-            source,
-        })?;
+    })?;
 
     Ok(metadata_path)
 }
@@ -514,7 +544,10 @@ pub fn list_agent_sessions(
             continue;
         }
 
-        sessions.push(read_agent_session(repository_root, &agent_id)?);
+        // Skip an unreadable/torn file rather than failing the whole listing.
+        if let Ok(session) = read_agent_session(repository_root, &agent_id) {
+            sessions.push(session);
+        }
     }
 
     sessions.sort_by(|left, right| left.session.id.as_str().cmp(right.session.id.as_str()));
@@ -605,28 +638,16 @@ pub fn persist_task_metadata(
 
     let metadata_path = task_metadata_path(repository_root, &metadata.id)?;
 
-    let mut file = match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&metadata_path)
-    {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            return Err(TaskStoreError::AlreadyExists(metadata_path));
-        }
-        Err(source) => {
-            return Err(TaskStoreError::Io {
-                path: metadata_path,
+    atomic_create(&metadata_path, &render_task_metadata(metadata)).map_err(|source| {
+        if source.kind() == io::ErrorKind::AlreadyExists {
+            TaskStoreError::AlreadyExists(metadata_path.clone())
+        } else {
+            TaskStoreError::Io {
+                path: metadata_path.clone(),
                 source,
-            });
+            }
         }
-    };
-
-    file.write_all(render_task_metadata(metadata).as_bytes())
-        .map_err(|source| TaskStoreError::Io {
-            path: metadata_path.clone(),
-            source,
-        })?;
+    })?;
 
     Ok(metadata_path)
 }
@@ -662,28 +683,16 @@ pub fn persist_swarm_metadata(
     }
     stored_metadata.updated_at = Some(timestamp);
 
-    let mut file = match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&metadata_path)
-    {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            return Err(SwarmStoreError::AlreadyExists(metadata_path));
-        }
-        Err(source) => {
-            return Err(SwarmStoreError::Io {
-                path: metadata_path,
+    atomic_create(&metadata_path, &render_swarm_metadata(&stored_metadata)).map_err(|source| {
+        if source.kind() == io::ErrorKind::AlreadyExists {
+            SwarmStoreError::AlreadyExists(metadata_path.clone())
+        } else {
+            SwarmStoreError::Io {
+                path: metadata_path.clone(),
                 source,
-            });
+            }
         }
-    };
-
-    file.write_all(render_swarm_metadata(&stored_metadata).as_bytes())
-        .map_err(|source| SwarmStoreError::Io {
-            path: metadata_path.clone(),
-            source,
-        })?;
+    })?;
 
     Ok(metadata_path)
 }
@@ -714,7 +723,7 @@ pub fn update_swarm_metadata(
     }
     stored_metadata.updated_at = Some(timestamp);
 
-    fs::write(&metadata_path, render_swarm_metadata(&stored_metadata)).map_err(|source| {
+    atomic_write(&metadata_path, &render_swarm_metadata(&stored_metadata)).map_err(|source| {
         SwarmStoreError::Io {
             path: metadata_path.clone(),
             source,
@@ -760,7 +769,10 @@ pub fn list_swarm_metadata(repository_root: &Path) -> Result<Vec<SwarmMetadata>,
             continue;
         }
 
-        swarms.push(read_swarm_metadata(repository_root, &swarm_id)?);
+        // Skip an unreadable/torn file rather than failing the whole listing.
+        if let Ok(metadata) = read_swarm_metadata(repository_root, &swarm_id) {
+            swarms.push(metadata);
+        }
     }
 
     swarms.sort_by(|left, right| left.id.cmp(&right.id));
@@ -876,7 +888,10 @@ pub fn list_task_metadata(
             continue;
         }
 
-        tasks.push(read_task_metadata(repository_root, &task_id)?);
+        // Skip an unreadable/torn file rather than failing the whole listing.
+        if let Ok(metadata) = read_task_metadata(repository_root, &task_id) {
+            tasks.push(metadata);
+        }
     }
 
     tasks.sort_by(|left, right| left.id.cmp(&right.id));
@@ -1800,7 +1815,7 @@ fn required_swarm_agent_field(
 }
 
 fn write_stored_task_metadata(task: &StoredTaskMetadata) -> Result<(), TaskStoreError> {
-    fs::write(&task.metadata_path, render_stored_task_metadata(task)).map_err(|source| {
+    atomic_write(&task.metadata_path, &render_stored_task_metadata(task)).map_err(|source| {
         TaskStoreError::Io {
             path: task.metadata_path.clone(),
             source,
@@ -2182,6 +2197,59 @@ mod tests {
             persist_task_metadata(&test_dir.path, &metadata).unwrap_err(),
             TaskStoreError::AlreadyExists(_)
         ));
+    }
+
+    #[test]
+    fn atomic_write_replaces_existing_content_without_leftovers() {
+        let test_dir = TestDir::create("atomic-write");
+        let path = test_dir.path.join("data.txt");
+
+        atomic_write(&path, "first").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "first");
+
+        atomic_write(&path, "second-and-longer").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "second-and-longer");
+
+        let leftover_temp = fs::read_dir(&test_dir.path)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().contains(".tmp."));
+        assert!(!leftover_temp, "atomic_write left a temp file behind");
+    }
+
+    #[test]
+    fn list_task_metadata_skips_torn_files() {
+        let test_dir = TestDir::create("task-list-torn");
+        let task_id = TaskId::from_description("List one healthy task").unwrap();
+        let metadata = TaskMetadata::new(
+            task_id.clone(),
+            "List one healthy task",
+            TaskStatus::Planned,
+            WorktreeInfo {
+                branch_name: format!("raptor-task-{}", task_id.as_str()),
+                path: test_dir
+                    .path
+                    .join(".raptor")
+                    .join("worktrees")
+                    .join(task_id.as_str()),
+                repository_root: test_dir.path.clone(),
+            },
+        );
+        persist_task_metadata(&test_dir.path, &metadata).unwrap();
+
+        // A torn file with a valid-looking id but unparseable content must not
+        // break listing of the healthy task.
+        let torn_path = test_dir
+            .path
+            .join(RAPTOR_STATE_DIR)
+            .join(TASKS_DIR)
+            .join("corrupt-task-deadbeef.toml");
+        fs::write(&torn_path, "this line has no equals sign\n").unwrap();
+        assert!(read_task_metadata(&test_dir.path, "corrupt-task-deadbeef").is_err());
+
+        let listed = list_task_metadata(&test_dir.path).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id.as_str(), task_id.as_str());
     }
 
     #[test]
