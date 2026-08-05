@@ -1,0 +1,81 @@
+name: auto-release
+
+# Continuous delivery: every push to main that contains FUNCTIONAL changes
+# (feat / fix / perf / refactor since the last v* tag) is automatically
+# versioned, tagged, and released:
+#
+#   push to main
+#     └─ gate: any functional commits since the last tag?
+#          └─ scripts/release.sh --no-release
+#               (conventional-commit semver bump, syncs every version surface,
+#                cargo test gate, builds the .deb, commits "release: vX.Y.Z",
+#                tags, pushes)
+#               └─ dispatches release.yml at the new tag
+#                    (3-platform builds + GitHub Release + R2 sync)
+#
+# chore / docs / ci / test-only pushes do NOT release. The "release: vX.Y.Z"
+# commit is pushed with GITHUB_TOKEN, which never re-triggers workflows, so the
+# pipeline cannot loop; the `if` guard below is belt-and-suspenders.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  auto-release:
+    if: ${{ !startsWith(github.event.head_commit.message, 'release:') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # release.sh derives the bump from history since the last tag
+          fetch-tags: true
+
+      - name: Gate — functional commits since last tag?
+        id: gate
+        shell: bash
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          SUBJECTS=$(git log ${LAST_TAG:+$LAST_TAG..HEAD} --pretty=format:'%s')
+          echo "last tag: ${LAST_TAG:-<none>}"
+          printf '%s\n' "$SUBJECTS"
+          if printf '%s\n' "$SUBJECTS" | grep -qE '^(feat|fix|perf|refactor)(\([^)]+\))?!?:'; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "No functional commits since \`${LAST_TAG:-repository start}\` — nothing to release." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.gate.outputs.release == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.gate.outputs.release == 'true'
+
+      - name: Cut release (bump, sync surfaces, test gate, tag, push)
+        id: cut
+        if: steps.gate.outputs.release == 'true'
+        shell: bash
+        env:
+          RELEASE_COAUTHOR: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+        run: |
+          ./scripts/release.sh --no-release
+          VERSION=$(awk -F' = ' '/^version = / { gsub(/"/,"",$2); print $2; exit }' Cargo.toml)
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Hand off to release.yml (3-platform build + GitHub Release)
+        if: steps.gate.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run release.yml --ref "${{ steps.cut.outputs.tag }}"
+          {
+            echo "### Cut ${{ steps.cut.outputs.tag }}"
+            echo "release.yml dispatched at the tag — it builds Linux/macOS/Windows, publishes the GitHub Release with generated notes, and syncs R2 (if Cloudflare secrets are configured)."
+          } >> "$GITHUB_STEP_SUMMARY"

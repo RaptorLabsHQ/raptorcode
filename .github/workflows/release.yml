@@ -5,8 +5,12 @@ name: release
 #   - macOS   → universal (arm64 + x86_64) tar.gz  [unsigned beta; notarization
 #               can be added later via Apple creds]
 #   - Windows → x86_64 zip  [unsigned beta]
-# Artifacts are uploaded to the workflow run (workflow_dispatch) and attached to
-# a GitHub Release on tag push. R2 distribution is handled from the website repo.
+# Artifacts are uploaded to the workflow run (workflow_dispatch on a branch) and
+# attached to a GitHub Release when running at a v* tag — whether the tag was
+# pushed by hand, by scripts/release.sh, or by auto-release.yml (the normal
+# path: every functional push to main auto-cuts a release). After publishing,
+# the r2-sync job refreshes the website's download binaries in R2 when the
+# CLOUDFLARE_API_TOKEN repo secret is configured.
 on:
   workflow_dispatch:
   push:
@@ -97,3 +101,49 @@ jobs:
         with:
           files: artifacts/*
           generate_release_notes: true
+
+  r2-sync:
+    name: sync website downloads (R2)
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: [redacted]
+    steps:
+      - name: Check Cloudflare credentials
+        id: creds
+        shell: bash
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "> R2 sync SKIPPED — add a CLOUDFLARE_API_TOKEN repo secret (R2 write scope) to refresh raptorcode.dev downloads automatically." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/download-artifact@v4
+        if: steps.creds.outputs.configured == 'true'
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Upload binaries to R2 under the version-less serving keys
+        if: steps.creds.outputs.configured == 'true'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          cd artifacts
+          deb=(raptor-code_*_amd64.deb)
+          mac=(raptor-code_*_macos_universal.tar.gz)
+          win=(raptor-code_*_windows_x86_64.zip)
+          [ -n "${deb[0]:-}" ] && npx --yes wrangler@4 r2 object put "raptor-code-downloads/raptor-code_amd64.deb" --file "${deb[0]}" --remote
+          [ -n "${mac[0]:-}" ] && npx --yes wrangler@4 r2 object put "raptor-code-downloads/raptor-code_macos_universal.tar.gz" --file "${mac[0]}" --remote
+          [ -n "${win[0]:-}" ] && npx --yes wrangler@4 r2 object put "raptor-code-downloads/raptor-code_windows_x86_64.zip" --file "${win[0]}" --remote
+          {
+            echo "### R2 downloads refreshed to ${GITHUB_REF_NAME}"
+            echo "Manual follow-up in **raptor-code-website**: bump \`v=\` in \`src/raptorcode/lib/raptorcodeLinks.ts\` and update \`DL_VERSION\` + SHA-256 strings in \`src/pages/beta/download.astro\`, then deploy:"
+            echo '```'
+            cat -- *.sha256
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
