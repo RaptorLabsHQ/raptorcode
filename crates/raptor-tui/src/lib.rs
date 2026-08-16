@@ -996,7 +996,13 @@ mod tests {
     }
 
     fn snapshot_fixture(value: &'static str) -> String {
-        value.strip_suffix('\n').unwrap_or(value).replace('␠', " ")
+        // Normalize CRLF -> LF so the byte-for-byte compare holds on Windows,
+        // where git may check the fixture out with CRLF line endings.
+        let normalized = value.replace("\r\n", "\n");
+        normalized
+            .strip_suffix('\n')
+            .unwrap_or(&normalized)
+            .replace('␠', " ")
     }
 
     fn strip_ansi(value: &str) -> String {

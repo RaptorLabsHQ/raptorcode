@@ -1,0 +1,5 @@
+# Normalize line endings to LF on checkout everywhere, so Windows checkouts
+# match LF-generated output. The TUI splash snapshots are compared byte-for-byte
+# via include_str!, and git's default core.autocrlf=true on Windows would
+# otherwise check the fixtures out with CRLF and break the comparison.
+* text=auto eol=lf
