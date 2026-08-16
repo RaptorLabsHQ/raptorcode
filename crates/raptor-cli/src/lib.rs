@@ -978,11 +978,14 @@ mod tests {
                 .join(format!("raptor-cli-{name}-{}-{nonce}", std::process::id()));
 
             fs::create_dir_all(&path).unwrap();
-            // Canonicalize so expected paths match production behavior, which
-            // canonicalizes the repository root. On macOS the temp dir is a
-            // symlink (/var -> /private/var), so without this every path
-            // assertion diverges from the canonicalized root.
-            let path = path.canonicalize().unwrap_or(path);
+            // Canonicalize + simplify so expected paths match production, which
+            // canonicalizes the repository root through the same helper. On
+            // macOS the temp dir is a symlink (/var -> /private/var), so without
+            // canonicalization every path assertion diverges from the root; on
+            // Windows canonicalize yields a `\\?\` verbatim path that production
+            // strips, so without simplify the test and production forms diverge.
+            let canonical = path.canonicalize().unwrap_or(path);
+            let path = raptor_core::simplify_path(&canonical);
 
             Self { path }
         }
@@ -1077,6 +1080,10 @@ mod tests {
         run_git(path, &["init"]);
         run_git(path, &["config", "user.name", "Raptor Test"]);
         run_git(path, &["config", "user.email", "raptor@example.invalid"]);
+        // Keep line endings byte-for-byte so content assertions are stable on
+        // Windows, where git's default core.autocrlf=true rewrites LF to CRLF on
+        // checkout and would make committed "x\n" read back as "x\r\n".
+        run_git(path, &["config", "core.autocrlf", "false"]);
         run_git(
             path,
             &[

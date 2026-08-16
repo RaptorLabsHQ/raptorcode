@@ -8,6 +8,17 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **Windows: the full task/swarm/merge/cleanup suite passes.** Simplifying the
+  repository root in v0.6.2 exposed a second layer of Windows-only failures
+  because paths were normalized inconsistently across crates. The
+  `simplify_path` helper now lives in `raptor-core` and is applied wherever a
+  canonicalized path is shared, compared, or persisted, so the whole workspace
+  agrees on one path shape. Test repositories also disable `core.autocrlf` so
+  committed content round-trips byte-for-byte instead of gaining `\r\n` on
+  checkout. No production behavior change beyond v0.6.2; Unix is unaffected.
+
 ## v0.6.2 - 2026-08-16
 
 ### Fixed

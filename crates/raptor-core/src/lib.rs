@@ -3,7 +3,7 @@
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const PROJECT_DESCRIPTION: &str = "A proprietary, closed-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.";
 pub const PROJECT_NAME: &str = "RaptorCode";
@@ -187,9 +187,65 @@ fn stable_hash_hex(input: &str) -> String {
     format!("{hash:016x}")
 }
 
+/// Returns the simplified, non-verbatim form of a Windows extended-length path
+/// string (`\\?\C:\..` -> `C:\..`, `\\?\UNC\srv\share` -> `\\srv\share`), or
+/// `None` when `text` is not such a path. Pure string logic, so it is unit-
+/// testable on every platform.
+fn strip_verbatim_prefix(text: &str) -> Option<String> {
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return Some(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            return Some(rest.to_owned());
+        }
+    }
+    None
+}
+
+/// Strips the Windows extended-length (`\\?\`) prefix that `Path::canonicalize`
+/// adds, returning the path in the ordinary form external tools (notably the
+/// `git` CLI) accept. Every crate that canonicalizes a path meant to be shared,
+/// compared, or persisted routes it through here so the workspace agrees on one
+/// path shape. No-op on Unix and for paths that are not verbatim disk/UNC paths.
+pub fn simplify_path(path: &Path) -> PathBuf {
+    if let Some(text) = path.to_str() {
+        if let Some(simplified) = strip_verbatim_prefix(text) {
+            return PathBuf::from(simplified);
+        }
+    }
+    path.to_path_buf()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strips_windows_verbatim_prefix_from_disk_and_unc_paths() {
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\C:\Users\dev\repo").as_deref(),
+            Some(r"C:\Users\dev\repo")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\UNC\server\share\repo").as_deref(),
+            Some(r"\\server\share\repo")
+        );
+        // Ordinary drive paths, Unix paths, and non-disk device namespaces are
+        // left untouched so only the git-breaking verbatim form is rewritten.
+        assert_eq!(strip_verbatim_prefix(r"C:\Users\dev"), None);
+        assert_eq!(strip_verbatim_prefix("/home/dev/repo"), None);
+        assert_eq!(strip_verbatim_prefix(r"\\?\Volume{0}\x"), None);
+    }
+
+    #[test]
+    fn simplify_path_leaves_non_verbatim_paths_unchanged() {
+        assert_eq!(
+            simplify_path(Path::new("/home/dev/repo")),
+            PathBuf::from("/home/dev/repo")
+        );
+    }
 
     #[test]
     fn exposes_project_metadata() {
