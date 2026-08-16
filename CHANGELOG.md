@@ -8,6 +8,8 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+## v0.6.1 - 2026-08-16
+
 ### Security
 
 - **Deny-by-default tool policy.** Interactive and swarm tool dispatch now
