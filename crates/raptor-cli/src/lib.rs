@@ -1211,6 +1211,18 @@ mod tests {
             .join(format!("{}.toml", agent_id.as_str()))
     }
 
+    /// Mirrors raptor-store's `escape_toml_string` for the characters that occur
+    /// in filesystem paths, so tests match paths as they are actually written
+    /// into the metadata TOML. On Windows a path's backslashes are stored
+    /// doubled (`C:\a` is written as `C:\\a`); on Unix this is a no-op. Backslash
+    /// must be escaped before the quote so the inserted `\"` is not doubled.
+    fn toml_escaped_path(path: &Path) -> String {
+        path.display()
+            .to_string()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+    }
+
     fn replace_worktree_path_in_metadata(
         repository_root: &Path,
         task_id: &TaskId,
@@ -1220,8 +1232,8 @@ mod tests {
         let worktree_path = task_worktree_path(repository_root, task_id);
         let content = fs::read_to_string(&metadata_path).unwrap();
         let updated = content.replace(
-            &worktree_path.display().to_string(),
-            &replacement_path.display().to_string(),
+            &toml_escaped_path(&worktree_path),
+            &toml_escaped_path(replacement_path),
         );
 
         fs::write(metadata_path, updated).unwrap();
@@ -1237,8 +1249,8 @@ mod tests {
         let worktree_path = swarm_agent_worktree_path(repository_root, task_id, role);
         let content = fs::read_to_string(&metadata_path).unwrap();
         let updated = content.replace(
-            &worktree_path.display().to_string(),
-            &replacement_path.display().to_string(),
+            &toml_escaped_path(&worktree_path),
+            &toml_escaped_path(replacement_path),
         );
 
         fs::write(metadata_path, updated).unwrap();
@@ -2308,7 +2320,10 @@ mod tests {
             assert!(plan.contains("Model: deepseek-v4-pro"));
             assert!(plan.contains("This plan is AI-generated"));
             assert!(metadata.contains(&format!("role = \"{role}\"")));
-            assert!(metadata.contains(&format!("plan_file_path = \"{}\"", plan_path.display())));
+            assert!(metadata.contains(&format!(
+                "plan_file_path = \"{}\"",
+                toml_escaped_path(&plan_path)
+            )));
             assert_eq!(
                 git_text(&worktree_path, &["status", "--short"]),
                 "?? RAPTOR_PLAN.md\n"
