@@ -392,13 +392,30 @@ mod tests {
 
     #[test]
     fn write_inside_workspace_is_allowed() {
-        let policy = workspace_policy();
+        // Use a real, existing workspace so the root and the write target are
+        // canonicalized the same way on every platform. A synthetic path that
+        // does not exist canonicalizes inconsistently on Windows (the root falls
+        // back to lexical normalization while the target picks up the drive
+        // letter and `\\?\` prefix of an existing ancestor), which is a test-
+        // fixture artifact, not a policy bug.
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NONCE: AtomicU64 = AtomicU64::new(0);
+        let workspace = std::env::temp_dir().join(format!(
+            "raptor-policy-inside-{}-{}",
+            std::process::id(),
+            NONCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let policy = ToolPolicy::new(workspace.clone());
         let decision = policy.evaluate(
-            Path::new("/work/project"),
+            &workspace,
             "write_file",
             "{\"path\":\"src/main.rs\",\"content\":\"x\"}",
         );
 
+        std::fs::remove_dir_all(&workspace).ok();
         assert_eq!(decision, PolicyDecision::Allow);
     }
 

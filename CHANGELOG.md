@@ -8,6 +8,17 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **Windows: `git worktree add` no longer fails on canonicalized paths.**
+  `Path::canonicalize` returns an extended-length `\\?\` verbatim path on
+  Windows, and RaptorCode handed that straight to the `git` CLI, which rewrote
+  it to `//?/C:/...` and rejected it with `Invalid argument`. That broke
+  worktree creation and therefore every task, swarm, merge, review, diff, and
+  test path on Windows. The repository root is now simplified to its ordinary
+  (`C:\...`) form before any git invocation; Unix and non-verbatim paths are
+  unaffected.
+
 ## v0.6.1 - 2026-08-16
 
 ### Security
