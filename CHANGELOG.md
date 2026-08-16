@@ -8,6 +8,8 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+## v0.6.3 - 2026-08-16
+
 ### Fixed
 
 - **Windows: the full task/swarm/merge/cleanup suite passes.** Simplifying the
