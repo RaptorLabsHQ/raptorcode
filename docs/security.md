@@ -156,6 +156,19 @@ Current permission policy controls:
 - This permission policy code was implemented early and is frozen until after v0.1 unless BOB explicitly approves a narrow change directly required for the v0.1 demo.
 - Policy enforcement hooks must not be implemented before v0.1.
 
+## Tool Policy Hardening
+
+Date: 2026-08-16
+Author: Bob Vasic
+Company: RaptorLabs.dev
+
+The interactive and live-swarm tool policy (`raptor-cli::tool_policy`) is now deny-by-default and gates network egress. RaptorCode remains a local-trust tool: the per-session consent prompt is the primary boundary, and these controls are backstops, not a sandbox.
+
+- **Deny-by-default dispatch.** `ToolPolicy::evaluate` permits only the known tool set. `write_file` and `create_directory` go through the write-boundary check, `run_command` through the shell-command policy, and `read_file`, `list_directory`, and `change_directory` are permitted as read-only/navigation tools. Any other tool name is denied and reported to the model as a policy error, so a tool added to `build_agent_tools` without a matching policy arm is refused until its policy is written instead of executing unpoliced.
+- **Network egress confirmation.** Shell segments whose command is a network tool (`curl`, `wget`, `nc`/`ncat`/`netcat`, `telnet`, `ssh`, `scp`, `sftp`, `rsync`, `ftp`) require explicit developer confirmation before execution. Reads stay unrestricted under session consent, so this confirmation is the control that keeps a read secret from being silently sent off the machine. It is first-token matching only — an interpreter one-liner (`python -c ...`) or a shell `/dev/tcp` redirect can still reach the network — so it raises cost rather than closing the channel. Network confinement (a network namespace) remains future `raptor-sandbox` work.
+
+Security assumption: because there is no hosting and the agent runs on the developer's own machine under explicit consent, OS-level isolation is intentionally out of scope for this iteration. These backstops reduce accidental and low-effort-malicious blast radius; they are not a defense against a determined actor with shell access the developer has already authorized.
+
 ## Live Swarm Agentic Mode
 
 Date: 2026-06-12

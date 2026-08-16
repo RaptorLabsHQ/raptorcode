@@ -8,6 +8,25 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+### Security
+
+- **Deny-by-default tool policy.** Interactive and swarm tool dispatch now
+  refuses any tool without an explicit policy arm instead of allowing unknown
+  tools through. Read-only and navigation tools (`read_file`, `list_directory`,
+  `change_directory`) are explicitly permitted; anything else — including a tool
+  added to `build_agent_tools` before its policy is written — is denied rather
+  than executed unpoliced.
+- **Network egress confirmation.** `run_command` segments that invoke a network
+  tool (`curl`, `wget`, `nc`/`ncat`/`netcat`, `telnet`, `ssh`, `scp`, `sftp`,
+  `rsync`, `ftp`) now require explicit developer confirmation, raising the bar on
+  the read-a-secret-then-exfiltrate channel. This is a backstop consistent with
+  the existing deny-list, not network isolation — an interpreter one-liner can
+  still open a socket. Real network confinement remains future `raptor-sandbox`
+  work.
+- Removed two session-transcript dumps accidentally committed at the repository
+  root that contained verbatim internal security notes, and added ignore rules
+  so date-stamped transcripts are not tracked again.
+
 ## v0.6.0 - 2026-08-05
 
 ### Added
