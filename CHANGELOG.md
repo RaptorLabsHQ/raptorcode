@@ -8,6 +8,8 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+## v0.6.2 - 2026-08-16
+
 ### Fixed
 
 - **Windows: `git worktree add` no longer fails on canonicalized paths.**
