@@ -1,153 +1,50 @@
 # RaptorCode Roadmap
 
-Date: 2026-05-18
+Date: 2026-08-16
 Author: Bob Vasic
 Company: RaptorLabs.dev
 
-RaptorCode is a proprietary, closed-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
+RaptorCode is a proprietary, closed-source Rust-native multi-agent coding terminal that runs AI coding agents in isolated git worktrees with developer supervision. It is local-first: the developer runs it on their own machine and supplies their own model API key.
 
-## v0.1 Launch Checklist
+For the detailed, per-release history see [`CHANGELOG.md`](CHANGELOG.md). This file tracks the current state and forward direction only.
 
-Only these items are active before v0.1 is complete, tagged, documented, and launch-ready:
+## Current status — v0.6.3, generally available
 
-- [x] Scope audit complete
-- [x] `raptor swarm` MVP
-- [x] DeepSeek provider execution
-- [x] `raptor chat`
-- [x] Agent role templates
-- [x] Swarm DeepSeek planning artifacts
-- [x] Minimal worktree file modification path
-- [x] Role-aware swarm review and diff
-- [x] `raptor test`
-- [x] Ratatui dashboard
-- [x] Premium terminal launch screen shown when user runs `raptor`
-- [x] DeepSeek API key environment detection and fallback instruction URL
-- [x] README install/demo polish
-- [x] Changelog and release process draft
-- [x] Final verification
-- [x] Release notes final review
-- [x] Tag `v0.1.0`
+RaptorCode is generally available on **Linux, macOS, and Windows**. The full test suite is green on all three platforms in CI (Linux, macOS, and Windows are blocking gates). The product is no longer positioned as a closed beta.
 
-## v0.1 Scope Lock
+Shipped and stable (see the changelog for specifics):
 
-v0.1 scope is strictly:
+- `raptor` / `raptorcode` CLI: `init`, `doctor`, `chat`, `task`, `swarm`, `review`, `diff`, `test`, `merge`, `agent`, `provider`, `tui`.
+- The interactive agentic REPL with per-session file-system consent and six local tools (`write_file`, `read_file`, `list_directory`, `create_directory`, `change_directory`, `run_command`).
+- The **live multi-agent swarm**: four specialist agents (frontend, backend, test, security), each in its own git worktree, driven behind a ratatui dashboard.
+- DeepSeek provider execution (default model `deepseek-v4-pro`), with retry/backoff, split connect/request timeouts, and streaming.
+- Crash-safe atomic local state under `.raptor/`; conservative argv-based git; supervised merge preflight/execution.
+- Security posture: deny-by-default tool policy, network-egress confirmation, symlink-safe write boundary, and a hardened shell deny-list backstop (see [`docs/security.md`](docs/security.md)).
+- Automated versioning + multi-platform release CD; `cargo fmt` / `clippy -D warnings` / `cargo test` / `cargo audit` CI gates.
 
-```text
-CLI + TUI + Agent Orchestrator
-```
+## Product posture
 
-The only active implementation path is:
+- **Local-trust, no hosting.** The agent runs on the developer's own machine under explicit consent, with the developer's own API key. OS-level isolation (namespaces/seccomp/landlock in the `raptor-sandbox` crate) is intentionally **out of scope** at this posture; the userspace tool policy is a proportionate backstop.
+- **DeepSeek-first.** DeepSeek V4 Pro is the current target model. The orchestration logic and algorithms are RaptorLabs' own and must not be compromised by future changes.
 
-```text
-swarm -> DeepSeek -> worktrees -> tests -> diffs -> TUI -> release
-```
+## Forward direction (candidates, not commitments)
 
-No Phase 2 feature work is allowed before v0.1. This explicitly excludes advanced persisted agent sessions, advanced permission policy engines, policy enforcement hooks, additional providers, cloud features, plugin systems, MCP, desktop terminal work, marketplace features, and team features.
+Near-term engineering:
 
-The persisted agent sessions and permission policy added in commit `483135d7e8e8d25de726874eaddfaa7338f77fe0` are implemented early but frozen until after v0.1. They should be kept if tests pass and should not be expanded unless BOB explicitly reopens that scope after v0.1.
+- Continue hardening the tool policy backstops (deny-by-default is in; keep the deny-list and egress gating current).
+- Keep the cross-platform test suite green as features land.
 
-The v0.1 binary and user-facing command remain exactly `raptor`. No alternate primary command is active before v0.1.
+Exploratory (optional, gated on not compromising the core orchestration logic):
 
-## Current v0.1 Status
+- **Additional providers** — accept keys for Anthropic, OpenAI, Google Gemini, and Grok/xAI. The `Provider` trait and `ProviderCatalog` already scaffold this; the work is implementing the trait per provider, removing the hard-coded DeepSeek gates, and parameterizing the DeepSeek-specific assumptions (reasoning-content echo, the context-window constant). Optional OAuth login to a subscription provider is a further, ToS-dependent step.
+- Persisted/restorable agent sessions and richer multi-file context injection.
 
-Complete and in-scope:
+## Non-goals
 
-- Rust workspace and `raptor` CLI binary.
-- CLI command router.
-- `raptor init`.
-- `raptor doctor`.
-- Single-task worktree foundation through `raptor task "description"`.
-- Task metadata list/show.
-- Read-only worktree review and diff commands.
-- Supervised merge preflight and local merge execution.
-- Basic local safety checks for task ids, worktree paths, and merge confirmation.
-- `raptor swarm` role-based worktree MVP with `.raptor/swarms/<task-id>.toml` metadata.
-- DeepSeek provider execution through `DEEPSEEK_API_KEY`.
-- `raptor chat "message"` smoke-test command for DeepSeek completion.
-- Role templates for `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent`.
-- `raptor swarm "description"` DeepSeek planning that writes `RAPTOR_PLAN.md` per role when `DEEPSEEK_API_KEY` is set.
-- Missing `DEEPSEEK_API_KEY` blocks planning status without failing swarm worktree creation.
-- `raptor swarm implement <task-id> <role>` supervised implementation proposal generation.
-- `RAPTOR_IMPLEMENTATION_PROPOSAL.md` artifacts inside selected role worktrees.
-- `raptor review <task-id> [role]` and `raptor diff <task-id> [role]` inspect swarm role worktrees read-only.
-- `raptor test <task-id>` runs detected or explicit test commands inside validated task or swarm role worktrees.
-- Base `raptor` renders the premium Raptor Labs / Raptor Code startup screen.
-- `raptor tui` opens the simple read-only Ratatui dashboard.
-- Startup detects `DEEPSEEK_API_KEY` and prints the DeepSeek key URL when missing without storing or printing keys.
+- Full terminal-emulator replacement.
+- Hosted / multi-tenant execution.
+- Enterprise policy engine, plugin marketplace, or team control plane (not before the above lands).
 
-Remaining before tag:
+## Release process
 
-- Final verification.
-- Release notes final review.
-- Tag `v0.1.0`.
-
-Implemented early but frozen:
-
-- Persisted `.raptor/agents/<agent-id>.toml` sessions.
-- `raptor agent create`.
-- Persisted `raptor agent list` and `raptor agent show <id>`.
-- `raptor agent policy`.
-- Deny-by-default permission policy modeling.
-
-## Mandatory v0.1 Launch UX
-
-When a developer runs:
-
-```bash
-raptor
-```
-
-the application shows a premium terminal launch screen before the developer prompt becomes ready. This v0.1 requirement is implemented for the existing `raptor` binary.
-
-The launch screen must include:
-
-- Raptor Labs company name.
-- Raptor Labs URL: `https://raptorlabs.dev`.
-- Raptor Code name and version display: `v0.1`.
-- Premium compact Raptor Code CLI logo treatment.
-- Short greeting from the Raptor Labs team wishing the developer an enjoyable, agentic, productive, creative coding session and successful delivery.
-- Brand colors from the v0.1 UI specification: `#0A0A0A`, `#F4F4F4`, `#AAAAA9`, `#636262`, `#FF1919`, `#A51D20`, and `#261313`.
-
-After the launch screen, v0.1 onboards the developer to DeepSeek by detecting `DEEPSEEK_API_KEY`. If the key exists, startup reports that it is detected without printing it. If the developer does not have a key, startup shows `https://platform.deepseek.com/api_keys`. RaptorCode does not store API keys, prompt for persistence, read `.env` files, or log secrets.
-
-## Non-Goals Before v0.1
-
-- Full terminal emulator replacement.
-- Advanced agent memory.
-- Enterprise policy engine.
-- Policy enforcement hooks.
-- Additional model providers beyond DeepSeek execution.
-- OpenAI provider implementation.
-- OpenRouter provider implementation.
-- Gemini provider implementation.
-- Ollama provider implementation.
-- Desktop terminal.
-- Cloud features.
-- Plugin systems.
-- MCP.
-- Marketplace features.
-- Team features.
-
-## Release Criteria
-
-v0.1 is complete when this supervised local workflow works and is documented:
-
-```bash
-raptor init
-raptor
-raptor tui
-raptor swarm "Add GitHub OAuth to this Next.js app"
-raptor swarm implement <task-id> frontend-agent
-raptor review <task-id>
-raptor review <task-id> frontend-agent
-raptor diff <task-id>
-raptor diff <task-id> frontend-agent
-raptor test <task-id>
-raptor merge <task-id> --execute
-```
-
-The output must be understandable, safe, demo-ready, and aligned with the premium Raptor Labs launch experience.
-
-## Next Implementation Prompt
-
-PROMPT 25 - Final verification and tag v0.1.0
+Versioning and releases are automated: functional (`feat`/`fix`/`perf`/`refactor`) pushes to `main` cut a semver bump, tag, and multi-platform GitHub release. Never hand-roll versions or tags. See `scripts/release.sh` and the `auto-release.yml` / `release.yml` workflows.

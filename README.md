@@ -6,13 +6,13 @@ RaptorCode is a **proprietary, closed-source** Rust-native multi-agent coding te
 - Website: https://raptorlabs.dev
 - Source repository: private (https://github.com/RaptorLabsHQ/raptor-code — access-controlled)
 - License: Proprietary — see [`LICENSE`](LICENSE) (RaptorLabs Proprietary EULA)
-- Distribution: official signed binaries for Linux, macOS, and Windows from https://raptorlabs.dev
-- Current status: v0.6.3
+- Distribution: official binaries for Linux, macOS, and Windows from https://raptorlabs.dev (Linux `.deb` is signed; macOS and Windows ship unsigned with checksum verification and platform-bypass guides)
+- Current status: v0.6.3 — generally available on Linux, macOS, and Windows
 
 > RaptorCode is a commercial product, not open source and not free software. The
 > source code, system prompts, and orchestration logic are RaptorLabs trade
 > secrets. Reverse engineering, decompilation, and redistribution are prohibited
-> by the license. Use requires a valid subscription or beta authorization.
+> by the license. Use requires a valid subscription or authorized evaluation.
 
 RaptorCode is a local-first supervised coding terminal. It is not a desktop app, a Warp clone, a full terminal emulator replacement, an enterprise policy platform, or an unsupervised developer replacement.
 
@@ -39,9 +39,9 @@ DeepSeek is the only implemented execution provider today. Other provider names 
 
 ## Install (Official Binaries)
 
-The supported way to install RaptorCode is the official signed binary for your
+The supported way to install RaptorCode is the official binary for your
 platform from https://raptorlabs.dev (Linux, macOS, and Windows). A valid
-subscription or beta authorization is required.
+subscription or authorized evaluation is required.
 
 On Debian/Ubuntu, install the official `.deb`:
 

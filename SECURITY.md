@@ -1,6 +1,6 @@
 # Security Policy
 
-Date: 2026-05-15
+Date: 2026-08-16
 Author: Bob Vasic
 Company: RaptorLabs.dev
 
@@ -10,13 +10,13 @@ V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emul
 
 ## Supported Versions
 
-The latest release is `v0.3.0`. Security reports should target the latest release or the current `main` branch.
+The latest release is `v0.6.3`, available for Linux, macOS, and Windows. Security reports should target the latest release or the current `main` branch. Only the latest release line is supported.
 
 ## Reporting A Vulnerability
 
 Do not disclose exploitable vulnerabilities publicly before maintainers have had time to respond.
 
-For now, report security issues through GitHub issues only if the issue does not expose sensitive exploit details. If a private reporting channel is added, this file will be updated.
+Report security issues privately by email to **security@raptorlabs.dev**. Do not open public GitHub issues for exploitable vulnerabilities. Include a description, affected version or commit, and reproduction steps; we aim to acknowledge within a few business days.
 
 ## Security Priorities
 
