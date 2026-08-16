@@ -2324,11 +2324,16 @@ mod tests {
 
         assert_eq!(updated_path, metadata_path);
         assert!(content.contains("planning_status = \"planning_completed\""));
-        assert!(content.contains(&format!("plan_file_path = \"{}\"", plan_file.display())));
+        // Mirror the metadata renderer's TOML escaping so the substring matches
+        // on Windows, where the path's backslashes are stored doubled.
+        assert!(content.contains(&format!(
+            "plan_file_path = \"{}\"",
+            escape_toml_string(&plan_file.display().to_string())
+        )));
         assert!(content.contains("implementation_status = \"proposal_generated\""));
         assert!(content.contains(&format!(
             "proposal_file_path = \"{}\"",
-            proposal_file.display()
+            escape_toml_string(&proposal_file.display().to_string())
         )));
         assert!(content.contains("provider = \"deepseek\""));
         assert!(content.contains("model = \"deepseek-v4-pro\""));
