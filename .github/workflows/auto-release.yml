@@ -13,16 +13,18 @@ name: auto-release
 #               └─ dispatches release.yml at the new tag
 #                    (3-platform builds + GitHub Release + R2 sync)
 #
-# chore / docs / ci / test-only pushes do NOT release. The "release: vX.Y.Z"
-# commit is pushed with GITHUB_TOKEN, which never re-triggers workflows, so the
-# pipeline cannot loop; the `if` guard below is belt-and-suspenders.
+# chore / docs / ci / test-only pushes do NOT release. The release commit + tag
+# are pushed with a fine-grained PAT (RELEASE_TOKEN, Contents: write) so they can
+# bypass the branch PR-gate ruleset — the built-in GITHUB_TOKEN cannot be a
+# ruleset bypass actor. Because that PAT push (unlike GITHUB_TOKEN) does trigger
+# workflows, the tag push now triggers release.yml directly; the `if` guard below
+# skips the re-triggered run on the "release:" commit, so the pipeline cannot loop.
 on:
   push:
     branches: [main]
 
 permissions:
   contents: write
-  actions: write
 
 concurrency:
   group: auto-release
@@ -37,6 +39,11 @@ jobs:
         with:
           fetch-depth: 0 # release.sh derives the bump from history since the last tag
           fetch-tags: true
+          # Push as an admin (fine-grained PAT) so the release commit + tag bypass
+          # the branch PR-gate ruleset. Falls back to the default token if unset
+          # (then the gate would block the push — keep RELEASE_TOKEN configured).
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          persist-credentials: true
 
       - name: Gate — functional commits since last tag?
         id: gate
@@ -69,13 +76,10 @@ jobs:
           VERSION=$(awk -F' = ' '/^version = / { gsub(/"/,"",$2); print $2; exit }' Cargo.toml)
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Hand off to release.yml (3-platform build + GitHub Release)
+      - name: Release summary
         if: steps.gate.outputs.release == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          gh workflow run release.yml --ref "${{ steps.cut.outputs.tag }}"
           {
             echo "### Cut ${{ steps.cut.outputs.tag }}"
-            echo "release.yml dispatched at the tag — it builds Linux/macOS/Windows, publishes the GitHub Release with generated notes, and syncs R2 (if Cloudflare secrets are configured)."
+            echo "The tag push triggers release.yml — it builds Linux/macOS/Windows, publishes the GitHub Release with generated notes + build-provenance attestation, and syncs R2 + latest.json (if Cloudflare secrets are configured)."
           } >> "$GITHUB_STEP_SUMMARY"
