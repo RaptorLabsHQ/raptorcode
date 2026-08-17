@@ -7,7 +7,7 @@ RaptorCode is a **proprietary, closed-source** Rust-native multi-agent coding te
 - Source repository: private (https://github.com/RaptorLabsHQ/raptor-code — access-controlled)
 - License: Proprietary — see [`LICENSE`](LICENSE) (RaptorLabs Proprietary EULA)
 - Distribution: official binaries for Linux, macOS, and Windows from https://raptorlabs.dev (Linux `.deb` is signed; macOS and Windows ship unsigned with checksum verification and platform-bypass guides)
-- Current status: v0.6.4 — generally available on Linux, macOS, and Windows
+- Current status: v0.6.5 — generally available on Linux, macOS, and Windows
 
 > RaptorCode is a commercial product, not open source and not free software. The
 > source code, system prompts, and orchestration logic are RaptorLabs trade
@@ -46,7 +46,7 @@ subscription or authorized evaluation is required.
 On Debian/Ubuntu, install the official `.deb`:
 
 ```bash
-sudo apt install ./raptor-code_0.6.4_amd64.deb
+sudo apt install ./raptor-code_0.6.5_amd64.deb
 ```
 
 Verify the installed commands:

@@ -8,6 +8,8 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+## v0.6.5 - 2026-08-17
+
 ## v0.6.4 - 2026-08-17
 
 ## v0.6.3 - 2026-08-16
