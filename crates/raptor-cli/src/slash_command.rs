@@ -19,9 +19,8 @@ use raptor_providers::{
 use crate::context_budget::ContextBudgetState;
 use crate::{
     agent_system_message, chat_system_prompt, format_model_display_name, interactive_select,
-    prompt_provider_and_api_key, render_interactive_help, test_deepseek_connection,
-    write_stored_deepseek_api_key, AgentMessage, MenuItem, C_BOLD, C_CYAN, C_DIM, C_GREEN_BOLD,
-    C_RED, C_RED_BOLD, C_RESET,
+    reenter_and_save_api_key, render_interactive_help, AgentMessage, MenuItem, C_BOLD, C_CYAN,
+    C_DIM, C_GREEN_BOLD, C_RED, C_RED_BOLD, C_RESET,
 };
 
 /// A recognized interactive slash command. `parse` returns `None` for any line
@@ -277,29 +276,9 @@ fn handle_api(session: &mut SlashSession) -> ReplControl {
         },
     ];
     match interactive_select(&api_items) {
-        Some(0) => match prompt_provider_and_api_key() {
-            Ok(new_key) => {
-                print!("\n  {C_DIM}⟳  Testing connection...{C_RESET}");
-                std::io::stdout().flush().ok();
-                match DeepSeekProvider::new(&new_key) {
-                    Ok(new_prov) => match test_deepseek_connection(&new_prov) {
-                        Ok(()) => match write_stored_deepseek_api_key(&new_key) {
-                            Ok(()) => {
-                                *session.provider = new_prov;
-                                *session.api_key = new_key;
-                                println!(
-                                    "\n  {C_GREEN_BOLD}✓  API key updated and saved.{C_RESET}"
-                                );
-                            }
-                            Err(e) => eprintln!("\n  failed to save key: {e}"),
-                        },
-                        Err(e) => eprintln!("\n  {C_RED}✗  {e}{C_RESET}"),
-                    },
-                    Err(e) => eprintln!("\n  {C_RED}✗  {e}{C_RESET}"),
-                }
-            }
-            Err(e) => eprintln!("  {e}"),
-        },
+        Some(0) => {
+            reenter_and_save_api_key(session.api_key, session.provider);
+        }
         Some(1) => {
             let masked = if session.api_key.len() > 12 {
                 format!(

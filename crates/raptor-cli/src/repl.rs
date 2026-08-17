@@ -16,18 +16,29 @@ pub fn run_interactive_chat(
 ) -> Result<(), CliError> {
     use std::io::Write as _;
 
-    // Resolve latest DeepSeek model for the banner if we have a saved key
+    // Resolve latest DeepSeek model for the banner if we have a saved key. The
+    // probe doubles as a free key check: an explicit auth rejection here means
+    // the saved/env key is stale, and we surface that at startup instead of
+    // letting the first real request die on it later.
     let mut banner_options = startup_options.clone();
+    let mut saved_key_rejected = false;
     if let Some(saved_key) = resolve_deepseek_api_key() {
         if let Ok(temp_provider) = DeepSeekProvider::new(saved_key) {
             let (tx, rx) = std::sync::mpsc::channel();
             thread::spawn(move || {
                 let _ = tx.send(temp_provider.list_models());
             });
-            if let Ok(Ok(models)) = rx.recv_timeout(Duration::from_secs(3)) {
-                if let Some(best) = pick_latest_model(&models) {
-                    banner_options.model_name = Some(format_model_display_name(&best));
+            match rx.recv_timeout(Duration::from_secs(3)) {
+                Ok(Ok(models)) => {
+                    if let Some(best) = pick_latest_model(&models) {
+                        banner_options.model_name = Some(format_model_display_name(&best));
+                    }
                 }
+                Ok(Err(ProviderError::MissingApiKey | ProviderError::AuthenticationFailed(_))) => {
+                    saved_key_rejected = true;
+                }
+                // Timeouts and transport errors say nothing about the key.
+                _ => {}
             }
         }
     }
@@ -52,6 +63,17 @@ pub fn run_interactive_chat(
         write_stored_deepseek_api_key(&api_key)?;
         println!("  {C_GREEN_BOLD}✓  Connection established.{C_RESET}{C_DIM}  API key saved to ~/.raptor/.credentials{C_RESET}");
         println!("  {C_GREEN_BOLD}✓  Ready to code.{C_RESET}");
+    } else if saved_key_rejected {
+        println!();
+        eprintln!(
+            "  {C_RED}✗  Your saved DeepSeek API key was rejected (invalid or revoked).{C_RESET}"
+        );
+        println!("  {C_DIM}Enter a new key below, or press Esc to continue with the saved key anyway.{C_RESET}\n");
+        if !reenter_and_save_api_key(&mut api_key, &mut provider) {
+            println!(
+                "  {C_DIM}Keeping the saved key — requests may fail until it is replaced (/api, or set DEEPSEEK_API_KEY).{C_RESET}"
+            );
+        }
     }
 
     let agent_mode = prompt_file_access_consent(current_dir);
@@ -233,10 +255,18 @@ pub fn run_interactive_chat(
                         let msg = error.to_string();
                         eprintln!("Error: {msg}\n");
                         if msg.contains("authentication") {
-                            eprintln!(
-                                "Delete ~/.raptor/.credentials or set DEEPSEEK_API_KEY to reset."
-                            );
-                            break;
+                            // The failed turn never happened: drop the just-pushed
+                            // user message so a recovered session does not carry a
+                            // stale, never-answered turn in its history.
+                            if agent_history
+                                .last()
+                                .is_some_and(|message| message.role == "user")
+                            {
+                                agent_history.pop();
+                            }
+                            if !recover_session_auth(&mut api_key, &mut provider) {
+                                break;
+                            }
                         }
                     }
                 }
@@ -294,9 +324,9 @@ pub fn run_interactive_chat(
                 }
                 Err(ProviderError::MissingApiKey) | Err(ProviderError::AuthenticationFailed(_)) => {
                     chat_history.pop();
-                    eprintln!("Authentication failed. Your API key may be invalid.");
-                    eprintln!("Delete ~/.raptor/.credentials or set DEEPSEEK_API_KEY to reset.\n");
-                    break;
+                    if !recover_session_auth(&mut api_key, &mut provider) {
+                        break;
+                    }
                 }
                 Err(error) => {
                     chat_history.pop();
@@ -640,6 +670,68 @@ pub(crate) fn test_deepseek_connection(provider: &DeepSeekProvider) -> Result<()
             }
             other => CliError::new(format!("connection test failed: {other}")),
         })
+}
+
+/// Walks the provider menu for a fresh DeepSeek key, tests it, persists it, and
+/// swaps the live provider/key in place. Shared by `/api`, the startup
+/// stale-key check, and mid-session auth recovery. Returns `false` when the
+/// developer cancels or the new key fails, leaving the session's key untouched.
+/// A key that works but cannot be persisted is still activated for this
+/// session, with a warning.
+pub(crate) fn reenter_and_save_api_key(
+    api_key: &mut String,
+    provider: &mut DeepSeekProvider,
+) -> bool {
+    use std::io::Write as _;
+
+    let new_key = match prompt_provider_and_api_key() {
+        Ok(new_key) => new_key,
+        Err(error) => {
+            eprintln!("  {error}");
+            return false;
+        }
+    };
+    print!("\n  {C_DIM}⟳  Testing connection...{C_RESET}");
+    std::io::stdout().flush().ok();
+    let new_provider = match DeepSeekProvider::new(&new_key) {
+        Ok(new_provider) => new_provider,
+        Err(error) => {
+            eprintln!("\n  {C_RED}✗  {error}{C_RESET}");
+            return false;
+        }
+    };
+    if let Err(error) = test_deepseek_connection(&new_provider) {
+        eprintln!("\n  {C_RED}✗  {error}{C_RESET}");
+        return false;
+    }
+    match write_stored_deepseek_api_key(&new_key) {
+        Ok(()) => println!("\n  {C_GREEN_BOLD}✓  API key updated and saved.{C_RESET}"),
+        Err(error) => {
+            eprintln!("\n  failed to save key: {error}");
+            println!("  {C_GREEN_BOLD}✓  API key active for this session.{C_RESET}");
+        }
+    }
+    *provider = new_provider;
+    *api_key = new_key;
+    true
+}
+
+/// Mid-session recovery after a rejected request: offer a fresh key so the
+/// conversation (and its history) survives a rotated or revoked key. Returns
+/// `true` when a new key is active and the developer can simply resend the
+/// last message; `false` means keep the old behavior and end the session.
+fn recover_session_auth(api_key: &mut String, provider: &mut DeepSeekProvider) -> bool {
+    eprintln!("Authentication failed. Your API key may be invalid or revoked.");
+    println!(
+        "  {C_DIM}Enter a new key below to continue this session, or press Esc to exit.{C_RESET}\n"
+    );
+    if reenter_and_save_api_key(api_key, provider) {
+        println!("  {C_DIM}Key replaced — please resend your last message.{C_RESET}\n");
+        true
+    } else {
+        eprintln!("Delete ~/.raptor/.credentials or set DEEPSEEK_API_KEY to reset.\n");
+        false
+    }
 }
 
 pub(crate) fn prompt_provider_and_api_key() -> Result<String, CliError> {
