@@ -71,10 +71,10 @@ use raptor_tools::{
     TestCommandOutput,
 };
 use raptor_tui::{
-    color_mode_from_environment, prompt_input_cursor_column, render_dashboard_snapshot,
-    render_prompt_input_box, render_startup_banner, run_dashboard, terminal_width_from_environment,
-    AgentDashboardSummary, ColorMode, DashboardState, StartupBannerOptions, SwarmDashboardSummary,
-    TaskDashboardSummary,
+    color_mode_from_environment, prompt_input_cursor_column, prompt_input_field_width,
+    render_dashboard_snapshot, render_prompt_input_box, render_startup_banner, run_dashboard,
+    terminal_width_from_environment, AgentDashboardSummary, ColorMode, DashboardState,
+    StartupBannerOptions, SwarmDashboardSummary, TaskDashboardSummary,
 };
 use tool_policy::{ConfirmationKind, PolicyDecision, ToolPolicy};
 

@@ -775,6 +775,14 @@ pub fn prompt_input_cursor_column(label: &str) -> u16 {
     (2 + 1 + 1 + visible_width(label)) as u16
 }
 
+/// Number of editable columns between the input cursor column and the box's
+/// right border — the horizontal budget a line editor may draw into without
+/// touching the border glyph.
+pub fn prompt_input_field_width(terminal_width: u16, label: &str) -> usize {
+    let right_border_column = 2 + prompt_input_box_width(terminal_width) - 1;
+    right_border_column.saturating_sub(prompt_input_cursor_column(label) as usize)
+}
+
 fn icon_field(icon: &str) -> String {
     pad_visible(icon, 3)
 }
@@ -1057,6 +1065,18 @@ mod tests {
         let expected = snapshot_fixture(include_str!("../tests/snapshots/splash_compact.txt"));
 
         assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn prompt_field_width_spans_cursor_to_right_border() {
+        // 80-column terminal: box = (80 - 4).clamp(44, 120) = 76 columns, so the
+        // right border sits at 0-based column 77 and the ">  " label puts the
+        // cursor at column 7 — leaving 70 editable columns.
+        assert_eq!(prompt_input_field_width(80, ">  "), 70);
+        // Wide terminals clamp the box at 120 columns: border at 121 → 114.
+        assert_eq!(prompt_input_field_width(200, ">  "), 114);
+        // The clamp keeps a usable field even on absurdly narrow terminals.
+        assert!(prompt_input_field_width(10, ">  ") >= 30);
     }
 
     #[test]

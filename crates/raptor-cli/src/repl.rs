@@ -336,6 +336,30 @@ fn read_boxed_agent_prompt_line(color_mode: ColorMode) -> std::io::Result<Option
     // submits the prompt. Purely decorative; it never touches stdin.
     let ticker = PromptQuoteTicker::start(width);
 
+    // Preferred path: a raw-mode line editor that owns the echo, so input can
+    // never run through the box's right border or wrap onto the border/quote
+    // lines below — long input scrolls horizontally inside the field instead.
+    if let Some(read) = read_boxed_line_raw(
+        prompt_input_cursor_column(AGENT_INPUT_LABEL),
+        prompt_input_field_width(width, AGENT_INPUT_LABEL),
+    ) {
+        ticker.stop();
+        // The raw editor leaves the cursor on the input line: step past the
+        // bottom border onto the (now stale) quote line, clear it, and leave the
+        // cursor there so conversation output starts on a clean line below.
+        execute!(
+            stdout,
+            cursor::MoveDown(2),
+            cursor::MoveToColumn(0),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine)
+        )
+        .ok();
+        return read.map(|line| line.map(|text| text.trim().to_owned()));
+    }
+
+    // Fallback (raw mode unavailable, e.g. stdin is not a real terminal): the
+    // terminal's own cooked-mode line editing. Overlong input can wrap here,
+    // but this path only runs where the box is not interactively usable anyway.
     let mut input = String::new();
     let read = std::io::stdin().read_line(&mut input);
     ticker.stop();
@@ -355,6 +379,242 @@ fn read_boxed_agent_prompt_line(color_mode: ColorMode) -> std::io::Result<Option
         Ok(0) => Ok(None),
         Ok(_) => Ok(Some(input.trim().to_owned())),
         Err(error) => Err(error),
+    }
+}
+
+/// Restores cooked mode when dropped, so an early return, error, or panic can
+/// never strand the terminal in raw mode.
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn enable() -> Option<Self> {
+        crossterm::terminal::enable_raw_mode().ok()?;
+        Some(RawModeGuard)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+/// Raw-mode line editor for the boxed prompt. Reads key events directly and
+/// re-renders only the editable field between the label and the right border,
+/// so the box stays intact no matter how long the input grows. Returns `None`
+/// when raw mode cannot be enabled so the caller can fall back to a cooked
+/// read, `Some(Ok(None))` on Ctrl+C / Ctrl+D-at-empty (end the session), and
+/// `Some(Ok(Some(text)))` on Enter.
+fn read_boxed_line_raw(
+    origin_col: u16,
+    field_width: usize,
+) -> Option<std::io::Result<Option<String>>> {
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+
+    if field_width < 2 {
+        return None;
+    }
+    let guard = RawModeGuard::enable()?;
+
+    let mut editor = BoxedLineEditor::new();
+    let outcome = loop {
+        let key = match event::read() {
+            Ok(Event::Key(key)) => key,
+            Ok(_) => continue,
+            Err(error) => break Err(error),
+        };
+        if key.kind == KeyEventKind::Release {
+            continue;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let plain = !ctrl && !key.modifiers.contains(KeyModifiers::ALT);
+        let changed = match key.code {
+            KeyCode::Enter => break Ok(Some(editor.text())),
+            // Match the cooked-mode expectations: Ctrl+D on an empty line is
+            // EOF; Ctrl+C ends the session the same graceful way.
+            KeyCode::Char('c') if ctrl => break Ok(None),
+            KeyCode::Char('d') if ctrl => {
+                if editor.is_empty() {
+                    break Ok(None);
+                }
+                editor.delete_forward()
+            }
+            KeyCode::Char('u') if ctrl => editor.kill_to_start(),
+            KeyCode::Char('k') if ctrl => editor.kill_to_end(),
+            KeyCode::Char('w') if ctrl => editor.delete_word_back(),
+            KeyCode::Char('a') if ctrl => editor.move_home(),
+            KeyCode::Char('e') if ctrl => editor.move_end(),
+            KeyCode::Char(ch) if plain => {
+                editor.insert(ch);
+                true
+            }
+            KeyCode::Backspace => editor.backspace(),
+            KeyCode::Delete => editor.delete_forward(),
+            KeyCode::Left => editor.move_left(),
+            KeyCode::Right => editor.move_right(),
+            KeyCode::Home => editor.move_home(),
+            KeyCode::End => editor.move_end(),
+            // A literal tab would break the column math; insert a plain space.
+            KeyCode::Tab => {
+                editor.insert(' ');
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            redraw_boxed_input(&mut editor, origin_col, field_width);
+        }
+    };
+    drop(guard);
+    Some(outcome)
+}
+
+/// Redraws the editable field as one buffered write + flush — the same
+/// atomic-write discipline as `PromptQuoteTicker::render_frame` — so a
+/// concurrent quote frame can never interleave mid-sequence. `origin_col` is
+/// 0-based (crossterm convention); the ANSI CHA sequence (`ESC[<n>G`) is
+/// 1-based, hence the `+ 1`.
+fn redraw_boxed_input(editor: &mut BoxedLineEditor, origin_col: u16, field_width: usize) {
+    let (visible, cursor_offset) = editor.visible_window(field_width);
+    let padding = " ".repeat(field_width.saturating_sub(visible.chars().count()));
+    let text_column = origin_col as usize + 1;
+    let cursor_column = origin_col as usize + cursor_offset + 1;
+    print!("\x1b[?25l\x1b[{text_column}G{visible}{padding}\x1b[{cursor_column}G\x1b[?25h");
+    std::io::stdout().flush().ok();
+}
+
+/// Single-line input state for the boxed prompt: buffer, cursor, and the
+/// horizontal scroll window. Pure state and window math (no terminal I/O) so
+/// it is unit-testable; each `char` is treated as one terminal column, the
+/// same width model the rest of the TUI uses.
+struct BoxedLineEditor {
+    buffer: Vec<char>,
+    cursor: usize,
+    scroll: usize,
+}
+
+impl BoxedLineEditor {
+    fn new() -> Self {
+        BoxedLineEditor {
+            buffer: Vec::new(),
+            cursor: 0,
+            scroll: 0,
+        }
+    }
+
+    fn text(&self) -> String {
+        self.buffer.iter().collect()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+
+    fn insert(&mut self, ch: char) {
+        self.buffer.insert(self.cursor, ch);
+        self.cursor += 1;
+    }
+
+    fn backspace(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+        self.cursor -= 1;
+        self.buffer.remove(self.cursor);
+        true
+    }
+
+    fn delete_forward(&mut self) -> bool {
+        if self.cursor >= self.buffer.len() {
+            return false;
+        }
+        self.buffer.remove(self.cursor);
+        true
+    }
+
+    fn move_left(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+        self.cursor -= 1;
+        true
+    }
+
+    fn move_right(&mut self) -> bool {
+        if self.cursor >= self.buffer.len() {
+            return false;
+        }
+        self.cursor += 1;
+        true
+    }
+
+    fn move_home(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+        self.cursor = 0;
+        true
+    }
+
+    fn move_end(&mut self) -> bool {
+        if self.cursor == self.buffer.len() {
+            return false;
+        }
+        self.cursor = self.buffer.len();
+        true
+    }
+
+    fn kill_to_start(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+        self.buffer.drain(..self.cursor);
+        self.cursor = 0;
+        true
+    }
+
+    fn kill_to_end(&mut self) -> bool {
+        if self.cursor >= self.buffer.len() {
+            return false;
+        }
+        self.buffer.truncate(self.cursor);
+        true
+    }
+
+    fn delete_word_back(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+        let mut start = self.cursor;
+        while start > 0 && self.buffer[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        while start > 0 && !self.buffer[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        self.buffer.drain(start..self.cursor);
+        self.cursor = start;
+        true
+    }
+
+    /// Clamps the scroll window so the cursor stays visible and returns the
+    /// characters to draw plus the cursor's offset within the field. The last
+    /// column doubles as the end-of-line cursor cell, so the window never
+    /// pushes the cursor onto the box border.
+    fn visible_window(&mut self, field_width: usize) -> (String, usize) {
+        let width = field_width.max(2);
+        let len = self.buffer.len();
+        // Never leave dead space on the right while earlier text is hidden.
+        self.scroll = self.scroll.min(len.saturating_sub(width - 1));
+        if self.cursor < self.scroll {
+            self.scroll = self.cursor;
+        }
+        if self.cursor + 1 > self.scroll + width {
+            self.scroll = self.cursor + 1 - width;
+        }
+        let end = (self.scroll + width).min(len);
+        let visible: String = self.buffer[self.scroll..end].iter().collect();
+        (visible, self.cursor - self.scroll)
     }
 }
 
@@ -982,5 +1242,142 @@ fn print_context_budget_notice(notice: context_budget::ContextBudgetNotice) {
                 "  {C_GREEN}✓ context compacted{C_RESET}  {C_DIM}omitted {omitted} older messages, retained {retained} recent messages{C_RESET}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn editor_with(text: &str) -> BoxedLineEditor {
+        let mut editor = BoxedLineEditor::new();
+        for ch in text.chars() {
+            editor.insert(ch);
+        }
+        editor
+    }
+
+    #[test]
+    fn short_input_fits_without_scrolling() {
+        let mut editor = editor_with("hello");
+        let (visible, cursor) = editor.visible_window(10);
+
+        assert_eq!(visible, "hello");
+        assert_eq!(cursor, 5);
+        assert_eq!(editor.scroll, 0);
+    }
+
+    #[test]
+    fn typing_past_the_field_scrolls_instead_of_overflowing() {
+        let mut editor = editor_with("abcdefghijklmnopqrstuvwxyz1234");
+        let (visible, cursor) = editor.visible_window(10);
+
+        // The window shows the tail with the last column reserved for the
+        // end-of-line cursor, so nothing can ever cross the box border.
+        assert_eq!(visible, "vwxyz1234");
+        assert_eq!(cursor, 9);
+        assert!(visible.chars().count() <= 10);
+    }
+
+    #[test]
+    fn window_and_cursor_never_exceed_the_field() {
+        let mut editor = BoxedLineEditor::new();
+        for step in 0..200 {
+            editor.insert(char::from(b'a' + (step % 26) as u8));
+            let (visible, cursor) = editor.visible_window(12);
+            assert!(visible.chars().count() <= 12, "window overflow at {step}");
+            assert!(cursor < 12, "cursor past field at {step}");
+        }
+    }
+
+    #[test]
+    fn home_scrolls_back_to_the_start() {
+        let mut editor = editor_with("abcdefghijklmnopqrstuvwxyz");
+        editor.visible_window(10);
+        assert!(editor.move_home());
+        let (visible, cursor) = editor.visible_window(10);
+
+        assert_eq!(visible, "abcdefghij");
+        assert_eq!(cursor, 0);
+    }
+
+    #[test]
+    fn arrows_walk_the_window_across_long_input() {
+        let mut editor = editor_with("abcdefghijklmnopqrstuvwxyz");
+        editor.move_home();
+        editor.visible_window(10);
+        for _ in 0..15 {
+            editor.move_right();
+        }
+        let (visible, cursor) = editor.visible_window(10);
+
+        // Cursor sits on 'p' (index 15); the window scrolled just enough to
+        // keep it on the last visible column.
+        assert_eq!(cursor, 9);
+        assert_eq!(visible, "ghijklmnop");
+        assert_eq!(editor.scroll, 6);
+    }
+
+    #[test]
+    fn backspace_and_delete_edit_at_the_cursor() {
+        let mut editor = editor_with("hello world");
+        for _ in 0..5 {
+            editor.move_left();
+        }
+        assert!(editor.backspace()); // removes the space before "world"
+        assert_eq!(editor.text(), "helloworld");
+        assert!(editor.delete_forward()); // removes the 'w' under the cursor
+        assert_eq!(editor.text(), "helloorld");
+    }
+
+    #[test]
+    fn kill_and_word_deletion_shortcuts() {
+        let mut editor = editor_with("cargo build --release  ");
+        assert!(editor.delete_word_back());
+        assert_eq!(editor.text(), "cargo build ");
+
+        assert!(editor.kill_to_start());
+        assert_eq!(editor.text(), "");
+        assert!(editor.is_empty());
+        let (visible, cursor) = editor.visible_window(10);
+        assert_eq!(visible, "");
+        assert_eq!(cursor, 0);
+
+        let mut editor = editor_with("keep this");
+        editor.move_home();
+        for _ in 0..4 {
+            editor.move_right();
+        }
+        assert!(editor.kill_to_end());
+        assert_eq!(editor.text(), "keep");
+    }
+
+    #[test]
+    fn deleting_pulls_the_window_back_from_dead_space() {
+        let mut editor = editor_with("abcdefghijklmnopqrstuvwxyz");
+        editor.visible_window(10);
+        assert!(editor.scroll > 0);
+        for _ in 0..20 {
+            editor.backspace();
+        }
+        let (visible, cursor) = editor.visible_window(10);
+
+        // Only "abcdef" remains: the window must snap back to show it all
+        // rather than leaving a stale scroll offset and a blank field.
+        assert_eq!(visible, "abcdef");
+        assert_eq!(cursor, 6);
+        assert_eq!(editor.scroll, 0);
+    }
+
+    #[test]
+    fn mid_text_insertion_keeps_order() {
+        let mut editor = editor_with("raptor");
+        for _ in 0..3 {
+            editor.move_left();
+        }
+        editor.insert('X');
+        assert_eq!(editor.text(), "rapXtor");
+        let (_, cursor) = editor.visible_window(20);
+        assert_eq!(cursor, 4);
     }
 }
