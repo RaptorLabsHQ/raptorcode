@@ -1,0 +1,40 @@
+name: security
+
+# Supply-chain policy gate: cargo-deny enforces the RUSTSEC advisory database,
+# the dependency license allow-list, duplicate-version tracking, and registry
+# sources (config in deny.toml). The nightly schedule surfaces newly published
+# advisories within a day even when nothing is being pushed; ci.yml's per-push
+# cargo-audit job stays as the fast advisory check on the hot path.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - "crates/**/Cargo.toml"
+      - ".github/workflows/security.yml"
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - "crates/**/Cargo.toml"
+      - ".github/workflows/security.yml"
+  schedule:
+    # Nightly advisory sweep (03:17 UTC).
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

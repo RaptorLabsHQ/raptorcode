@@ -140,9 +140,21 @@ jobs:
           [ -n "${deb[0]:-}" ] && npx --yes wrangler@4 r2 object put "raptor-code-downloads/raptor-code_amd64.deb" --file "${deb[0]}" --remote
           [ -n "${mac[0]:-}" ] && npx --yes wrangler@4 r2 object put "raptor-code-downloads/raptor-code_macos_universal.tar.gz" --file "${mac[0]}" --remote
           [ -n "${win[0]:-}" ] && npx --yes wrangler@4 r2 object put "raptor-code-downloads/raptor-code_windows_x86_64.zip" --file "${win[0]}" --remote
+          # Publish a machine-readable manifest alongside the binaries so the
+          # website renders the current version and checksums straight from R2 —
+          # no per-release website edit or redeploy needed.
+          if [ -n "${deb[0]:-}" ] && [ -n "${mac[0]:-}" ] && [ -n "${win[0]:-}" ]; then
+            printf '{"version":"%s","released":"%s","sha256":{"linux":"%s","macos":"%s","windows":"%s"}}\n' \
+              "${GITHUB_REF_NAME#v}" \
+              "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              "$(cut -d' ' -f1 "${deb[0]}.sha256")" \
+              "$(cut -d' ' -f1 "${mac[0]}.sha256")" \
+              "$(cut -d' ' -f1 "${win[0]}.sha256")" > latest.json
+            npx --yes wrangler@4 r2 object put "raptor-code-downloads/latest.json" --file latest.json --content-type application/json --remote
+          fi
           {
             echo "### R2 downloads refreshed to ${GITHUB_REF_NAME}"
-            echo "Manual follow-up in **raptor-code-website**: bump \`v=\` in \`src/raptorcode/lib/raptorcodeLinks.ts\` and update \`DL_VERSION\` + SHA-256 strings in \`src/pages/beta/download.astro\`, then deploy:"
+            echo "The \`latest.json\` manifest was updated too, so raptorcode.dev serves the new version and SHA-256s automatically — no website edit required."
             echo '```'
             cat -- *.sha256
             echo '```'

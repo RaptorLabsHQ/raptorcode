@@ -11,6 +11,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Nightly full-matrix run: catches environment drift (runner images,
+    # rustup/stable movement, upstream regressions) even on quiet days.
+    - cron: "41 3 * * *"
 
 permissions:
   contents: read
