@@ -8,6 +8,11 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+### Security
+
+- Updated `rustls` from 0.23.43 to 0.23.45 and `rustls-webpki` from 0.103.13
+  to 0.103.15 to resolve RUSTSEC-2026-0285 (2026-09-26).
+
 ## v0.6.5 - 2026-08-17
 
 ## v0.6.4 - 2026-08-17
