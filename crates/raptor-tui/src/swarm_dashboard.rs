@@ -416,7 +416,7 @@ fn request_stop(state: &mut SwarmDashboardState, cancel: &Arc<AtomicBool>) {
 }
 
 fn draw_swarm_dashboard(frame: &mut Frame<'_>, state: &SwarmDashboardState, elapsed: Duration) {
-    let area = frame.size();
+    let area = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .horizontal_margin(2)
@@ -1027,7 +1027,7 @@ mod tests {
             .map(|y| {
                 let mut row = String::new();
                 for x in 0..area.width {
-                    row.push_str(buffer.get(x, y).symbol());
+                    row.push_str(buffer[(x, y)].symbol());
                 }
                 row.trim_end().to_owned()
             })

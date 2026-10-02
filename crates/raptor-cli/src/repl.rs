@@ -1,21 +1,43 @@
 //! The interactive `raptor` terminal: the read-eval-print loop the user lands in
 //! when running `raptor` with no arguments. Owns the session loop
-//! (`run_interactive_chat`), the tool-executing single-agent loop
-//! (`run_agent_loop`), the prompt input box, the thinking spinner and prompt
-//! quote ticker, local credential storage/consent, and the embedded quote pool.
-//! Slash commands are delegated to `slash_command`; the default swarm run and
-//! tool execution to `swarm_orchestrator`/`agent_tools`.
-//!
-//! Like the other extracted modules, a single `use crate::*` re-imports the
-//! parent's private aliases instead of duplicating `lib.rs`'s import list.
-use crate::*;
+//! (`run_interactive_chat`), the terminal adapter for the shared `agent_loop`,
+//! the prompt input box, the thinking spinner and prompt quote ticker, local
+//! credential storage/consent, and the embedded quote pool. Slash commands are
+//! delegated to `slash_command`; the default swarm run to `swarm_orchestrator`.
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::thread;
+use std::time::Duration;
+
+use raptor_providers::{
+    AgentMessage, AgentMessageRole, CompletionMessage, CompletionRequest, DeepSeekProvider,
+    DeepSeekReasoningEffort, DeepSeekRequestOptions, Provider, ProviderError, TokenUsage,
+    DEEPSEEK_API_KEY_ENV, DEEPSEEK_API_KEY_URL,
+};
+use raptor_tui::{
+    prompt_input_cursor_column, prompt_input_field_width, render_prompt_input_box,
+    render_startup_banner, terminal_width_from_environment, ColorMode, StartupBannerOptions,
+};
+
+use crate::agent_loop;
+use crate::agent_tools::build_agent_tools;
+use crate::context_budget::{self, ContextBudgetState};
+use crate::prompt_guard::{PromptGuard, StreamRedactor};
+use crate::render::{display_number, render_context_usage};
+use crate::tool_policy::{self, ConfirmationKind, ToolPolicy};
+use crate::{
+    agent_system_message, chat_system_prompt, format_model_display_name, interactive_select,
+    pick_latest_model, slash_command, swarm_orchestrator, CliError, MenuItem, C_BOLD, C_CYAN,
+    C_DIM, C_GREEN, C_GREEN_BOLD, C_RED, C_RED_BOLD, C_RESET, C_YELLOW_BOLD,
+};
 
 pub fn run_interactive_chat(
     current_dir: &Path,
     startup_options: &StartupBannerOptions,
 ) -> Result<(), CliError> {
-    use std::io::Write as _;
-
     // Resolve latest DeepSeek model for the banner if we have a saved key. The
     // probe doubles as a free key check: an explicit auth rejection here means
     // the saved/env key is stale, and we surface that at startup instead of
@@ -53,8 +75,7 @@ pub fn run_interactive_chat(
         }
     };
 
-    let mut provider =
-        DeepSeekProvider::new(&api_key).map_err(|error| CliError::new(error.to_string()))?;
+    let mut provider = DeepSeekProvider::new(&api_key)?;
 
     if is_new_key {
         println!("\n  {C_DIM}⟳  Testing connection to DeepSeek API...{C_RESET}");
@@ -200,75 +221,70 @@ pub fn run_interactive_chat(
                 }
             };
             if run_single_agent {
-                agent_history.push(AgentMessage {
-                    role: "user".to_owned(),
-                    content: Some(input.clone()),
-                    reasoning_content: None,
-                    tool_calls: None,
-                    tool_call_id: None,
-                });
+                agent_history.push(AgentMessage::user(input.clone()));
 
-                let mut agent_loop_context = AgentLoopContext {
-                    context_budget: &mut context_budget,
+                let mut ui = ReplAgentUi::new(&prompt_guard, streaming_enabled);
+                let mut loop_context = agent_loop::AgentLoopContext {
+                    budget: &mut context_budget,
                     model_id: &model_id,
-                    prompt_guard: &prompt_guard,
                     provider: &provider,
                     request_options: &request_options,
-                    streaming_enabled,
+                    streaming: streaming_enabled,
                     tool_policy: &mut agent_tool_policy,
                     tools: &tools,
+                    working_dir: &mut agent_working_dir,
                 };
-                match run_agent_loop(
-                    &mut agent_working_dir,
-                    &mut agent_history,
-                    &mut agent_loop_context,
-                ) {
-                    Ok(output) => {
-                        let content = output.content.trim().to_owned();
-                        if output.streamed {
+                match agent_loop::run(&mut loop_context, &mut agent_history, &mut ui) {
+                    Ok(agent_loop::AgentLoopEnd::Answered {
+                        assistant_message,
+                        content,
+                        streamed,
+                        usage,
+                    }) => {
+                        let content = content.trim().to_owned();
+                        if streamed {
                             println!("\n");
                         } else {
                             println!("{}\n", prompt_guard.redact(&content));
                         }
-                        if let Some(usage) = output.usage.as_ref() {
+                        if let Some(usage) = usage.as_ref() {
                             let line = render_context_usage(usage);
                             if !line.is_empty() {
                                 println!("  {C_DIM}{line}{C_RESET}\n");
                             }
                         }
-                        let assistant_message =
-                            output.assistant_message.unwrap_or_else(|| AgentMessage {
-                                role: "assistant".to_owned(),
-                                content: Some(content),
-                                reasoning_content: None,
-                                tool_calls: None,
-                                tool_call_id: None,
-                            });
                         agent_history.push(assistant_message);
                         handle_agent_context_budget(
                             &mut agent_history,
-                            output.usage.as_ref(),
+                            usage.as_ref(),
                             &mut context_budget,
                         );
                     }
-                    Err(error) => {
-                        let msg = error.to_string();
-                        eprintln!("Error: {msg}\n");
-                        if msg.contains("authentication") {
-                            // The failed turn never happened: drop the just-pushed
-                            // user message so a recovered session does not carry a
-                            // stale, never-answered turn in its history.
-                            if agent_history
-                                .last()
-                                .is_some_and(|message| message.role == "user")
-                            {
-                                agent_history.pop();
-                            }
-                            if !recover_session_auth(&mut api_key, &mut provider) {
-                                break;
-                            }
+                    Ok(agent_loop::AgentLoopEnd::StepLimit) => {
+                        // Recorded as an assistant turn so "continue" resumes
+                        // the conversation naturally.
+                        println!("{STEP_LIMIT_MESSAGE}\n");
+                        agent_history.push(AgentMessage::assistant(STEP_LIMIT_MESSAGE));
+                    }
+                    // The REPL never raises the cancel signal; only swarm workers do.
+                    Ok(agent_loop::AgentLoopEnd::Cancelled) => {}
+                    Err(ProviderError::MissingApiKey)
+                    | Err(ProviderError::AuthenticationFailed(_)) => {
+                        eprintln!("Error: authentication failed; check your API key\n");
+                        // The failed turn never happened: drop the just-pushed
+                        // user message so a recovered session does not carry a
+                        // stale, never-answered turn in its history.
+                        if agent_history
+                            .last()
+                            .is_some_and(|message| message.role == AgentMessageRole::User)
+                        {
+                            agent_history.pop();
+                        }
+                        if !recover_session_auth(&mut api_key, &mut provider) {
+                            break;
                         }
                     }
+                    Err(error) => eprintln!("Error: agent error: {error}\n"),
                 }
             }
         } else {
@@ -285,7 +301,7 @@ pub fn run_interactive_chat(
                 print!("  {C_DIM}Streaming agent response...{C_RESET}\n\n");
                 std::io::stdout().flush().ok();
                 let mut redactor = StreamRedactor::new(&prompt_guard);
-                let response = provider.complete_streaming(request, |delta| {
+                let response = provider.complete_streaming(request, &mut |delta| {
                     if delta.reasoning_content.is_some() {
                         return;
                     }
@@ -682,8 +698,6 @@ pub(crate) fn reenter_and_save_api_key(
     api_key: &mut String,
     provider: &mut DeepSeekProvider,
 ) -> bool {
-    use std::io::Write as _;
-
     let new_key = match prompt_provider_and_api_key() {
         Ok(new_key) => new_key,
         Err(error) => {
@@ -735,8 +749,6 @@ fn recover_session_auth(api_key: &mut String, provider: &mut DeepSeekProvider) -
 }
 
 pub(crate) fn prompt_provider_and_api_key() -> Result<String, CliError> {
-    use std::io::Write as _;
-
     println!();
     println!("{C_RED_BOLD}  ╔═══════════════════════════════════════════════════╗{C_RESET}");
     println!("{C_RED_BOLD}  ║{C_RESET}  {C_BOLD}⚡  CONFIGURE AI PROVIDER{C_RESET}                       {C_RED_BOLD}║{C_RESET}");
@@ -822,25 +834,44 @@ pub(crate) fn write_stored_deepseek_api_key(key: &str) -> Result<(), CliError> {
     std::fs::create_dir_all(&dir)
         .map_err(|error| CliError::new(format!("failed to create {}: {error}", dir.display())))?;
     let path = dir.join(".credentials");
-    std::fs::write(&path, key)
+    write_owner_only_file(&path, key)
+}
+
+/// Writes `contents` so the file is never readable by other users, even
+/// briefly. On Unix the file is created with mode 0600 (a plain write followed
+/// by chmod leaves a umask-dependent window where the key is world-readable),
+/// and a file that already existed with a looser mode is tightened on its open
+/// handle before the key is written, not after. On Windows, where mode bits do
+/// not exist, the ACL is restricted before the write for the same reason.
+fn write_owner_only_file(path: &Path, contents: &str) -> Result<(), CliError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
         .map_err(|error| CliError::new(format!("failed to write credentials: {error}")))?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(
-            |error| {
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| {
                 CliError::new(format!(
                     "failed to set credentials file permissions: {error}"
                 ))
-            },
-        )?;
+            })?;
     }
-
     #[cfg(windows)]
     {
-        restrict_windows_credentials_acl(&path)?;
+        restrict_windows_credentials_acl(path)?;
     }
+
+    file.write_all(contents.as_bytes())
+        .map_err(|error| CliError::new(format!("failed to write credentials: {error}")))?;
 
     Ok(())
 }
@@ -905,8 +936,6 @@ pub(crate) fn render_interactive_help() -> String {
 }
 
 fn prompt_file_access_consent(_current_dir: &Path) -> bool {
-    use std::io::Write as _;
-
     println!();
     println!("{C_DIM}─────────────────────────────────────────────────────{C_RESET}");
     println!("  {C_YELLOW_BOLD}⚡  Agentic Mode{C_RESET}");
@@ -927,8 +956,6 @@ fn prompt_file_access_consent(_current_dir: &Path) -> bool {
 }
 
 fn prompt_tool_policy_confirmation(message: &str) -> bool {
-    use std::io::Write as _;
-
     println!();
     println!("  {C_YELLOW_BOLD}⚠  Policy check{C_RESET}");
     println!("  {message}");
@@ -1078,22 +1105,106 @@ struct Spinner {
     handle: Option<thread::JoinHandle<()>>,
 }
 
-struct AgentLoopOutput {
-    assistant_message: Option<AgentMessage>,
-    content: String,
-    streamed: bool,
-    usage: Option<TokenUsage>,
+const STEP_LIMIT_MESSAGE: &str =
+    "⏸  Step limit reached. All progress is saved — type **continue** to resume where I left off.";
+
+/// Terminal adapter for the shared agent loop: a spinner while the model
+/// thinks or a tool runs, streamed text through the prompt-leak redactor, and
+/// developer confirmations on stdin.
+struct ReplAgentUi<'a> {
+    prompt_guard: &'a PromptGuard,
+    redactor: Option<StreamRedactor<'a>>,
+    spinner: Option<Spinner>,
+    streaming: bool,
 }
 
-struct AgentLoopContext<'a> {
-    context_budget: &'a mut context_budget::ContextBudgetState,
-    model_id: &'a ModelId,
-    prompt_guard: &'a PromptGuard,
-    provider: &'a DeepSeekProvider,
-    request_options: &'a DeepSeekRequestOptions,
-    streaming_enabled: bool,
-    tool_policy: &'a mut ToolPolicy,
-    tools: &'a [ToolDefinition],
+impl<'a> ReplAgentUi<'a> {
+    fn new(prompt_guard: &'a PromptGuard, streaming: bool) -> Self {
+        Self {
+            prompt_guard,
+            redactor: None,
+            spinner: None,
+            streaming,
+        }
+    }
+
+    fn stop_spinner(&mut self) {
+        if let Some(spinner) = self.spinner.take() {
+            spinner.stop();
+        }
+    }
+}
+
+impl agent_loop::AgentLoopUi for ReplAgentUi<'_> {
+    fn on_event(&mut self, event: agent_loop::AgentLoopEvent) {
+        use crate::agent_loop::{AgentLoopEvent, ToolOutcome};
+
+        match event {
+            AgentLoopEvent::StepStarted { .. } => {
+                if self.streaming {
+                    print!("  {C_DIM}Streaming agent response...{C_RESET}\n\n");
+                    std::io::stdout().flush().ok();
+                    self.redactor = Some(StreamRedactor::new(self.prompt_guard));
+                } else {
+                    self.spinner = Some(Spinner::start("Thinking..."));
+                }
+            }
+            AgentLoopEvent::ContentDelta(text) => {
+                if let Some(redactor) = self.redactor.as_mut() {
+                    print!("{}", redactor.push(&text));
+                    std::io::stdout().flush().ok();
+                }
+            }
+            AgentLoopEvent::StepFinished => {
+                if let Some(redactor) = self.redactor.take() {
+                    print!("{}", redactor.finish());
+                    std::io::stdout().flush().ok();
+                }
+                self.stop_spinner();
+            }
+            AgentLoopEvent::Narration(text) => {
+                println!("{}\n", self.prompt_guard.redact(&text));
+            }
+            AgentLoopEvent::Usage(usage) => {
+                let line = render_context_usage(&usage);
+                if !line.is_empty() {
+                    println!("  {C_DIM}{line}{C_RESET}");
+                }
+            }
+            AgentLoopEvent::ToolStarted { action, .. } => {
+                println!("  {C_DIM}→ {action}{C_RESET}");
+                std::io::stdout().flush().ok();
+            }
+            AgentLoopEvent::ToolExecuting { action } => {
+                self.spinner = Some(Spinner::start(action));
+            }
+            AgentLoopEvent::ToolFinished { outcome, .. } => {
+                self.stop_spinner();
+                match outcome {
+                    ToolOutcome::Succeeded => println!("  {C_GREEN}✓ done{C_RESET}"),
+                    ToolOutcome::Failed => {
+                        println!("  {C_RED}✗ action needs adjustment{C_RESET}")
+                    }
+                    ToolOutcome::DeniedByPolicy { reason } => {
+                        println!("  {C_RED}✗ blocked by policy{C_RESET}  {C_DIM}{reason}{C_RESET}")
+                    }
+                    ToolOutcome::DeclinedByDeveloper { .. } => {
+                        println!("  {C_RED}✗ denied by developer{C_RESET}")
+                    }
+                }
+            }
+            AgentLoopEvent::BudgetNotice(notice) => print_context_budget_notice(notice),
+            AgentLoopEvent::RoundFinished => println!(),
+        }
+    }
+
+    fn confirm(&mut self, request: &tool_policy::ConfirmationRequest) -> bool {
+        let allowed = prompt_tool_policy_confirmation(&request.message);
+        if allowed && request.kind == ConfirmationKind::OutsideWorkspaceWrite {
+            println!("  {C_DIM}Outside-workspace writes allowed for this session.{C_RESET}");
+        }
+        allowed
+    }
 }
 
 impl Spinner {
@@ -1136,164 +1247,6 @@ impl Spinner {
             h.join().ok();
         }
     }
-}
-
-fn run_agent_loop(
-    working_dir: &mut PathBuf,
-    history: &mut Vec<AgentMessage>,
-    context: &mut AgentLoopContext<'_>,
-) -> Result<AgentLoopOutput, CliError> {
-    for _ in 0..100 {
-        let mut streamed_text = false;
-        let step = if context.streaming_enabled {
-            print!("  {C_DIM}Streaming agent response...{C_RESET}\n\n");
-            std::io::stdout().flush().ok();
-            let mut redactor = StreamRedactor::new(context.prompt_guard);
-            let step = context.provider.complete_agent_step_streaming(
-                context.model_id,
-                history,
-                context.tools,
-                context.request_options,
-                |delta| {
-                    if delta.content.is_some() {
-                        streamed_text = true;
-                    }
-                    if delta.reasoning_content.is_some() {
-                        return;
-                    }
-                    if let Some(content) = delta.content {
-                        print!("{}", redactor.push(&content));
-                        std::io::stdout().flush().ok();
-                    }
-                },
-            );
-            print!("{}", redactor.finish());
-            std::io::stdout().flush().ok();
-            step
-        } else {
-            let spinner = Spinner::start("Thinking...");
-            let step = context.provider.complete_agent_step(
-                context.model_id,
-                history,
-                context.tools,
-                context.request_options,
-            );
-            spinner.stop();
-            step
-        };
-
-        match step {
-            Ok(AgentStep {
-                assistant_message,
-                result: AgentStepResult::Text(content),
-                usage,
-            }) => {
-                return Ok(AgentLoopOutput {
-                    assistant_message: Some(assistant_message),
-                    content,
-                    streamed: streamed_text,
-                    usage,
-                });
-            }
-            Ok(AgentStep {
-                assistant_message,
-                result: AgentStepResult::ToolCalls(calls),
-                usage,
-            }) => {
-                if let Some(usage) = usage.as_ref() {
-                    let line = render_context_usage(usage);
-                    if !line.is_empty() {
-                        println!("  {C_DIM}{line}{C_RESET}");
-                    }
-                }
-                history.push(assistant_message);
-
-                for call in &calls {
-                    let action = describe_tool_call(&call.name, &call.arguments);
-                    println!("  {C_DIM}→ {action}{C_RESET}");
-                    std::io::stdout().flush().ok();
-
-                    let mut approved = true;
-                    let result = match context.tool_policy.evaluate(
-                        working_dir,
-                        &call.name,
-                        &call.arguments,
-                    ) {
-                        PolicyDecision::Deny { reason } => {
-                            approved = false;
-                            println!(
-                                "  {C_RED}✗ blocked by policy{C_RESET}  {C_DIM}{reason}{C_RESET}"
-                            );
-                            format!(
-                                "error: blocked by RaptorCode policy ({reason}). Choose a safer approach and continue."
-                            )
-                        }
-                        PolicyDecision::Confirm(request) => {
-                            if prompt_tool_policy_confirmation(&request.message) {
-                                if request.kind == ConfirmationKind::OutsideWorkspaceWrite {
-                                    context.tool_policy.allow_outside_writes_for_session();
-                                    println!(
-                                        "  {C_DIM}Outside-workspace writes allowed for this session.{C_RESET}"
-                                    );
-                                }
-                                let spinner = Spinner::start(action.clone());
-                                let result =
-                                    execute_tool_call(working_dir, &call.name, &call.arguments);
-                                spinner.stop();
-                                result
-                            } else {
-                                approved = false;
-                                println!("  {C_RED}✗ denied by developer{C_RESET}");
-                                format!(
-                                    "error: the developer declined this action ({}). Ask for guidance or choose a different approach.",
-                                    request.message
-                                )
-                            }
-                        }
-                        PolicyDecision::Allow => {
-                            let spinner = Spinner::start(action.clone());
-                            let result =
-                                execute_tool_call(working_dir, &call.name, &call.arguments);
-                            spinner.stop();
-                            result
-                        }
-                    };
-
-                    if approved {
-                        if result.starts_with("error:") {
-                            println!("  {C_RED}✗ action needs adjustment{C_RESET}");
-                        } else {
-                            println!("  {C_GREEN}✓ done{C_RESET}");
-                        }
-                    }
-
-                    history.push(AgentMessage {
-                        role: "tool".to_owned(),
-                        content: Some(result),
-                        reasoning_content: None,
-                        tool_calls: None,
-                        tool_call_id: Some(call.id.clone()),
-                    });
-                }
-
-                handle_agent_context_budget(history, usage.as_ref(), context.context_budget);
-                println!();
-            }
-            Err(ProviderError::MissingApiKey) | Err(ProviderError::AuthenticationFailed(_)) => {
-                return Err(CliError::new("authentication failed; check your API key"));
-            }
-            Err(error) => return Err(CliError::new(format!("agent error: {error}"))),
-        }
-    }
-
-    Ok(AgentLoopOutput {
-        assistant_message: None,
-        content:
-            "⏸  Step limit reached. All progress is saved — type **continue** to resume where I left off."
-                .to_owned(),
-        streamed: false,
-        usage: None,
-    })
 }
 
 fn handle_chat_context_budget(
@@ -1459,6 +1412,32 @@ mod tests {
         assert_eq!(visible, "abcdef");
         assert_eq!(cursor, 6);
         assert_eq!(editor.scroll, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credentials_file_is_created_owner_only_and_tightened_if_it_already_exists() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("raptor-creds-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".credentials");
+        // A pre-existing world-readable file must be tightened as well.
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_owner_only_file(&path, "sk-new-key").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "sk-new-key");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

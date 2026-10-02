@@ -74,7 +74,7 @@ Prerequisites:
 
 - Linux, macOS, or another Rust-supported development environment.
 - Git, with authorized access to the private repository.
-- Stable Rust toolchain and Cargo.
+- Rust 1.88 or newer and Cargo (the repository pins 1.95.0 through `rust-toolchain.toml`).
 
 Clone and install the `raptor` command:
 

@@ -112,7 +112,7 @@ Date: 2026-06-12
 Author: Bob Vasic
 Company: RaptorLabs.dev
 
-Tool execution now lives in the dedicated `raptor-cli::agent_tools` module, and every interactive agent tool call passes through `raptor-cli::tool_policy` before execution. The policy decisions were approved by BOB and are enforced in `run_agent_loop` before the spinner starts, so confirmation prompts are interactive and auditable.
+Tool execution now lives in the dedicated `raptor-cli::agent_tools` module, and every interactive agent tool call passes through `raptor-cli::tool_policy` before execution. The policy decisions were approved by BOB and are enforced in the shared `raptor-cli::agent_loop` before any execution, for the interactive REPL and every live-swarm worker alike, so confirmation prompts are interactive and auditable.
 
 File write policy:
 
@@ -168,6 +168,28 @@ The interactive and live-swarm tool policy (`raptor-cli::tool_policy`) is now de
 - **Network egress confirmation.** Shell segments whose command is a network tool (`curl`, `wget`, `nc`/`ncat`/`netcat`, `telnet`, `ssh`, `scp`, `sftp`, `rsync`, `ftp`) require explicit developer confirmation before execution. Reads stay unrestricted under session consent, so this confirmation is the control that keeps a read secret from being silently sent off the machine. It is first-token matching only — an interpreter one-liner (`python -c ...`) or a shell `/dev/tcp` redirect can still reach the network — so it raises cost rather than closing the channel. Network confinement (a network namespace) remains future `raptor-sandbox` work.
 
 Security assumption: because there is no hosting and the agent runs on the developer's own machine under explicit consent, OS-level isolation is intentionally out of scope for this iteration. These backstops reduce accidental and low-effort-malicious blast radius; they are not a defense against a determined actor with shell access the developer has already authorized.
+
+### Review Hardening (2026-10-02)
+
+Date: 2026-10-02
+Author: Bob Vasic
+Company: RaptorLabs.dev
+
+Findings from the full architecture review (`docs/architecture-review-2026-10-02.md`) applied to the tool boundary:
+
+- **Shell wrappers are unwrapped.** The deny-list judged a segment by its first token, so `bash -c "rm -rf /"`, `sh -lc '...'`, `nohup rm -rf /`, `timeout 30 rm -rf /`, `env X=1 rm -rf /`, `eval`, and `exec` were allowed. `evaluate_shell_segment` now recognizes `sh`/`bash`/`zsh`/`dash`/`ksh -c`, `env`, `timeout`, `nohup`, `nice`, `time`, `eval`, `exec`, and `command`, and evaluates the wrapped command as a whole (so `;`/`&&` inside the quoted string are split and each part judged). Quote stripping trims unmatched leading/trailing quotes so the words of a split quoted string are analyzed bare. Still lexical: `$(...)`, backticks, `xargs`, `find -delete`, and interpreter one-liners remain out of scope, as documented above.
+- **`run_command` drains output and closes stdin.** stdout and stderr are read on background threads from spawn, so a command producing more than the kernel pipe buffer can no longer deadlock into a false timeout; stdin is `/dev/null`, so a command that prompts fails fast instead of hanging, and live-swarm workers never read the dashboard's terminal input.
+- **`read_file` is capped** at 200,000 bytes with an explicit truncation marker, bounding how much one call can place in model context.
+- **Credentials file is owner-only from creation.** `~/.raptor/.credentials` is opened with mode `0600` (Unix) rather than written then chmodded, removing the umask-dependent window where the key was world-readable; an existing looser file is tightened on rewrite. Windows keeps the `icacls` ACL step.
+- **One policy-gated loop.** The interactive REPL and the live-swarm workers previously ran two copies of the tool-calling cycle, so a policy fix could land in one and not the other. Both now run `raptor-cli::agent_loop`, which evaluates `ToolPolicy` before every execution; the callers only differ in how a confirmation is asked (stdin prompt vs. dashboard modal) and how progress is shown. Nine loop tests with a scripted provider cover deny, confirm-declined, confirm-approved (and the per-session outside-write unlock), step limit, cancellation, and provider errors.
+
+A verification pass over the delivered slices (correctness, security, TUI, and CI lenses with adversarial checks) added, the same day:
+
+- **Wrapper options, program paths, and prefixes are seen through.** Each wrapper skips its own options and the values they take before the inner command is read (`timeout -s TERM 30 cargo test`, `nice -n 10 cargo build`, `env -u HOME RUST_LOG=debug cargo run`, `sh -c -- cargo test`, `flock -n build.lock cargo build`), the program is matched by basename (`/bin/sh -c …`, `/usr/bin/nice …`), leading `NAME=value` assignments are dropped, `sudo`/`doas` skip their options, and `su -c` is privileged like them. Newly recognized wrappers: `setsid`, `stdbuf`, `ionice`, `chrt`, `taskset`, `unshare`, `flock`, `busybox`. A shell with no `-c` and no script file (`sh`, `bash -i`, `sh -s`) reads its commands from stdin, which the policy cannot inspect, so it asks for confirmation. Wrapper nesting is bounded at 16 levels; deeper chains are denied rather than followed. Redirect targets and `dd of=` values are unquoted before the device check. Comment and shebang lines (heredoc data), `bash --version`, and `command -v` stay allowed. Known cost: the splitter is not quote-aware, so a search pattern whose last alternative is a gated word (`rg "reqwest|curl" src`) asks for confirmation; a quote-aware splitter is the proper fix.
+- **`read_file` reads regular files only.** Directories, FIFOs, and device files (`/dev/zero` never reaches EOF) are refused up front; at most the cap plus one byte is read, binary content is refused instead of being handed to the model as mojibake, and a cut through a multi-byte character at the cap is handled without a replacement character.
+- **`run_command` returns when the shell exits** even if a backgrounded child (a dev server) keeps the output pipes open: after a 2-second grace the output captured so far is returned with a note that a background process is still running.
+- **`/api` → "Show current API Key" prints no key characters.** It reports only whether a key is configured and where keys are saved; the former masked form still put twelve key characters into scrollback and screen shares. This also resolves CodeQL's `rust/cleartext-logging` alert on that display.
+- **The credentials file is tightened before the key is written.** The Unix mode (or the Windows ACL) is applied on the open handle before `write_all`, so rewriting an existing looser file never exposes the new key.
 
 ## Live Swarm Agentic Mode
 

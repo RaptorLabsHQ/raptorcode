@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use raptor_core::{simplify_path, SwarmAgentRole, TaskId, WorktreeInfo};
+use raptor_core::{is_safe_hyphen_name, simplify_path, SwarmAgentRole, TaskId, WorktreeInfo};
 
 const RAPTOR_STATE_DIR: &str = ".raptor";
 const WORKTREES_DIR: &str = "worktrees";
@@ -1048,15 +1048,7 @@ fn ensure_existing_directory(path: &Path, missing_worktree_path: &Path) -> Resul
 }
 
 fn validate_safe_name(name: &str) -> Result<(), GitError> {
-    let valid = !name.is_empty()
-        && !name.starts_with('-')
-        && !name.ends_with('-')
-        && !name.contains("..")
-        && name.chars().all(|character| {
-            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-        });
-
-    if valid {
+    if is_safe_hyphen_name(name) {
         Ok(())
     } else {
         Err(GitError::UnsafeName(name.to_owned()))

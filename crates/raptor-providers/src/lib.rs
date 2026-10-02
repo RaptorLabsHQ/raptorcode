@@ -9,6 +9,7 @@ use std::io::{BufRead, BufReader};
 use std::thread;
 use std::time::Duration;
 
+use raptor_core::{is_safe_hyphen_name, is_safe_model_id};
 use serde::{Deserialize, Serialize};
 
 /// Fail fast when a connection cannot be established.
@@ -181,11 +182,66 @@ pub struct ToolCall {
 
 #[derive(Debug, Clone)]
 pub struct AgentMessage {
-    pub role: String,
+    pub role: AgentMessageRole,
     pub content: Option<String>,
     pub reasoning_content: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
     pub tool_call_id: Option<String>,
+}
+
+/// Role of one message in an agent (tool-calling) conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentMessageRole {
+    Assistant,
+    System,
+    Tool,
+    User,
+}
+
+impl AgentMessageRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Assistant => "assistant",
+            Self::System => "system",
+            Self::Tool => "tool",
+            Self::User => "user",
+        }
+    }
+}
+
+impl AgentMessage {
+    fn plain(role: AgentMessageRole, content: impl Into<String>) -> Self {
+        Self {
+            role,
+            content: Some(content.into()),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    pub fn system(content: impl Into<String>) -> Self {
+        Self::plain(AgentMessageRole::System, content)
+    }
+
+    pub fn user(content: impl Into<String>) -> Self {
+        Self::plain(AgentMessageRole::User, content)
+    }
+
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self::plain(AgentMessageRole::Assistant, content)
+    }
+
+    /// The result of one tool call, keyed to the call id the model issued.
+    pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: AgentMessageRole::Tool,
+            content: Some(content.into()),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -469,27 +525,50 @@ impl std::fmt::Debug for DeepSeekProvider {
     }
 }
 
+/// An LLM backend. The accessor methods describe the provider; the `complete*`
+/// methods execute requests. Streaming callbacks are `&mut dyn FnMut` so the
+/// trait stays object-safe and callers can hold a `&dyn Provider`.
 pub trait Provider {
     fn id(&self) -> &ProviderId;
     fn display_name(&self) -> &str;
     fn capabilities(&self) -> &ProviderCapabilities;
     fn default_model(&self) -> Option<&ModelId>;
     fn models(&self) -> &[ModelId];
+    /// One non-streaming chat completion.
     fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, ProviderError>;
+    /// One chat completion streamed through `on_delta`; returns the assembled
+    /// response once the stream ends.
+    fn complete_streaming(
+        &self,
+        request: CompletionRequest,
+        on_delta: &mut dyn FnMut(CompletionStreamDelta),
+    ) -> Result<CompletionResponse, ProviderError>;
+    /// One tool-calling agent step over the full message history.
+    fn complete_agent_step(
+        &self,
+        model_id: &ModelId,
+        messages: &[AgentMessage],
+        tools: &[ToolDefinition],
+        options: &DeepSeekRequestOptions,
+    ) -> Result<AgentStep, ProviderError>;
+    /// The streamed form of [`Provider::complete_agent_step`].
+    fn complete_agent_step_streaming(
+        &self,
+        model_id: &ModelId,
+        messages: &[AgentMessage],
+        tools: &[ToolDefinition],
+        options: &DeepSeekRequestOptions,
+        on_delta: &mut dyn FnMut(CompletionStreamDelta),
+    ) -> Result<AgentStep, ProviderError>;
+    /// Model ids the backend currently serves.
+    fn list_models(&self) -> Result<Vec<String>, ProviderError>;
 }
 
 impl ProviderId {
     pub fn new(value: impl Into<String>) -> Result<Self, ProviderError> {
         let value = value.into();
-        let valid = !value.is_empty()
-            && !value.starts_with('-')
-            && !value.ends_with('-')
-            && !value.contains("..")
-            && value.chars().all(|character| {
-                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-            });
 
-        if valid {
+        if is_safe_hyphen_name(&value) {
             Ok(Self(value))
         } else {
             Err(ProviderError::InvalidProviderId(value))
@@ -504,16 +583,8 @@ impl ProviderId {
 impl ModelId {
     pub fn new(value: impl Into<String>) -> Result<Self, ProviderError> {
         let value = value.into();
-        let valid = !value.is_empty()
-            && !value.starts_with('-')
-            && !value.ends_with('-')
-            && !value.contains("..")
-            && value.chars().all(|character| {
-                character.is_ascii_alphanumeric()
-                    || matches!(character, '-' | '_' | '.' | ':' | '/')
-            });
 
-        if valid {
+        if is_safe_model_id(&value) {
             Ok(Self(value))
         } else {
             Err(ProviderError::InvalidModelId(value))
@@ -815,111 +886,8 @@ impl DeepSeekProvider {
         }
     }
 
-    pub fn complete_agent_step(
-        &self,
-        model_id: &ModelId,
-        messages: &[AgentMessage],
-        tools: &[ToolDefinition],
-        options: &DeepSeekRequestOptions,
-    ) -> Result<AgentStep, ProviderError> {
-        let request_body = deepseek_agent_request(model_id, messages, tools, options, false);
-        let (status, body) = send_collect_with_retry(|| self.authed_post().json(&request_body))?;
-
-        if status != 200 {
-            return Err(map_deepseek_error_status(status, &body));
-        }
-
-        let parsed: DeepSeekAgentResponse = serde_json::from_str(&body).map_err(|e| {
-            ProviderError::MalformedResponse(format!("failed to parse agent response: {e}"))
-        })?;
-        let choice = parsed.choices.into_iter().next().ok_or_else(|| {
-            ProviderError::MalformedResponse("missing choices[0] in agent response".to_owned())
-        })?;
-
-        let reasoning_content = choice.message.reasoning_content.clone();
-
-        if choice.finish_reason.as_deref() == Some("tool_calls") {
-            let raw_calls = choice.message.tool_calls.ok_or_else(|| {
-                ProviderError::MalformedResponse(
-                    "finish_reason=tool_calls but no tool_calls in message".to_owned(),
-                )
-            })?;
-            let calls: Vec<ToolCall> = raw_calls
-                .into_iter()
-                .map(|tc| ToolCall {
-                    id: tc.id,
-                    name: tc.function.name,
-                    arguments: tc.function.arguments,
-                })
-                .collect();
-            let assistant_msg = AgentMessage {
-                role: "assistant".to_owned(),
-                content: None,
-                reasoning_content,
-                tool_calls: Some(calls.clone()),
-                tool_call_id: None,
-            };
-            Ok(AgentStep {
-                assistant_message: assistant_msg,
-                result: AgentStepResult::ToolCalls(calls),
-                usage: parsed.usage.map(token_usage_from_deepseek_usage),
-            })
-        } else {
-            let content = choice.message.content.clone().unwrap_or_default();
-            let assistant_msg = AgentMessage {
-                role: "assistant".to_owned(),
-                content: Some(content.clone()),
-                reasoning_content,
-                tool_calls: None,
-                tool_call_id: None,
-            };
-            Ok(AgentStep {
-                assistant_message: assistant_msg,
-                result: AgentStepResult::Text(content),
-                usage: parsed.usage.map(token_usage_from_deepseek_usage),
-            })
-        }
-    }
-
-    pub fn complete_agent_step_streaming<F>(
-        &self,
-        model_id: &ModelId,
-        messages: &[AgentMessage],
-        tools: &[ToolDefinition],
-        options: &DeepSeekRequestOptions,
-        mut on_delta: F,
-    ) -> Result<AgentStep, ProviderError>
-    where
-        F: FnMut(CompletionStreamDelta),
-    {
-        let request_body = deepseek_agent_request(model_id, messages, tools, options, true);
-        let response = send_stream_with_retry(|| self.authed_post().json(&request_body))?;
-        let status = response.status().as_u16();
-
-        if status != 200 {
-            let body = response
-                .text()
-                .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
-            return Err(map_deepseek_error_status(status, &body));
-        }
-
-        read_deepseek_agent_streaming_response(response, &mut on_delta)
-    }
-
-    pub fn list_models(&self) -> Result<Vec<String>, ProviderError> {
-        let (status, body) = send_collect_with_retry(|| self.authed_get(&self.models_endpoint()))?;
-
-        if status != 200 {
-            return Err(map_deepseek_error_status(status, &body));
-        }
-
-        let parsed: DeepSeekModelsListResponse = serde_json::from_str(&body).map_err(|e| {
-            ProviderError::MalformedResponse(format!("failed to parse models list: {e}"))
-        })?;
-
-        Ok(parsed.data.into_iter().map(|m| m.id).collect())
-    }
-
+    /// DeepSeek-specific account endpoint; not part of the provider-neutral
+    /// [`Provider`] trait.
     pub fn get_user_balance(&self) -> Result<DeepSeekUserBalance, ProviderError> {
         let (status, body) = send_collect_with_retry(|| self.authed_get(&self.balance_endpoint()))?;
 
@@ -928,39 +896,6 @@ impl DeepSeekProvider {
         }
 
         parse_deepseek_user_balance_response(&body)
-    }
-
-    pub fn complete_streaming<F>(
-        &self,
-        request: CompletionRequest,
-        mut on_delta: F,
-    ) -> Result<CompletionResponse, ProviderError>
-    where
-        F: FnMut(CompletionStreamDelta),
-    {
-        if request.provider_id.as_str() != "deepseek" {
-            return Err(ProviderError::InvalidProviderId(
-                request.provider_id.as_str().to_owned(),
-            ));
-        }
-
-        let request_body = request.for_streaming()?;
-        let response = send_stream_with_retry(|| self.authed_post().json(&request_body))?;
-        let status = response.status().as_u16();
-
-        if status != 200 {
-            let body = response
-                .text()
-                .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
-            return Err(map_deepseek_error_status(status, &body));
-        }
-
-        read_deepseek_streaming_response(
-            response,
-            &request.provider_id,
-            &request.model_id,
-            &mut on_delta,
-        )
     }
 }
 
@@ -996,6 +931,85 @@ impl Provider for DeepSeekProvider {
         let (status, body) = send_collect_with_retry(|| self.authed_post().json(&request_body))?;
 
         parse_deepseek_chat_response(status, &body, &request.provider_id, &request.model_id)
+    }
+
+    fn complete_streaming(
+        &self,
+        request: CompletionRequest,
+        on_delta: &mut dyn FnMut(CompletionStreamDelta),
+    ) -> Result<CompletionResponse, ProviderError> {
+        if request.provider_id.as_str() != "deepseek" {
+            return Err(ProviderError::InvalidProviderId(
+                request.provider_id.as_str().to_owned(),
+            ));
+        }
+
+        let request_body = request.for_streaming()?;
+        let response = send_stream_with_retry(|| self.authed_post().json(&request_body))?;
+        let status = response.status().as_u16();
+
+        if status != 200 {
+            let body = response
+                .text()
+                .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+            return Err(map_deepseek_error_status(status, &body));
+        }
+
+        read_deepseek_streaming_response(
+            response,
+            &request.provider_id,
+            &request.model_id,
+            on_delta,
+        )
+    }
+
+    fn complete_agent_step(
+        &self,
+        model_id: &ModelId,
+        messages: &[AgentMessage],
+        tools: &[ToolDefinition],
+        options: &DeepSeekRequestOptions,
+    ) -> Result<AgentStep, ProviderError> {
+        let request_body = deepseek_agent_request(model_id, messages, tools, options, false);
+        let (status, body) = send_collect_with_retry(|| self.authed_post().json(&request_body))?;
+
+        parse_deepseek_agent_response(status, &body)
+    }
+
+    fn complete_agent_step_streaming(
+        &self,
+        model_id: &ModelId,
+        messages: &[AgentMessage],
+        tools: &[ToolDefinition],
+        options: &DeepSeekRequestOptions,
+        on_delta: &mut dyn FnMut(CompletionStreamDelta),
+    ) -> Result<AgentStep, ProviderError> {
+        let request_body = deepseek_agent_request(model_id, messages, tools, options, true);
+        let response = send_stream_with_retry(|| self.authed_post().json(&request_body))?;
+        let status = response.status().as_u16();
+
+        if status != 200 {
+            let body = response
+                .text()
+                .map_err(|error| ProviderError::HttpTransport(error.to_string()))?;
+            return Err(map_deepseek_error_status(status, &body));
+        }
+
+        read_deepseek_agent_streaming_response(response, on_delta)
+    }
+
+    fn list_models(&self) -> Result<Vec<String>, ProviderError> {
+        let (status, body) = send_collect_with_retry(|| self.authed_get(&self.models_endpoint()))?;
+
+        if status != 200 {
+            return Err(map_deepseek_error_status(status, &body));
+        }
+
+        let parsed: DeepSeekModelsListResponse = serde_json::from_str(&body).map_err(|e| {
+            ProviderError::MalformedResponse(format!("failed to parse models list: {e}"))
+        })?;
+
+        Ok(parsed.data.into_iter().map(|m| m.id).collect())
     }
 }
 
@@ -1048,7 +1062,7 @@ fn deepseek_agent_request(
     let request_messages: Vec<DeepSeekAgentRequestMessage> = messages
         .iter()
         .map(|message| DeepSeekAgentRequestMessage {
-            role: message.role.clone(),
+            role: message.role.as_str().to_owned(),
             content: message.content.clone(),
             reasoning_content: message.reasoning_content.clone(),
             tool_calls: message.tool_calls.as_ref().map(|calls| {
@@ -1136,6 +1150,68 @@ pub fn parse_deepseek_chat_response(
     })
 }
 
+/// Parses a non-streaming agent (tool-calling) completion. Assistant text that
+/// accompanies tool calls is kept on the history message: the model may
+/// narrate what it is about to do before calling tools, and the API accepts
+/// `content` alongside `tool_calls` when the message is sent back.
+pub fn parse_deepseek_agent_response(status: u16, body: &str) -> Result<AgentStep, ProviderError> {
+    if status != 200 {
+        return Err(map_deepseek_error_status(status, body));
+    }
+
+    let parsed: DeepSeekAgentResponse = serde_json::from_str(body).map_err(|error| {
+        ProviderError::MalformedResponse(format!("failed to parse agent response: {error}"))
+    })?;
+    let choice = parsed.choices.into_iter().next().ok_or_else(|| {
+        ProviderError::MalformedResponse("missing choices[0] in agent response".to_owned())
+    })?;
+    let usage = parsed.usage.map(token_usage_from_deepseek_usage);
+    let reasoning_content = choice.message.reasoning_content;
+
+    if choice.finish_reason.as_deref() == Some("tool_calls") {
+        let raw_calls = choice.message.tool_calls.ok_or_else(|| {
+            ProviderError::MalformedResponse(
+                "finish_reason=tool_calls but no tool_calls in message".to_owned(),
+            )
+        })?;
+        let calls: Vec<ToolCall> = raw_calls
+            .into_iter()
+            .map(|call| ToolCall {
+                id: call.id,
+                name: call.function.name,
+                arguments: call.function.arguments,
+            })
+            .collect();
+        Ok(AgentStep {
+            assistant_message: AgentMessage {
+                role: AgentMessageRole::Assistant,
+                content: choice
+                    .message
+                    .content
+                    .filter(|content| !content.trim().is_empty()),
+                reasoning_content,
+                tool_calls: Some(calls.clone()),
+                tool_call_id: None,
+            },
+            result: AgentStepResult::ToolCalls(calls),
+            usage,
+        })
+    } else {
+        let content = choice.message.content.unwrap_or_default();
+        Ok(AgentStep {
+            assistant_message: AgentMessage {
+                role: AgentMessageRole::Assistant,
+                content: Some(content.clone()),
+                reasoning_content,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            result: AgentStepResult::Text(content),
+            usage,
+        })
+    }
+}
+
 /// Iterates the `data:` payloads of a Server-Sent Events stream: blank lines and
 /// `:` comments are skipped and `[DONE]` ends the stream. The SSE framing lives
 /// here so the chat and agent stream readers share one correct implementation
@@ -1174,15 +1250,12 @@ where
     Ok(false)
 }
 
-fn read_deepseek_streaming_response<F>(
+fn read_deepseek_streaming_response(
     response: reqwest::blocking::Response,
     provider_id: &ProviderId,
     fallback_model_id: &ModelId,
-    on_delta: &mut F,
-) -> Result<CompletionResponse, ProviderError>
-where
-    F: FnMut(CompletionStreamDelta),
-{
+    on_delta: &mut dyn FnMut(CompletionStreamDelta),
+) -> Result<CompletionResponse, ProviderError> {
     let mut content = String::new();
     let mut finish_reason = None;
     let mut model_id = fallback_model_id.clone();
@@ -1223,18 +1296,15 @@ where
     })
 }
 
-fn apply_deepseek_chat_stream_data<F>(
+fn apply_deepseek_chat_stream_data(
     data: &str,
     content: &mut String,
     reasoning_content: &mut String,
     finish_reason: &mut Option<String>,
     model_id: &mut ModelId,
     usage: &mut Option<TokenUsage>,
-    on_delta: &mut F,
-) -> Result<(), ProviderError>
-where
-    F: FnMut(CompletionStreamDelta),
-{
+    on_delta: &mut dyn FnMut(CompletionStreamDelta),
+) -> Result<(), ProviderError> {
     let parsed: DeepSeekChatStreamChunk = serde_json::from_str(data).map_err(|error| {
         ProviderError::MalformedResponse(format!("failed to parse DeepSeek stream chunk: {error}"))
     })?;
@@ -1272,13 +1342,10 @@ where
     Ok(())
 }
 
-fn read_deepseek_agent_streaming_response<F>(
+fn read_deepseek_agent_streaming_response(
     response: reqwest::blocking::Response,
-    on_delta: &mut F,
-) -> Result<AgentStep, ProviderError>
-where
-    F: FnMut(CompletionStreamDelta),
-{
+    on_delta: &mut dyn FnMut(CompletionStreamDelta),
+) -> Result<AgentStep, ProviderError> {
     let mut content = String::new();
     let mut reasoning_content = String::new();
     let mut tool_calls = BTreeMap::new();
@@ -1308,18 +1375,15 @@ where
     finish_deepseek_agent_stream(content, reasoning_content, tool_calls, finish_reason, usage)
 }
 
-fn apply_deepseek_agent_stream_data<F>(
+fn apply_deepseek_agent_stream_data(
     data: &str,
     content: &mut String,
     reasoning_content: &mut String,
     tool_calls: &mut BTreeMap<usize, ToolCallAccumulator>,
     finish_reason: &mut Option<String>,
     usage: &mut Option<TokenUsage>,
-    on_delta: &mut F,
-) -> Result<(), ProviderError>
-where
-    F: FnMut(CompletionStreamDelta),
-{
+    on_delta: &mut dyn FnMut(CompletionStreamDelta),
+) -> Result<(), ProviderError> {
     let parsed: DeepSeekAgentStreamChunk = serde_json::from_str(data).map_err(|error| {
         ProviderError::MalformedResponse(format!(
             "failed to parse DeepSeek agent stream chunk: {error}"
@@ -1407,8 +1471,14 @@ fn finish_deepseek_agent_stream(
             })
             .collect::<Result<Vec<_>, _>>()?;
         let assistant_msg = AgentMessage {
-            role: "assistant".to_owned(),
-            content: None,
+            role: AgentMessageRole::Assistant,
+            // Keep any narration streamed ahead of the tool calls, as the
+            // non-streaming parser does.
+            content: if content.trim().is_empty() {
+                None
+            } else {
+                Some(content)
+            },
             reasoning_content,
             tool_calls: Some(calls.clone()),
             tool_call_id: None,
@@ -1420,7 +1490,7 @@ fn finish_deepseek_agent_stream(
         })
     } else {
         let assistant_msg = AgentMessage {
-            role: "assistant".to_owned(),
+            role: AgentMessageRole::Assistant,
             content: Some(content.clone()),
             reasoning_content,
             tool_calls: None,
@@ -1466,31 +1536,27 @@ pub fn parse_deepseek_user_balance_response(
     })
 }
 
-impl Provider for ProviderDefinition {
-    fn id(&self) -> &ProviderId {
+/// Catalog metadata accessors. A definition describes a provider; it is not an
+/// executor, so it deliberately does not implement [`Provider`].
+impl ProviderDefinition {
+    pub fn id(&self) -> &ProviderId {
         &self.id
     }
 
-    fn display_name(&self) -> &str {
+    pub fn display_name(&self) -> &str {
         &self.display_name
     }
 
-    fn capabilities(&self) -> &ProviderCapabilities {
+    pub fn capabilities(&self) -> &ProviderCapabilities {
         &self.capabilities
     }
 
-    fn default_model(&self) -> Option<&ModelId> {
+    pub fn default_model(&self) -> Option<&ModelId> {
         self.default_model.as_ref()
     }
 
-    fn models(&self) -> &[ModelId] {
+    pub fn models(&self) -> &[ModelId] {
         &self.models
-    }
-
-    fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
-        Err(ProviderError::ExecutionDisabled(
-            self.id.as_str().to_owned(),
-        ))
     }
 }
 
@@ -1985,13 +2051,7 @@ mod tests {
     fn deepseek_agent_request_serialization_includes_stream_usage_options() {
         let request = deepseek_agent_request(
             &ModelId::new("deepseek-v4-pro").unwrap(),
-            &[AgentMessage {
-                role: "user".to_owned(),
-                content: Some("Read a file".to_owned()),
-                reasoning_content: None,
-                tool_calls: None,
-                tool_call_id: None,
-            }],
+            &[AgentMessage::user("Read a file")],
             &[ToolDefinition {
                 name: "read_file".to_owned(),
                 description: "Read a file".to_owned(),
@@ -2224,6 +2284,78 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_agent_response_keeps_narration_alongside_tool_calls() {
+        let body = r#"{"choices":[{"finish_reason":"tool_calls","message":{"content":"Creating the file now.","reasoning_content":"plan","tool_calls":[{"id":"call_1","function":{"name":"write_file","arguments":"{\"path\":\"a.txt\",\"content\":\"hi\"}"}}]}}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}"#;
+
+        let step = parse_deepseek_agent_response(200, body).unwrap();
+
+        assert_eq!(
+            step.assistant_message.content.as_deref(),
+            Some("Creating the file now.")
+        );
+        assert_eq!(
+            step.assistant_message.reasoning_content.as_deref(),
+            Some("plan")
+        );
+        assert_eq!(step.usage.unwrap().total_tokens, Some(8));
+        match step.result {
+            AgentStepResult::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "write_file");
+            }
+            AgentStepResult::Text(_) => panic!("expected tool calls"),
+        }
+
+        // Empty content is normalized to None so history stays tidy.
+        let empty = r#"{"choices":[{"finish_reason":"tool_calls","message":{"content":"","tool_calls":[{"id":"c","function":{"name":"read_file","arguments":"{}"}}]}}]}"#;
+        assert_eq!(
+            parse_deepseek_agent_response(200, empty)
+                .unwrap()
+                .assistant_message
+                .content,
+            None
+        );
+    }
+
+    #[test]
+    fn deepseek_agent_response_maps_non_200_and_malformed_bodies() {
+        let auth =
+            parse_deepseek_agent_response(401, r#"{"error":{"message":"bad key"}}"#).unwrap_err();
+        let malformed = parse_deepseek_agent_response(200, r#"{"choices":[]}"#).unwrap_err();
+
+        assert!(matches!(auth, ProviderError::AuthenticationFailed(_)));
+        assert!(matches!(malformed, ProviderError::MalformedResponse(_)));
+    }
+
+    #[test]
+    fn deepseek_agent_stream_keeps_narration_alongside_tool_calls() {
+        let mut tool_calls = BTreeMap::new();
+        tool_calls.insert(
+            0,
+            ToolCallAccumulator {
+                id: Some("call_1".to_owned()),
+                name: "read_file".to_owned(),
+                arguments: "{}".to_owned(),
+            },
+        );
+
+        let step = finish_deepseek_agent_stream(
+            "Let me look first.".to_owned(),
+            String::new(),
+            tool_calls,
+            Some("tool_calls".to_owned()),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            step.assistant_message.content.as_deref(),
+            Some("Let me look first.")
+        );
+        assert!(matches!(step.result, AgentStepResult::ToolCalls(_)));
+    }
+
+    #[test]
     fn deepseek_user_id_validation_matches_api_contract() {
         let options = DeepSeekRequestOptions::default()
             .with_user_id("safe-user_123")
@@ -2287,17 +2419,20 @@ mod tests {
     }
 
     #[test]
-    fn provider_trait_blocks_completion_execution() {
+    fn built_in_catalog_lists_deepseek_first_with_its_default_model() {
         let catalog = ProviderCatalog::built_in();
-        let provider = catalog.providers().first().unwrap();
-        let request = CompletionRequest::new(
-            provider.id().clone(),
-            provider.default_model().unwrap().clone(),
-            vec![CompletionMessage::user("hello")],
+        let deepseek = catalog.providers().first().unwrap();
+
+        assert_eq!(deepseek.id().as_str(), "deepseek");
+        assert_eq!(deepseek.display_name(), "DeepSeek");
+        assert_eq!(
+            deepseek.default_model().unwrap().as_str(),
+            DEEPSEEK_DEFAULT_MODEL
         );
-
-        let error = provider.complete(request).unwrap_err();
-
-        assert!(error.to_string().contains("not implemented"));
+        assert!(deepseek
+            .models()
+            .iter()
+            .any(|model| model.as_str() == "deepseek-v4-flash"));
+        assert!(deepseek.capabilities().tool_calls);
     }
 }

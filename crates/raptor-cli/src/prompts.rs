@@ -21,6 +21,8 @@
 //! reverse-engineering cost — it is not cryptographic protection, which is
 //! documented in docs/security.md.
 
+use raptor_core::SwarmAgentRole;
+
 /// Canary token embedded in the confidentiality directive of every composed
 /// system prompt. The model is instructed to never emit it; any model output
 /// containing it is treated as a verbatim system-prompt leak by the output
@@ -146,17 +148,14 @@ pub(crate) fn swarm_implementation_system_prompt() -> String {
 }
 
 /// Composed system prompt for one live swarm specialist role.
-pub(crate) fn swarm_role_system_prompt(role: &str) -> String {
+pub(crate) fn swarm_role_system_prompt(role: SwarmAgentRole) -> String {
     let base = deobfuscate(&SWARM_AGENT_BASE);
     let directive = confidentiality_directive();
     let specialization = match role {
-        "frontend-agent" => deobfuscate(&FRONTEND_SPECIALIZATION),
-        "backend-agent" => deobfuscate(&BACKEND_SPECIALIZATION),
-        "test-agent" => deobfuscate(&TEST_SPECIALIZATION),
-        "security-agent" => deobfuscate(&SECURITY_SPECIALIZATION),
-        other => {
-            return format!("{base} Your specialty is {other}.\n\n{directive}");
-        }
+        SwarmAgentRole::Frontend => deobfuscate(&FRONTEND_SPECIALIZATION),
+        SwarmAgentRole::Backend => deobfuscate(&BACKEND_SPECIALIZATION),
+        SwarmAgentRole::Test => deobfuscate(&TEST_SPECIALIZATION),
+        SwarmAgentRole::Security => deobfuscate(&SECURITY_SPECIALIZATION),
     };
     format!("{base} {specialization}\n\n{directive}")
 }
@@ -193,11 +192,10 @@ mod tests {
             agent_system_prompt("/tmp/project", true),
             swarm_planning_system_prompt(),
             swarm_implementation_system_prompt(),
-            swarm_role_system_prompt("frontend-agent"),
-            swarm_role_system_prompt("backend-agent"),
-            swarm_role_system_prompt("test-agent"),
-            swarm_role_system_prompt("security-agent"),
-            swarm_role_system_prompt("custom-agent"),
+            swarm_role_system_prompt(SwarmAgentRole::Frontend),
+            swarm_role_system_prompt(SwarmAgentRole::Backend),
+            swarm_role_system_prompt(SwarmAgentRole::Test),
+            swarm_role_system_prompt(SwarmAgentRole::Security),
         ];
 
         for prompt in composed {
@@ -231,19 +229,13 @@ mod tests {
 
     #[test]
     fn swarm_role_prompts_carry_base_and_specializations() {
-        for role in [
-            "frontend-agent",
-            "backend-agent",
-            "test-agent",
-            "security-agent",
-        ] {
+        for role in SwarmAgentRole::ALL {
             let prompt = swarm_role_system_prompt(role);
-            assert!(prompt.contains("isolated git worktree"), "{role}");
-            assert!(prompt.contains("SOLID"), "{role}");
+            assert!(prompt.contains("isolated git worktree"), "{role:?}");
+            assert!(prompt.contains("SOLID"), "{role:?}");
         }
-        assert!(swarm_role_system_prompt("frontend-agent").contains("frontend engineering"));
-        assert!(swarm_role_system_prompt("security-agent").contains("SECURITY_NOTES.md"));
-        assert!(swarm_role_system_prompt("data-agent").contains("Your specialty is data-agent."));
+        assert!(swarm_role_system_prompt(SwarmAgentRole::Frontend).contains("frontend engineering"));
+        assert!(swarm_role_system_prompt(SwarmAgentRole::Security).contains("SECURITY_NOTES.md"));
     }
 
     #[test]

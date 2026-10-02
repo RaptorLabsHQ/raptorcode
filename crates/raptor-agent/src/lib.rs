@@ -5,6 +5,10 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 
+use raptor_core::{
+    escape_kv_string, is_safe_hyphen_name, is_safe_model_id, stable_hash_hex, unescape_kv_string,
+};
+
 pub const CRATE_PURPOSE: &str = "Agent lifecycle primitives for RaptorCode.";
 pub const BACKEND_AGENT_TEMPLATE: &str = include_str!("../../../templates/backend-agent.md");
 pub const FRONTEND_AGENT_TEMPLATE: &str = include_str!("../../../templates/frontend-agent.md");
@@ -226,15 +230,8 @@ pub fn build_role_planning_prompt(
 impl AgentId {
     pub fn new(value: impl Into<String>) -> Result<Self, AgentError> {
         let value = value.into();
-        let valid = !value.is_empty()
-            && !value.starts_with('-')
-            && !value.ends_with('-')
-            && !value.contains("..")
-            && value.chars().all(|character| {
-                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-            });
 
-        if valid {
+        if is_safe_hyphen_name(&value) {
             Ok(Self(value))
         } else {
             Err(AgentError::InvalidAgentId(value))
@@ -666,15 +663,7 @@ impl ShellExecutionPolicy {
 }
 
 fn validate_task_id(task_id: &str) -> Result<(), AgentError> {
-    let valid = !task_id.is_empty()
-        && !task_id.starts_with('-')
-        && !task_id.ends_with('-')
-        && !task_id.contains("..")
-        && task_id.chars().all(|character| {
-            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-        });
-
-    if valid {
+    if is_safe_hyphen_name(task_id) {
         Ok(())
     } else {
         Err(AgentError::InvalidTaskId(task_id.to_owned()))
@@ -682,15 +671,7 @@ fn validate_task_id(task_id: &str) -> Result<(), AgentError> {
 }
 
 fn validate_provider_id(provider_id: &str) -> Result<(), AgentError> {
-    let valid = !provider_id.is_empty()
-        && !provider_id.starts_with('-')
-        && !provider_id.ends_with('-')
-        && !provider_id.contains("..")
-        && provider_id.chars().all(|character| {
-            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-        });
-
-    if valid {
+    if is_safe_hyphen_name(provider_id) {
         Ok(())
     } else {
         Err(AgentError::InvalidProviderId(provider_id.to_owned()))
@@ -698,51 +679,15 @@ fn validate_provider_id(provider_id: &str) -> Result<(), AgentError> {
 }
 
 fn validate_model_id(model_id: &str) -> Result<(), AgentError> {
-    let valid = !model_id.is_empty()
-        && !model_id.starts_with('-')
-        && !model_id.ends_with('-')
-        && !model_id.contains("..")
-        && model_id.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':' | '/')
-        });
-
-    if valid {
+    if is_safe_model_id(model_id) {
         Ok(())
     } else {
         Err(AgentError::InvalidModelId(model_id.to_owned()))
     }
 }
 
-fn stable_hash_hex(input: &str) -> String {
-    let mut hash = 0xcbf29ce484222325_u64;
-
-    for byte in input.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-
-    format!("{hash:016x}")
-}
-
 fn push_key_value(output: &mut String, key: &str, value: &str) {
-    output.push_str(&format!("{key} = \"{}\"\n", escape_metadata_value(value)));
-}
-
-fn escape_metadata_value(value: &str) -> String {
-    let mut escaped = String::new();
-
-    for character in value.chars() {
-        match character {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            character => escaped.push(character),
-        }
-    }
-
-    escaped
+    output.push_str(&format!("{key} = \"{}\"\n", escape_kv_string(value)));
 }
 
 fn parse_metadata_value(line_number: usize, value: &str) -> Result<String, AgentError> {
@@ -752,40 +697,8 @@ fn parse_metadata_value(line_number: usize, value: &str) -> Result<String, Agent
         )));
     }
 
-    unescape_metadata_value(line_number, &value[1..value.len() - 1])
-}
-
-fn unescape_metadata_value(line_number: usize, value: &str) -> Result<String, AgentError> {
-    let mut unescaped = String::new();
-    let mut characters = value.chars();
-
-    while let Some(character) = characters.next() {
-        if character != '\\' {
-            unescaped.push(character);
-            continue;
-        }
-
-        let Some(escaped) = characters.next() else {
-            return Err(AgentError::InvalidMetadata(format!(
-                "line {line_number} has an incomplete escape sequence"
-            )));
-        };
-
-        match escaped {
-            '\\' => unescaped.push('\\'),
-            '"' => unescaped.push('"'),
-            'n' => unescaped.push('\n'),
-            'r' => unescaped.push('\r'),
-            't' => unescaped.push('\t'),
-            _ => {
-                return Err(AgentError::InvalidMetadata(format!(
-                    "line {line_number} has an unsupported escape sequence"
-                )));
-            }
-        }
-    }
-
-    Ok(unescaped)
+    unescape_kv_string(&value[1..value.len() - 1])
+        .map_err(|error| AgentError::InvalidMetadata(format!("line {line_number} {error}")))
 }
 
 #[cfg(test)]

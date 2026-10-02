@@ -8,6 +8,9 @@ rust-version.workspace = true
 publish.workspace = true
 version.workspace = true
 
+[dependencies]
+raptor-core.workspace = true
+
 [lib]
 name = "raptor_agent"
 path = "src/lib.rs"

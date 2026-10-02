@@ -307,7 +307,7 @@ fn run_dashboard_loop(
 }
 
 fn draw_dashboard(frame: &mut Frame<'_>, state: &DashboardState) {
-    let area = frame.size();
+    let area = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)

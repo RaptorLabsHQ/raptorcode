@@ -12,15 +12,15 @@ use std::io::Write as _;
 use std::path::Path;
 
 use raptor_providers::{
-    CompletionMessage, DeepSeekProvider, DeepSeekReasoningEffort, DeepSeekRequestOptions,
-    DeepSeekResponseFormat, DeepSeekThinkingMode, ModelId,
+    AgentMessage, CompletionMessage, DeepSeekProvider, DeepSeekReasoningEffort,
+    DeepSeekRequestOptions, DeepSeekResponseFormat, DeepSeekThinkingMode, ModelId, Provider,
 };
 
 use crate::context_budget::ContextBudgetState;
+use crate::repl::{reenter_and_save_api_key, render_interactive_help};
 use crate::{
     agent_system_message, chat_system_prompt, format_model_display_name, interactive_select,
-    reenter_and_save_api_key, render_interactive_help, AgentMessage, MenuItem, C_BOLD, C_CYAN,
-    C_DIM, C_GREEN_BOLD, C_RED, C_RED_BOLD, C_RESET,
+    MenuItem, C_BOLD, C_CYAN, C_DIM, C_GREEN_BOLD, C_RED, C_RED_BOLD, C_RESET,
 };
 
 /// A recognized interactive slash command. `parse` returns `None` for any line
@@ -280,21 +280,29 @@ fn handle_api(session: &mut SlashSession) -> ReplControl {
             reenter_and_save_api_key(session.api_key, session.provider);
         }
         Some(1) => {
-            let masked = if session.api_key.len() > 12 {
-                format!(
-                    "{}...{}",
-                    &session.api_key[..8],
-                    &session.api_key[session.api_key.len() - 4..]
-                )
-            } else {
-                "***".to_owned()
-            };
-            println!("  {C_DIM}Current API key:{C_RESET} {C_CYAN}{masked}{C_RESET}");
+            let status = presence_label(session.api_key);
+            println!(
+                "  {C_DIM}Current API key:{C_RESET} {C_CYAN}{status}{C_RESET} {C_DIM}(never displayed){C_RESET}"
+            );
+            println!(
+                "  {C_DIM}Saved owner-only in ~/.raptor/.credentials; DEEPSEEK_API_KEY overrides it.{C_RESET}"
+            );
         }
         _ => {}
     }
     println!();
     ReplControl::Continue
+}
+
+/// Reports whether a value is set without printing any part of it. Used for
+/// the API key, where even a masked form leaks characters into scrollback and
+/// screen shares.
+fn presence_label(value: &str) -> &'static str {
+    if value.trim().is_empty() {
+        "not set"
+    } else {
+        "configured"
+    }
 }
 
 fn handle_model(session: &mut SlashSession) -> ReplControl {
@@ -385,6 +393,14 @@ mod tests {
         assert_eq!(parse("/balance"), Some(SlashCommand::Balance));
         assert_eq!(parse("/api"), Some(SlashCommand::Api));
         assert_eq!(parse("/MODEL"), Some(SlashCommand::Model));
+    }
+
+    #[test]
+    fn presence_label_never_contains_the_value() {
+        assert_eq!(presence_label(""), "not set");
+        assert_eq!(presence_label("   "), "not set");
+        assert_eq!(presence_label("sk-1234567890abcdef"), "configured");
+        assert_eq!(presence_label("ключ-ключ"), "configured");
     }
 
     #[test]

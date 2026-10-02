@@ -83,9 +83,9 @@ The fourth slice (2026-06-12) added the prompt IP defense boundary: `raptor-cli:
 
 The fifth slice (2026-06-28) extracted interactive slash-command handling into `raptor-cli::slash_command`. That module owns a pure `parse()` that classifies a prompt line into a typed `SlashCommand` (or `None` for a normal prompt) and a `dispatch()` that runs each command's handler against a borrowed `SlashSession` of the live REPL state, returning a `ReplControl` (continue or break). The REPL loop in `lib.rs` previously inlined a `/swarm` prefix check plus a large `match` over the lowercased input; it now constructs the session and acts on the returned control signal only. Classification is unit-tested (case sensitivity, the `/swarm` word boundary, command aliases). Behavior is unchanged.
 
-The seventh slice (2026-06-28) split the remaining `lib.rs` production code into two more modules: `raptor-cli::repl` owns the interactive terminal (the `run_interactive_chat` read-eval-print loop, the tool-executing `run_agent_loop`, the thinking spinner and prompt quote ticker, the prompt input box, local credential storage/consent, and the embedded quote pool), and `raptor-cli::render` owns presentation (the `render_*` result formatters for doctor/provider/agent/chat/token usage plus the shared number/path/diff display utilities). After this slice `lib.rs` is a thin crate root (~940 lines of production code) holding the CLI command types, `parse_args`, the `run`/`run_with_*` dispatch, and the module wiring. As with the earlier slices, each child module re-imports its parent's private `use` aliases with a single `use crate::*`, and the public/`pub(crate)` items are re-exported from the root (`pub use repl::*` / `pub use render::*`) so dispatch and the test suite call them unqualified. `run_interactive_chat` and `render_doctor` keep their public visibility, preserving the crate API. Behavior is unchanged.
-
 The sixth slice (2026-06-28) extracted the task and swarm command layer into `raptor-cli::task_commands`. That module owns the non-interactive `raptor task` / `raptor swarm` lifecycle handlers — task create/list/show/abandon/cleanup, swarm create/plan/implement, and the shared review/diff/test/merge handlers (which operate on both plain tasks and swarm tasks) — together with their `render_*` presentation helpers. It is named `task_commands` rather than `swarm_commands` because review/diff/test/merge are task-level operations that dispatch to swarm-aware paths, so "task" is the accurate boundary. Generic display utilities (number/path formatting, diff-section builders) stay in `lib.rs` and are shared via `pub(crate)`; the handlers are re-exported with `pub use task_commands::*` so the `run` dispatch and the test suite keep calling them unqualified. This cut `lib.rs` from roughly 7.0k to 5.5k lines. Behavior is unchanged.
+
+The seventh slice (2026-06-28) split the remaining `lib.rs` production code into two more modules: `raptor-cli::repl` owns the interactive terminal (the `run_interactive_chat` read-eval-print loop, the tool-executing `run_agent_loop`, the thinking spinner and prompt quote ticker, the prompt input box, local credential storage/consent, and the embedded quote pool), and `raptor-cli::render` owns presentation (the `render_*` result formatters for doctor/provider/agent/chat/token usage plus the shared number/path/diff display utilities). After this slice `lib.rs` is a thin crate root (~940 lines of production code) holding the CLI command types, `parse_args`, the `run`/`run_with_*` dispatch, and the module wiring. As with the earlier slices, each child module re-imports its parent's private `use` aliases with a single `use crate::*`, and the public/`pub(crate)` items are re-exported from the root (`pub use repl::*` / `pub use render::*`) so dispatch and the test suite call them unqualified. `run_interactive_chat` and `render_doctor` keep their public visibility, preserving the crate API. Behavior is unchanged.
 
 ## Swarm MVP Boundary
 
@@ -173,11 +173,11 @@ Persisted agent sessions and permission policy were implemented early in commit 
 
 ## Task Workflow Boundaries
 
-- `raptor-core`: owns task identifiers, task status, swarm role constants, task metadata, and worktree information models.
+- `raptor-core`: owns task identifiers, the `TaskStatus` and `SwarmStatus` lifecycle enums, swarm roles, task metadata, worktree information models, and the shared identifier validators and key/value codec every crate uses before an id or value reaches the filesystem.
 - `raptor-cli`: routes CLI commands and coordinates task setup, swarm setup, DeepSeek planning, supervised implementation proposal generation, role-aware review/diff inspection, supervised test execution, lifecycle, merge, and cleanup workflows.
 - `raptor-git`: inspects repository roots, validates worktree and branch names, creates single-task and swarm role git worktrees, performs read-only worktree review and diff inspection, executes supervised local merges, and removes validated task worktree directories.
-- `raptor-store`: persists local RaptorCode config, reads provider configuration, reads or writes task metadata, writes and updates swarm metadata, records lifecycle status transitions using the existing `.raptor/tasks/*.toml` format, and persists agent session metadata under `.raptor/agents/*.toml`.
-- `raptor-providers`: owns provider ids, model ids, capability metadata, completion request/response shapes, and the disabled provider trait boundary.
+- `raptor-store`: persists local RaptorCode config, reads provider configuration, reads or writes task metadata, writes and updates swarm metadata, records lifecycle status transitions using the existing `.raptor/tasks/*.toml` format, and persists agent session metadata under `.raptor/agents/*.toml`; organized as one module per store (`task`, `swarm`, `agent`, `config`) over shared `atomic_io`, `toml_codec`, and `paths` helpers.
+- `raptor-providers`: owns provider ids, model ids, capability metadata, completion request/response shapes, and the `Provider` trait that DeepSeek implements (catalog entries are metadata only and do not implement it).
 - `raptor-agent`: owns read-only local session state, lifecycle models, task binding metadata, messages, events, audit entry structures, the permission policy foundation, and v0.1 role planning prompt construction.
 - `raptor-tools`: owns local tooling diagnostics plus safe test command detection, validation, execution, and captured output structures.
 - `raptor-tui`: owns centralized brand color tokens, startup banner rendering, dashboard state rendering, and the simple read-only Ratatui dashboard loop.
@@ -204,3 +204,29 @@ The first merge version must remain local and supervised. It must not auto-merge
 - `raptor-git`: validates the stored worktree path under `.raptor/worktrees/<task-id>`, deletes only that directory through filesystem APIs, then runs `git worktree prune` in the repository root so the stale `.git/worktrees` registration is removed with it.
 
 Cleanup refuses unsafe task ids, unsafe stored paths, missing worktrees, and statuses other than `merged`, `completed`, or `abandoned`. It does not delete branches, push remotes, run tests, execute task metadata commands, or call AI models.
+
+## Architecture Review 2026-10-02
+
+Date: 2026-10-02
+Author: Bob Vasic
+Company: RaptorLabs.dev
+
+A full-workspace review of layering, SOLID, clean code, dependencies, tests, and robustness is recorded in `docs/architecture-review-2026-10-02.md`. It confirms the crate boundaries above, fixes eight concrete defects (tool-policy wrapper bypass, `run_command` pipe deadlock, compaction orphaning tool messages, credentials file mode, and four smaller robustness items), and lays out the next refactor slices in order: `From` impls for `CliError`, shared validators and a module split for `raptor-store`, typed lifecycle enums, completing the `Provider` trait, one shared agent loop with fake-provider tests, explicit imports, and the ratatui/crossterm upgrade. Each slice follows the rule established above: isolate one reason to change, keep public behavior stable, add focused tests, no new abstraction layers or dependencies.
+
+## Review Slices Delivered 2026-10-02
+
+Date: 2026-10-02
+Author: Bob Vasic
+Company: RaptorLabs.dev
+
+The refactor slices recommended by the review were delivered the same day on `refactor/review-slices`, one commit per slice, behavior preserved (every pre-existing test unchanged except for the tests that moved with their code):
+
+- **One agent loop.** `raptor-cli::agent_loop` is the single policy-gated tool-calling cycle (model step → `ToolPolicy` → execute → tool message → context budget, 100-step limit). The REPL's `ReplAgentUi` (spinner, stream redactor, stdin confirmation) and the swarm worker's `SwarmAgentUi` (dashboard events, reply-channel confirmation, cancel flag, file counter) implement the small `AgentLoopUi` hook trait; the two duplicated loops are gone. The loop takes `&dyn Provider` and is covered by nine tests with a scripted provider.
+- **Provider trait completed.** `raptor_providers::Provider` now carries `complete`, `complete_streaming`, `complete_agent_step`, `complete_agent_step_streaming`, and `list_models` with `&mut dyn FnMut` callbacks (object-safe). `ProviderDefinition` is catalog metadata with inherent accessors and no longer implements the trait. A second backend is one `impl Provider`.
+- **Typed lifecycle.** `raptor_core::SwarmStatus` (ten states), `TaskStatus::parse`, `SwarmAgentRole::parse`, and `raptor_providers::AgentMessageRole` replace persisted and compared strings; the stores reject unknown statuses at read time, and the phantom `completed` task status is gone. `AgentMessage::{system,user,assistant,tool}` replace the five-field literals.
+- **Shared validators and codec.** `raptor_core::{is_safe_hyphen_name, is_safe_model_id, stable_hash_hex, escape_kv_string, unescape_kv_string}` and `TaskId::parse` are the one copy of the rules that `raptor-agent`, `raptor-git`, `raptor-providers`, and `raptor-store` previously each carried.
+- **Store modules.** `raptor-store` is `atomic_io`, `toml_codec`, `paths`, `config`, `task`, `swarm`, `agent`, and `tests`, with `lib.rs` holding the constants and re-exports; the public API is unchanged.
+- **Explicit imports.** `repl`, `task_commands`, and `render` import what they use; `lib.rs` re-exports exactly the public command handlers (`render_doctor`, `run_interactive_chat`, the twelve task/swarm commands) and converts every lower-layer error through `From` impls instead of 79 `map_err` closures. The CLI integration tests live in `src/tests.rs`.
+- **Dependencies and CI.** ratatui 0.30 and crossterm 0.29 (the unmaintained `paste` advisory ignore is gone), `rust-version = "1.88"` with an `msrv` CI job that builds it, `--locked` on every CI cargo invocation, and every GitHub Action pinned to a verified commit SHA.
+
+Still open from the review: F9 (wire or remove the frozen `raptor-agent` session model and the empty `raptor-sandbox` crate) is BOB's product decision.

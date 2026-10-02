@@ -8,12 +8,6 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = [
-    # `paste` is unmaintained (RUSTSEC-2024-0436), pulled in via ratatui 0.26.
-    # Clearing it requires the ratatui 0.30 major bump, tracked separately
-    # (breaking API migration). Re-evaluate when ratatui is bumped.
-    "RUSTSEC-2024-0436",
-]
 
 [licenses]
 version = 2

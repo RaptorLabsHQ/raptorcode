@@ -35,7 +35,7 @@ jobs:
     if: ${{ !startsWith(github.event.head_commit.message, 'release:') }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0 # release.sh derives the bump from history since the last tag
           fetch-tags: true
@@ -60,9 +60,11 @@ jobs:
             echo "No functional commits since \`${LAST_TAG:-repository start}\` — nothing to release." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         if: steps.gate.outputs.release == 'true'
-      - uses: Swatinem/rust-cache@v2
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: steps.gate.outputs.release == 'true'
 
       - name: Cut release (bump, sync surfaces, test gate, tag, push)

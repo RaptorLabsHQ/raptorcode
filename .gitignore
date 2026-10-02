@@ -7,3 +7,6 @@
 # No legitimate root doc starts with a digit, so this only catches those dumps.
 /[0-9]*.md
 /[0-9]*.txt
+
+# Claude Code tool-local settings and workflow worktrees; never tracked.
+/.claude/

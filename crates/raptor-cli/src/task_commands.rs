@@ -5,43 +5,70 @@
 //! together with their presentation (`render_*`) helpers. It was extracted from
 //! the large `lib.rs` REPL/dispatch core so that command logic lives behind one
 //! cohesive boundary. Generic display utilities (number/path formatting, diff
-//! section builders) remain in `lib.rs` and are shared via `pub(crate)`.
+//! section builders) live in `render` and are shared via `pub(crate)`.
 
-// The parent `lib.rs` module already imports every external symbol this command
-// layer needs (raptor-core/git/store/providers/tools types, the crate-internal
-// helper modules, and the shared `pub(crate)` render utilities). A child module
-// can see its ancestors' private `use` aliases, so a single glob re-imports them
-// all and keeps this header from duplicating `lib.rs`'s import list.
-use crate::*;
+use std::fs;
+use std::io::BufRead;
+use std::path::{Component, Path, PathBuf};
+
+use raptor_agent::{build_role_planning_prompt, role_prompt_template};
+use raptor_core::{SwarmStatus, TaskId, TaskMetadata, TaskStatus};
+use raptor_git::{
+    create_swarm_worktrees, create_task_worktree, diff_swarm_role_worktree, diff_task_worktree,
+    execute_task_merge, execute_task_worktree_cleanup, inspect_repository_root,
+    inspect_swarm_role_worktree, inspect_task_worktree, plan_task_worktree,
+    plan_task_worktree_cleanup, preflight_task_merge, validated_swarm_role_worktree_path,
+    validated_task_worktree_path, GitError, MergeExecution, MergePreflight, RepositoryRoot,
+    SwarmWorktreePlan, WorktreeCleanupPlan, WorktreeDiff, WorktreeReview,
+};
+use raptor_providers::{
+    CompletionMessage, CompletionRequest, CompletionResponse, DeepSeekProvider,
+    DeepSeekReasoningEffort, DeepSeekRequestOptions, Provider, ProviderError, DEEPSEEK_API_KEY_ENV,
+    DEEPSEEK_API_KEY_URL,
+};
+use raptor_store::{
+    list_task_metadata, persist_swarm_metadata, persist_task_metadata, read_swarm_metadata,
+    read_task_metadata, swarm_metadata_exists, task_metadata_exists, update_swarm_metadata,
+    update_task_status, StoredTaskMetadata, SwarmAgentMetadata, SwarmMetadata,
+    TaskStatusTransition, TaskStoreError,
+};
+use raptor_tools::{
+    detect_test_command, explicit_test_command, run_test_command, TestCommandOutput,
+};
+
+use crate::prompt_guard::PromptGuard;
+use crate::render::{
+    display_exit_code, display_optional, display_path_optional, push_changed_files_section,
+    push_command_output_section, push_diff_section, strip_line_ending, task_status_allows_cleanup,
+};
+use crate::repl::resolve_deepseek_api_key;
+use crate::{
+    ci_environment_enabled, format_model_display_name, prompts, swarm_orchestrator, CliError,
+    RAPTOR_IMPLEMENTATION_PROPOSAL_FILE_NAME, RAPTOR_PLAN_FILE_NAME, SWARM_MODEL_ID,
+    SWARM_PROVIDER_DISPLAY, SWARM_PROVIDER_ID,
+};
 
 pub fn create_task(current_dir: &Path, description: &str) -> Result<String, CliError> {
     let trimmed_description = description.trim();
-    let task_id = TaskId::from_description(trimmed_description)
-        .map_err(|error| CliError::new(error.to_string()))?;
-    let repository_root =
-        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let task_id = TaskId::from_description(trimmed_description)?;
+    let repository_root = inspect_repository_root(current_dir)?;
 
-    if task_metadata_exists(repository_root.path(), &task_id)
-        .map_err(|error| CliError::new(error.to_string()))?
-    {
+    if task_metadata_exists(repository_root.path(), &task_id)? {
         return Err(CliError::new(format!(
             "task metadata already exists for {}; refusing to overwrite",
             task_id.as_str()
         )));
     }
 
-    let plan = plan_task_worktree(&repository_root, &task_id)
-        .map_err(|error| CliError::new(error.to_string()))?;
-    let worktree = create_task_worktree(&repository_root, &task_id)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let plan = plan_task_worktree(&repository_root, &task_id)?;
+    let worktree = create_task_worktree(&repository_root, &task_id)?;
     let metadata = TaskMetadata::new(
         task_id.clone(),
         trimmed_description,
         TaskStatus::Planned,
         worktree,
     );
-    let metadata_path = persist_task_metadata(repository_root.path(), &metadata)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let metadata_path = persist_task_metadata(repository_root.path(), &metadata)?;
 
     Ok(format!(
         "created task {}\nstatus: {}\nbranch: {}\nworktree: {}\nmetadata: {}\n",
@@ -97,34 +124,26 @@ pub(crate) fn create_swarm_with_planning_source(
     planning_source: SwarmPlanningSource<'_>,
 ) -> Result<String, CliError> {
     let trimmed_description = description.trim();
-    let task_id = TaskId::from_description(trimmed_description)
-        .map_err(|error| CliError::new(error.to_string()))?;
-    let repository_root =
-        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let task_id = TaskId::from_description(trimmed_description)?;
+    let repository_root = inspect_repository_root(current_dir)?;
 
-    if task_metadata_exists(repository_root.path(), &task_id)
-        .map_err(|error| CliError::new(error.to_string()))?
-    {
+    if task_metadata_exists(repository_root.path(), &task_id)? {
         return Err(CliError::new(format!(
             "task metadata already exists for {}; refusing to overwrite",
             task_id.as_str()
         )));
     }
 
-    if swarm_metadata_exists(repository_root.path(), &task_id)
-        .map_err(|error| CliError::new(error.to_string()))?
-    {
+    if swarm_metadata_exists(repository_root.path(), &task_id)? {
         return Err(CliError::new(format!(
             "swarm metadata already exists for {}; refusing to overwrite",
             task_id.as_str()
         )));
     }
 
-    let plan = create_swarm_worktrees(&repository_root, &task_id)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let plan = create_swarm_worktrees(&repository_root, &task_id)?;
     let mut metadata = swarm_metadata_from_plan(&plan, trimmed_description);
-    let metadata_path = persist_swarm_metadata(repository_root.path(), &metadata)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let metadata_path = persist_swarm_metadata(repository_root.path(), &metadata)?;
 
     match planning_source {
         SwarmPlanningSource::Environment => match DeepSeekProvider::from_env() {
@@ -150,8 +169,7 @@ pub(crate) fn create_swarm_with_planning_source(
         )?,
     }
 
-    update_swarm_metadata(repository_root.path(), &metadata)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    update_swarm_metadata(repository_root.path(), &metadata)?;
 
     Ok(render_swarm_created(&metadata, &metadata_path))
 }
@@ -175,8 +193,7 @@ pub(crate) fn cmd_swarm_run(current_dir: &Path, description: &str) -> Result<Str
             "DeepSeek API key required. Set {DEEPSEEK_API_KEY_ENV} or run `raptor` once to save a key. Get one: {DEEPSEEK_API_KEY_URL}"
         ))
     })?;
-    let provider =
-        DeepSeekProvider::new(&api_key).map_err(|error| CliError::new(error.to_string()))?;
+    let provider = DeepSeekProvider::new(&api_key)?;
     let model_id = provider
         .default_model()
         .cloned()
@@ -209,11 +226,11 @@ pub(crate) fn swarm_metadata_from_plan(
             implementation_status: None,
             model: Some(SWARM_MODEL_ID.to_owned()),
             plan_file_path: None,
-            planning_status: Some(SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned()),
+            planning_status: Some(SwarmStatus::PendingModelExecution),
             proposal_file_path: None,
             provider: Some(SWARM_PROVIDER_ID.to_owned()),
             role: agent.role.clone(),
-            status: SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned(),
+            status: SwarmStatus::PendingModelExecution,
             worktree_path: agent.path.clone(),
         })
         .collect();
@@ -224,9 +241,9 @@ pub(crate) fn swarm_metadata_from_plan(
         description: description.to_owned(),
         id: plan.task_id.clone(),
         model: SWARM_MODEL_ID.to_owned(),
-        planning_status: Some(SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned()),
+        planning_status: Some(SwarmStatus::PendingModelExecution),
         provider: SWARM_PROVIDER_ID.to_owned(),
-        status: SWARM_PENDING_MODEL_EXECUTION_STATUS.to_owned(),
+        status: SwarmStatus::PendingModelExecution,
         updated_at: None,
     }
 }
@@ -252,8 +269,7 @@ fn plan_swarm_agents(
     let mut failed_roles = Vec::new();
 
     for agent in &mut metadata.agents {
-        let prompt = build_role_planning_prompt(task_id.as_str(), task_description, &agent.role)
-            .map_err(|error| CliError::new(error.to_string()))?;
+        let prompt = build_role_planning_prompt(task_id.as_str(), task_description, &agent.role)?;
         let request = CompletionRequest::new(
             provider.id().clone(),
             model_id.clone(),
@@ -285,22 +301,22 @@ fn plan_swarm_agents(
                         file.write_all(rendered_plan.as_bytes())
                     })
                 {
-                    agent.status = SWARM_PLANNING_FAILED_STATUS.to_owned();
-                    agent.planning_status = Some(SWARM_PLANNING_FAILED_STATUS.to_owned());
+                    agent.status = SwarmStatus::PlanningFailed;
+                    agent.planning_status = Some(SwarmStatus::PlanningFailed);
                     agent.plan_file_path = None;
                     failed_roles.push(format!("{}: {}", agent.role, error));
                     continue;
                 }
 
-                agent.status = SWARM_PLANNING_COMPLETED_STATUS.to_owned();
-                agent.planning_status = Some(SWARM_PLANNING_COMPLETED_STATUS.to_owned());
+                agent.status = SwarmStatus::PlanningCompleted;
+                agent.planning_status = Some(SwarmStatus::PlanningCompleted);
                 agent.plan_file_path = Some(plan_file_path);
                 agent.provider = Some(response.provider_id.as_str().to_owned());
                 agent.model = Some(response.model_id.as_str().to_owned());
             }
             Err(error) => {
-                agent.status = SWARM_PLANNING_FAILED_STATUS.to_owned();
-                agent.planning_status = Some(SWARM_PLANNING_FAILED_STATUS.to_owned());
+                agent.status = SwarmStatus::PlanningFailed;
+                agent.planning_status = Some(SwarmStatus::PlanningFailed);
                 agent.plan_file_path = None;
                 failed_roles.push(format!("{}: {}", agent.role, error));
             }
@@ -308,23 +324,23 @@ fn plan_swarm_agents(
     }
 
     if failed_roles.is_empty() {
-        metadata.status = SWARM_PLANNING_COMPLETED_STATUS.to_owned();
-        metadata.planning_status = Some(SWARM_PLANNING_COMPLETED_STATUS.to_owned());
+        metadata.status = SwarmStatus::PlanningCompleted;
+        metadata.planning_status = Some(SwarmStatus::PlanningCompleted);
     } else {
-        metadata.status = SWARM_PLANNING_FAILED_STATUS.to_owned();
-        metadata.planning_status = Some(SWARM_PLANNING_FAILED_STATUS.to_owned());
+        metadata.status = SwarmStatus::PlanningFailed;
+        metadata.planning_status = Some(SwarmStatus::PlanningFailed);
     }
 
     Ok(())
 }
 
 fn mark_swarm_planning_missing_api_key(metadata: &mut SwarmMetadata) {
-    metadata.status = SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS.to_owned();
-    metadata.planning_status = Some(SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS.to_owned());
+    metadata.status = SwarmStatus::BlockedMissingDeepseekApiKey;
+    metadata.planning_status = Some(SwarmStatus::BlockedMissingDeepseekApiKey);
 
     for agent in &mut metadata.agents {
-        agent.status = SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS.to_owned();
-        agent.planning_status = Some(SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS.to_owned());
+        agent.status = SwarmStatus::BlockedMissingDeepseekApiKey;
+        agent.planning_status = Some(SwarmStatus::BlockedMissingDeepseekApiKey);
         agent.plan_file_path = None;
         agent.provider = Some(SWARM_PROVIDER_ID.to_owned());
         agent.model = Some(SWARM_MODEL_ID.to_owned());
@@ -332,12 +348,12 @@ fn mark_swarm_planning_missing_api_key(metadata: &mut SwarmMetadata) {
 }
 
 fn mark_swarm_planning_failed(metadata: &mut SwarmMetadata, _detail: Option<String>) {
-    metadata.status = SWARM_PLANNING_FAILED_STATUS.to_owned();
-    metadata.planning_status = Some(SWARM_PLANNING_FAILED_STATUS.to_owned());
+    metadata.status = SwarmStatus::PlanningFailed;
+    metadata.planning_status = Some(SwarmStatus::PlanningFailed);
 
     for agent in &mut metadata.agents {
-        agent.status = SWARM_PLANNING_FAILED_STATUS.to_owned();
-        agent.planning_status = Some(SWARM_PLANNING_FAILED_STATUS.to_owned());
+        agent.status = SwarmStatus::PlanningFailed;
+        agent.planning_status = Some(SwarmStatus::PlanningFailed);
         agent.plan_file_path = None;
         agent.provider = Some(SWARM_PROVIDER_ID.to_owned());
         agent.model = Some(SWARM_MODEL_ID.to_owned());
@@ -449,12 +465,10 @@ pub(crate) fn implement_swarm_role_with_source(
     role: &str,
     implementation_source: SwarmImplementationSource<'_>,
 ) -> Result<String, CliError> {
-    role_prompt_template(role).map_err(|error| CliError::new(error.to_string()))?;
+    role_prompt_template(role)?;
 
-    let repository_root =
-        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
-    let mut metadata = read_swarm_metadata(repository_root.path(), task_id)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let repository_root = inspect_repository_root(current_dir)?;
+    let mut metadata = read_swarm_metadata(repository_root.path(), task_id)?;
     let agent_index = metadata
         .agents
         .iter()
@@ -542,9 +556,7 @@ fn generate_swarm_implementation_proposal(
         .clone()
         .unwrap_or_else(|| agent.worktree_path.join(RAPTOR_PLAN_FILE_NAME));
 
-    if agent.planning_status.as_deref() == Some(SWARM_PLANNING_COMPLETED_STATUS)
-        && !plan_file_path.is_file()
-    {
+    if agent.planning_status == Some(SwarmStatus::PlanningCompleted) && !plan_file_path.is_file() {
         return Err(CliError::new(format!(
             "RAPTOR_PLAN.md is missing for completed planning role {role}: {}",
             plan_file_path.display()
@@ -603,15 +615,14 @@ fn generate_swarm_implementation_proposal(
 
     {
         let agent = &mut metadata.agents[agent_index];
-        agent.implementation_status = Some(SWARM_PROPOSAL_GENERATED_STATUS.to_owned());
+        agent.implementation_status = Some(SwarmStatus::ProposalGenerated);
         agent.model = Some(response.model_id.as_str().to_owned());
         agent.proposal_file_path = Some(proposal_file_path.clone());
         agent.provider = Some(response.provider_id.as_str().to_owned());
-        agent.status = SWARM_PROPOSAL_GENERATED_STATUS.to_owned();
+        agent.status = SwarmStatus::ProposalGenerated;
     }
 
-    update_swarm_metadata(repository_root, metadata)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    update_swarm_metadata(repository_root, metadata)?;
 
     Ok(render_swarm_implementation_generated(
         metadata,
@@ -626,16 +637,14 @@ fn mark_swarm_role_implementation_missing_api_key(
 ) -> Result<(), CliError> {
     {
         let agent = &mut metadata.agents[agent_index];
-        agent.implementation_status =
-            Some(SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS.to_owned());
+        agent.implementation_status = Some(SwarmStatus::BlockedMissingDeepseekApiKey);
         agent.model = Some(SWARM_MODEL_ID.to_owned());
         agent.proposal_file_path = None;
         agent.provider = Some(SWARM_PROVIDER_ID.to_owned());
-        agent.status = SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS.to_owned();
+        agent.status = SwarmStatus::BlockedMissingDeepseekApiKey;
     }
 
-    update_swarm_metadata(repository_root, metadata)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    update_swarm_metadata(repository_root, metadata)?;
 
     Ok(())
 }
@@ -647,15 +656,14 @@ fn mark_swarm_role_implementation_failed(
 ) -> Result<(), CliError> {
     {
         let agent = &mut metadata.agents[agent_index];
-        agent.implementation_status = Some(SWARM_IMPLEMENTATION_FAILED_STATUS.to_owned());
+        agent.implementation_status = Some(SwarmStatus::Failed);
         agent.model = Some(SWARM_MODEL_ID.to_owned());
         agent.proposal_file_path = None;
         agent.provider = Some(SWARM_PROVIDER_ID.to_owned());
-        agent.status = SWARM_IMPLEMENTATION_FAILED_STATUS.to_owned();
+        agent.status = SwarmStatus::Failed;
     }
 
-    update_swarm_metadata(repository_root, metadata)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    update_swarm_metadata(repository_root, metadata)?;
 
     Ok(())
 }
@@ -704,9 +712,7 @@ fn render_swarm_implementation_generated(
         agent.provider.as_deref().unwrap_or(SWARM_PROVIDER_ID),
         agent.model.as_deref().unwrap_or(SWARM_MODEL_ID),
         agent
-            .implementation_status
-            .as_deref()
-            .unwrap_or(&agent.status),
+            .implementation_status.unwrap_or(agent.status).as_str(),
         proposal_file_path,
         metadata.id,
         agent.role,
@@ -728,17 +734,13 @@ fn render_swarm_implementation_blocked(
         agent.provider.as_deref().unwrap_or(SWARM_PROVIDER_ID),
         agent.model.as_deref().unwrap_or(SWARM_MODEL_ID),
         agent
-            .implementation_status
-            .as_deref()
-            .unwrap_or(&agent.status)
+            .implementation_status.unwrap_or(agent.status).as_str()
     )
 }
 
 pub fn list_tasks(current_dir: &Path) -> Result<String, CliError> {
-    let repository_root =
-        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
-    let tasks = list_task_metadata(repository_root.path())
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let repository_root = inspect_repository_root(current_dir)?;
+    let tasks = list_task_metadata(repository_root.path())?;
 
     if tasks.is_empty() {
         return Ok("No RaptorCode tasks found.\n".to_owned());
@@ -751,7 +753,7 @@ pub fn list_tasks(current_dir: &Path) -> Result<String, CliError> {
         output.push_str(&format!(
             "{} | {} | {} | {} | {}\n",
             task.id,
-            display_optional(task.status.as_deref()),
+            display_optional(task.status.map(TaskStatus::as_str)),
             display_optional(task.created_at.as_deref()),
             display_path_optional(task.worktree_path.as_ref()),
             display_optional(task.description.as_deref())
@@ -762,22 +764,18 @@ pub fn list_tasks(current_dir: &Path) -> Result<String, CliError> {
 }
 
 pub fn show_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> {
-    let repository_root =
-        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
-    let task = read_task_metadata(repository_root.path(), task_id)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let repository_root = inspect_repository_root(current_dir)?;
+    let task = read_task_metadata(repository_root.path(), task_id)?;
 
     Ok(render_task_details(&task))
 }
 
 pub fn abandon_task(current_dir: &Path, task_id: &str) -> Result<String, CliError> {
-    let repository_root =
-        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
-    let task = read_task_metadata(repository_root.path(), task_id)
-        .map_err(|error| CliError::new(error.to_string()))?;
-    let status = task.status.as_deref().unwrap_or("unknown");
+    let repository_root = inspect_repository_root(current_dir)?;
+    let task = read_task_metadata(repository_root.path(), task_id)?;
+    let status = task.status.map(TaskStatus::as_str).unwrap_or("unknown");
 
-    if matches!(status, "merged" | "completed") {
+    if task.status == Some(TaskStatus::Merged) {
         return Err(CliError::new(format!(
             "task status {status} cannot be abandoned"
         )));
@@ -787,13 +785,12 @@ pub fn abandon_task(current_dir: &Path, task_id: &str) -> Result<String, CliErro
         repository_root.path(),
         &task.id,
         TaskStatusTransition::Abandoned,
-    )
-    .map_err(|error| CliError::new(error.to_string()))?;
+    )?;
 
     Ok(format!(
         "Task abandoned\nTask: {}\nStatus: {}\nWorktree retained: {}\nMetadata: {}\n",
         updated.id,
-        display_optional(updated.status.as_deref()),
+        display_optional(updated.status.map(TaskStatus::as_str)),
         display_path_optional(updated.worktree_path.as_ref()),
         updated.metadata_path.display()
     ))
@@ -804,21 +801,18 @@ pub fn cleanup_task(
     task_id: &str,
     confirmation_input: Option<&mut dyn BufRead>,
 ) -> Result<String, CliError> {
-    let repository_root =
-        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
-    let task = read_task_metadata(repository_root.path(), task_id)
-        .map_err(|error| CliError::new(error.to_string()))?;
-    let status = task.status.as_deref().unwrap_or("unknown");
+    let repository_root = inspect_repository_root(current_dir)?;
+    let task = read_task_metadata(repository_root.path(), task_id)?;
+    let status = task.status.map(TaskStatus::as_str).unwrap_or("unknown");
     let worktree_path = task
         .worktree_path
         .as_ref()
         .ok_or_else(|| CliError::new("task metadata is missing worktree_path"))?;
-    let plan = plan_task_worktree_cleanup(&repository_root, &task.id, worktree_path)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let plan = plan_task_worktree_cleanup(&repository_root, &task.id, worktree_path)?;
 
-    if !task_status_allows_cleanup(status) {
+    if !task_status_allows_cleanup(task.status) {
         return Err(CliError::new(format!(
-            "task status {status} is not safe for cleanup; expected merged, completed, or abandoned"
+            "task status {status} is not safe for cleanup; expected merged or abandoned"
         )));
     }
 
@@ -879,8 +873,7 @@ pub fn review_task(
     task_id: &str,
     role: Option<&str>,
 ) -> Result<String, CliError> {
-    let repository_root =
-        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let repository_root = inspect_repository_root(current_dir)?;
     let task = match read_task_metadata(repository_root.path(), task_id) {
         Ok(task) => task,
         Err(TaskStoreError::NotFound(_)) => {
@@ -899,8 +892,7 @@ pub fn review_task(
         .worktree_path
         .as_ref()
         .ok_or_else(|| CliError::new("task metadata is missing worktree_path"))?;
-    let review = inspect_task_worktree(&repository_root, &task.id, worktree_path)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let review = inspect_task_worktree(&repository_root, &task.id, worktree_path)?;
 
     Ok(render_task_review(&task, &review))
 }
@@ -910,8 +902,7 @@ pub fn diff_task(
     task_id: &str,
     role: Option<&str>,
 ) -> Result<String, CliError> {
-    let repository_root =
-        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let repository_root = inspect_repository_root(current_dir)?;
     let task = match read_task_metadata(repository_root.path(), task_id) {
         Ok(task) => task,
         Err(TaskStoreError::NotFound(_)) => {
@@ -930,8 +921,7 @@ pub fn diff_task(
         .worktree_path
         .as_ref()
         .ok_or_else(|| CliError::new("task metadata is missing worktree_path"))?;
-    let diff = diff_task_worktree(&repository_root, &task.id, worktree_path)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let diff = diff_task_worktree(&repository_root, &task.id, worktree_path)?;
 
     Ok(render_task_diff(&task, &diff))
 }
@@ -941,12 +931,10 @@ pub fn test_task(
     task_id: &str,
     explicit_command_parts: Option<&[String]>,
 ) -> Result<String, CliError> {
-    let repository_root =
-        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
+    let repository_root = inspect_repository_root(current_dir)?;
     let explicit_command = explicit_command_parts
         .map(explicit_test_command)
-        .transpose()
-        .map_err(|error| CliError::new(error.to_string()))?;
+        .transpose()?;
     let (mode, targets) = test_targets(&repository_root, task_id)?;
 
     let mut results = Vec::new();
@@ -964,8 +952,7 @@ pub fn test_task(
                 }
             },
         };
-        let output = run_test_command(&target.worktree_path, &command)
-            .map_err(|error| CliError::new(error.to_string()))?;
+        let output = run_test_command(&target.worktree_path, &command)?;
 
         results.push(TestTargetResult {
             label: target.label,
@@ -993,8 +980,7 @@ fn test_targets(
                 .as_ref()
                 .ok_or_else(|| CliError::new("task metadata is missing worktree_path"))?;
             let worktree_path =
-                validated_task_worktree_path(repository_root, &task.id, worktree_path)
-                    .map_err(|error| CliError::new(error.to_string()))?;
+                validated_task_worktree_path(repository_root, &task.id, worktree_path)?;
 
             Ok((
                 "single-task",
@@ -1005,20 +991,17 @@ fn test_targets(
             ))
         }
         Err(TaskStoreError::NotFound(_)) => {
-            let metadata = read_swarm_metadata(repository_root.path(), task_id)
-                .map_err(|error| CliError::new(error.to_string()))?;
+            let metadata = read_swarm_metadata(repository_root.path(), task_id)?;
             let mut targets = Vec::new();
 
             for agent in &metadata.agents {
-                role_prompt_template(&agent.role)
-                    .map_err(|error| CliError::new(error.to_string()))?;
+                role_prompt_template(&agent.role)?;
                 let worktree_path = validated_swarm_role_worktree_path(
                     repository_root,
                     &metadata.id,
                     &agent.role,
                     &agent.worktree_path,
-                )
-                .map_err(|error| CliError::new(error.to_string()))?;
+                )?;
                 targets.push(TestTarget {
                     label: agent.role.clone(),
                     worktree_path,
@@ -1040,11 +1023,10 @@ fn review_swarm_task(
     role: Option<&str>,
 ) -> Result<String, CliError> {
     if let Some(role) = role {
-        role_prompt_template(role).map_err(|error| CliError::new(error.to_string()))?;
+        role_prompt_template(role)?;
     }
 
-    let metadata = read_swarm_metadata(repository_root.path(), task_id)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let metadata = read_swarm_metadata(repository_root.path(), task_id)?;
     let agents = selected_swarm_agents(&metadata, role)?;
     let mut reviews = Vec::new();
 
@@ -1054,8 +1036,7 @@ fn review_swarm_task(
             &metadata.id,
             &agent.role,
             &agent.worktree_path,
-        )
-        .map_err(|error| CliError::new(error.to_string()))?;
+        )?;
         reviews.push(SwarmRoleReview { agent, review });
     }
 
@@ -1068,11 +1049,10 @@ fn diff_swarm_task(
     role: Option<&str>,
 ) -> Result<String, CliError> {
     if let Some(role) = role {
-        role_prompt_template(role).map_err(|error| CliError::new(error.to_string()))?;
+        role_prompt_template(role)?;
     }
 
-    let metadata = read_swarm_metadata(repository_root.path(), task_id)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let metadata = read_swarm_metadata(repository_root.path(), task_id)?;
     let agents = selected_swarm_agents(&metadata, role)?;
     let mut diffs = Vec::new();
 
@@ -1082,8 +1062,7 @@ fn diff_swarm_task(
             &metadata.id,
             &agent.role,
             &agent.worktree_path,
-        )
-        .map_err(|error| CliError::new(error.to_string()))?;
+        )?;
         diffs.push(SwarmRoleDiff { agent, diff });
     }
 
@@ -1098,7 +1077,7 @@ fn selected_swarm_agents<'a>(
         return Ok(metadata.agents.iter().collect());
     };
 
-    role_prompt_template(role).map_err(|error| CliError::new(error.to_string()))?;
+    role_prompt_template(role)?;
     metadata
         .agents
         .iter()
@@ -1204,16 +1183,13 @@ fn merge_task_preflight(
     current_dir: &Path,
     task_id: &str,
 ) -> Result<(RepositoryRoot, StoredTaskMetadata, MergePreflight), CliError> {
-    let repository_root =
-        inspect_repository_root(current_dir).map_err(|error| CliError::new(error.to_string()))?;
-    let task = read_task_metadata(repository_root.path(), task_id)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let repository_root = inspect_repository_root(current_dir)?;
+    let task = read_task_metadata(repository_root.path(), task_id)?;
     let worktree_path = task
         .worktree_path
         .as_ref()
         .ok_or_else(|| CliError::new("task metadata is missing worktree_path"))?;
-    let preflight = preflight_task_merge(&repository_root, &task.id, worktree_path)
-        .map_err(|error| CliError::new(error.to_string()))?;
+    let preflight = preflight_task_merge(&repository_root, &task.id, worktree_path)?;
 
     Ok((repository_root, task, preflight))
 }
@@ -1226,7 +1202,7 @@ fn render_swarm_created(metadata: &SwarmMetadata, metadata_path: &Path) -> Strin
         SWARM_PROVIDER_DISPLAY,
         metadata.model,
         metadata.status,
-        metadata.planning_status.as_deref().unwrap_or("-"),
+        metadata.planning_status.map_or("-", SwarmStatus::as_str),
         metadata_path.display()
     );
 
@@ -1237,7 +1213,7 @@ fn render_swarm_created(metadata: &SwarmMetadata, metadata_path: &Path) -> Strin
             agent.role,
             agent.branch,
             agent.worktree_path.display(),
-            agent.planning_status.as_deref().unwrap_or(&agent.status)
+            agent.planning_status.unwrap_or(agent.status).as_str()
         ));
 
         if let Some(plan_file_path) = agent.plan_file_path.as_ref() {
@@ -1247,7 +1223,7 @@ fn render_swarm_created(metadata: &SwarmMetadata, metadata_path: &Path) -> Strin
         output.push('\n');
     }
 
-    if metadata.planning_status.as_deref() == Some(SWARM_BLOCKED_MISSING_DEEPSEEK_API_KEY_STATUS) {
+    if metadata.planning_status == Some(SwarmStatus::BlockedMissingDeepseekApiKey) {
         output.push_str(&format!(
             "DeepSeek API key required: Get a DeepSeek API key at {DEEPSEEK_API_KEY_URL}\n"
         ));
@@ -1274,7 +1250,7 @@ fn render_task_details(task: &StoredTaskMetadata) -> String {
     format!(
         "Task: {}\nStatus: {}\nDescription: {}\nCreated: {}\nUpdated: {}\nMerged: {}\nConflict: {}\nAbandoned: {}\nBranch: {}\nRepository root: {}\nWorktree: {}\nMetadata: {}\n",
         task.id,
-        display_optional(task.status.as_deref()),
+        display_optional(task.status.map(TaskStatus::as_str)),
         display_optional(task.description.as_deref()),
         display_optional(task.created_at.as_deref()),
         display_optional(task.updated_at.as_deref()),
@@ -1292,7 +1268,7 @@ fn render_task_review(task: &StoredTaskMetadata, review: &WorktreeReview) -> Str
     let mut output = format!(
         "Task: {}\nStatus: {}\nDescription: {}\nWorktree: {}\n",
         task.id,
-        display_optional(task.status.as_deref()),
+        display_optional(task.status.map(TaskStatus::as_str)),
         display_optional(task.description.as_deref()),
         review.worktree_path.display()
     );
@@ -1394,7 +1370,7 @@ fn render_swarm_review(
         metadata.id,
         metadata.description,
         metadata.status,
-        metadata.planning_status.as_deref().unwrap_or("-"),
+        metadata.planning_status.map_or("-", SwarmStatus::as_str),
         role.unwrap_or("all"),
         reviews.len()
     );
@@ -1404,8 +1380,8 @@ fn render_swarm_review(
             "\nAgent: {}\nStatus: {}\nPlanning status: {}\nImplementation status: {}\nWorktree: {}\nPlan file: {}\nProposal file: {}\n",
             item.agent.role,
             item.agent.status,
-            item.agent.planning_status.as_deref().unwrap_or("-"),
-            item.agent.implementation_status.as_deref().unwrap_or("-"),
+            item.agent.planning_status.map_or("-", SwarmStatus::as_str),
+            item.agent.implementation_status.map_or("-", SwarmStatus::as_str),
             item.review.worktree_path.display(),
             display_path_optional(item.agent.plan_file_path.as_ref()),
             display_path_optional(item.agent.proposal_file_path.as_ref())
@@ -1472,7 +1448,7 @@ fn render_merge_preflight(task: &StoredTaskMetadata, preflight: &MergePreflight)
     let mut output = format!(
         "Merge preflight dry run\nTask: {}\nStatus: {}\nDescription: {}\nTarget repository: {}\nTarget branch: {}\nWorktree: {}\nWorktree branch: {}\n",
         task.id,
-        display_optional(task.status.as_deref()),
+        display_optional(task.status.map(TaskStatus::as_str)),
         display_optional(task.description.as_deref()),
         preflight.target_repository_path.display(),
         display_optional(preflight.target_branch.as_deref()),
@@ -1568,7 +1544,7 @@ fn render_task_status_update(task: &StoredTaskMetadata) -> String {
     format!(
         "Task status updated\nTask: {}\nStatus: {}\nUpdated: {}\nMetadata: {}\n",
         task.id,
-        display_optional(task.status.as_deref()),
+        display_optional(task.status.map(TaskStatus::as_str)),
         display_optional(task.updated_at.as_deref()),
         task.metadata_path.display()
     )

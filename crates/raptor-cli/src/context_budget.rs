@@ -1,4 +1,4 @@
-use raptor_providers::{AgentMessage, CompletionMessage, TokenUsage};
+use raptor_providers::{AgentMessage, AgentMessageRole, CompletionMessage, TokenUsage};
 
 pub(crate) const DEEPSEEK_CONTEXT_TOKEN_LIMIT: u32 = 1_000_000;
 const DEEPSEEK_CONTEXT_WARNING_TOKENS: u32 = 850_000;
@@ -129,14 +129,35 @@ pub(crate) fn compact_agent_history(
     let Some(system_message) = history.first().cloned() else {
         return 0;
     };
-    let minimum_start = history.len().saturating_sub(AGENT_COMPACTION_KEEP_MESSAGES);
-    let recent_start = history
+    let minimum_start = history
+        .len()
+        .saturating_sub(AGENT_COMPACTION_KEEP_MESSAGES)
+        .max(1);
+    // Prefer opening the retained tail at a user turn. Failing that, skip past
+    // any tool results: a `tool` message whose assistant `tool_calls` message
+    // was dropped is rejected by the API, which would wedge every later turn.
+    let forward_start = history
         .iter()
         .enumerate()
-        .skip(minimum_start.max(1))
-        .find(|(_, message)| message.role == "user")
-        .map(|(index, _)| index)
-        .unwrap_or(minimum_start.max(1));
+        .skip(minimum_start)
+        .find(|(_, message)| message.role == AgentMessageRole::User)
+        .or_else(|| {
+            history
+                .iter()
+                .enumerate()
+                .skip(minimum_start)
+                .find(|(_, message)| message.role != AgentMessageRole::Tool)
+        })
+        .map(|(index, _)| index);
+    // When the whole window is tool results (one round issued more calls than
+    // the window holds), walk back to the assistant turn that issued them so
+    // the pairing survives, keeping a little more than the window.
+    let recent_start = forward_start.unwrap_or_else(|| {
+        (1..minimum_start)
+            .rev()
+            .find(|&index| history[index].role != AgentMessageRole::Tool)
+            .unwrap_or(1)
+    });
     let omitted = recent_start.saturating_sub(1);
     if omitted == 0 {
         return 0;
@@ -146,16 +167,10 @@ pub(crate) fn compact_agent_history(
     state.warned = false;
     let mut compacted = Vec::with_capacity(AGENT_COMPACTION_KEEP_MESSAGES + 2);
     compacted.push(system_message);
-    compacted.push(AgentMessage {
-        role: "system".to_owned(),
-        content: Some(format!(
+    compacted.push(AgentMessage::system(format!(
             "RaptorCode locally compacted this agent conversation to stay inside DeepSeek's 1M-token context budget. {} older messages were omitted. Continue with the retained recent user, assistant, and tool messages as authoritative context. If missing details are needed, inspect the repository again with tools.",
             state.compacted_turns
-        )),
-        reasoning_content: None,
-        tool_calls: None,
-        tool_call_id: None,
-    });
+    )));
     compacted.extend(history.drain(recent_start..));
     *history = compacted;
 
@@ -165,6 +180,71 @@ pub(crate) fn compact_agent_history(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use raptor_providers::ToolCall;
+
+    fn agent_message(role: AgentMessageRole, content: &str) -> AgentMessage {
+        AgentMessage {
+            role,
+            content: Some(content.to_owned()),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    #[test]
+    fn agent_compaction_never_opens_the_retained_tail_with_an_orphaned_tool_result() {
+        let mut history = vec![
+            agent_message(AgentMessageRole::System, "system"),
+            agent_message(AgentMessageRole::User, "go"),
+        ];
+        // A long tool loop with no further user turns: each assistant step
+        // issues four tool calls, each answered by a tool result.
+        for step in 0..20 {
+            let calls = (0..4)
+                .map(|index| ToolCall {
+                    id: format!("call_{}", step * 4 + index),
+                    name: "read_file".to_owned(),
+                    arguments: "{}".to_owned(),
+                })
+                .collect::<Vec<_>>();
+            history.push(AgentMessage {
+                role: AgentMessageRole::Assistant,
+                content: None,
+                reasoning_content: None,
+                tool_calls: Some(calls.clone()),
+                tool_call_id: None,
+            });
+            for call in calls {
+                let mut result = agent_message(AgentMessageRole::Tool, "ok");
+                result.tool_call_id = Some(call.id);
+                history.push(result);
+            }
+        }
+        let naive_cut = history.len() - AGENT_COMPACTION_KEEP_MESSAGES;
+        assert_eq!(
+            history[naive_cut].role,
+            AgentMessageRole::Tool,
+            "fixture must place the naive cut on a tool result"
+        );
+        let mut state = ContextBudgetState::default();
+
+        let omitted = compact_agent_history(&mut history, &mut state);
+
+        assert!(omitted > 0);
+        assert_eq!(history[0].role, AgentMessageRole::System);
+        assert_eq!(
+            history[1].role,
+            AgentMessageRole::System,
+            "compaction marker"
+        );
+        assert_eq!(
+            history[2].role,
+            AgentMessageRole::Assistant,
+            "retained tail must open at an assistant turn, not an orphaned tool result"
+        );
+        assert!(history[2].tool_calls.is_some());
+    }
 
     #[test]
     fn token_usage_prefers_explicit_total_tokens() {

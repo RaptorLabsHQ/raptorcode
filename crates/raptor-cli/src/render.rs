@@ -2,11 +2,15 @@
 //! domain types into the strings printed to the terminal, plus the shared
 //! number/path/diff formatting utilities they (and the `task_commands` renderers)
 //! build on. Extracted from `lib.rs` so formatting lives behind one boundary.
-//!
-//! Like the other extracted command modules, this child module re-imports its
-//! parent's private `use` aliases with a single glob rather than restating
-//! `lib.rs`'s import list.
-use crate::*;
+
+use std::path::{Path, PathBuf};
+
+use raptor_agent::PermissionPolicy;
+use raptor_core::{project_name, version, TaskStatus};
+use raptor_git::{inspect_repository, inspect_repository_root};
+use raptor_providers::{CompletionResponse, ProviderSummary, TokenUsage};
+use raptor_store::StoredAgentSession;
+use raptor_tools::command_version;
 
 pub fn render_doctor(current_dir: &Path) -> String {
     let repository = inspect_repository(current_dir);
@@ -269,7 +273,7 @@ pub(crate) fn group_thousands(value: u32) -> String {
     let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
     let len = digits.len();
     for (index, character) in digits.chars().enumerate() {
-        if index > 0 && (len - index) % 3 == 0 {
+        if index > 0 && (len - index).is_multiple_of(3) {
             grouped.push(',');
         }
         grouped.push(character);
@@ -340,8 +344,8 @@ pub(crate) fn display_exit_code(value: Option<i32>) -> String {
         .unwrap_or_else(|| "terminated_by_signal".to_owned())
 }
 
-pub(crate) fn task_status_allows_cleanup(status: &str) -> bool {
-    matches!(status, "merged" | "completed" | "abandoned")
+pub(crate) fn task_status_allows_cleanup(status: Option<TaskStatus>) -> bool {
+    matches!(status, Some(TaskStatus::Merged | TaskStatus::Abandoned))
 }
 
 pub(crate) fn strip_line_ending(value: &str) -> &str {

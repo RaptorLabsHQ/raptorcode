@@ -1,8 +1,19 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::thread;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use raptor_providers::ToolDefinition;
+
+/// Wall-clock ceiling for one `run_command` tool call.
+const RUN_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+/// Combined stdout/stderr returned to the model is capped at this many bytes.
+const RUN_COMMAND_OUTPUT_CAP_BYTES: usize = 4000;
+/// `read_file` content returned to the model is capped at this many bytes so a
+/// large log or generated file cannot flood the context window in one call.
+const READ_FILE_OUTPUT_CAP_BYTES: usize = 200_000;
 
 /// Returns the host shell program and the flag that tells it to run a command
 /// string: `sh -c` on Unix/macOS, `cmd /C` on Windows. This keeps the agent's
@@ -149,6 +160,214 @@ fn truncate_on_char_boundary(text: &mut String, max_bytes: usize) {
     text.truncate(end);
 }
 
+/// Reads at most the cap from a regular file. Devices, FIFOs, and directories
+/// are refused up front: reading one of those whole could block forever or
+/// grow without bound, which a cap applied after a full read cannot prevent.
+fn read_file_capped(target: &Path) -> Result<String, String> {
+    let metadata = std::fs::metadata(target).map_err(|error| error.to_string())?;
+    if !metadata.is_file() {
+        return Err(format!("not a regular file: {}", target.display()));
+    }
+    let total_bytes = metadata.len();
+    let mut bytes = Vec::new();
+    std::fs::File::open(target)
+        .map_err(|error| error.to_string())?
+        .take(READ_FILE_OUTPUT_CAP_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    let truncated = bytes.len() > READ_FILE_OUTPUT_CAP_BYTES;
+    let mut content = match String::from_utf8(bytes) {
+        Ok(content) => content,
+        Err(error) => {
+            // A cut through a multi-byte character at the cap is expected;
+            // anything else is a binary file the model should not ingest.
+            let valid_up_to = error.utf8_error().valid_up_to();
+            let bytes = error.into_bytes();
+            if !truncated || bytes.len() - valid_up_to > 3 {
+                return Err(format!("not valid UTF-8 text: {}", target.display()));
+            }
+            String::from_utf8_lossy(&bytes[..valid_up_to]).into_owned()
+        }
+    };
+    if truncated {
+        truncate_on_char_boundary(&mut content, READ_FILE_OUTPUT_CAP_BYTES);
+        content.push_str(&format!(
+            "\n...[truncated: showing the first {READ_FILE_OUTPUT_CAP_BYTES} of {total_bytes} bytes]"
+        ));
+    }
+    Ok(content)
+}
+
+/// Runs `cmd` through the platform shell inside `cmd_dir` and returns the tool
+/// result the model sees. stdout and stderr are drained on background threads
+/// from the moment the child starts: a child that writes more than the kernel
+/// pipe buffer (64 KiB on Linux) otherwise blocks on `write()` and can never
+/// exit, which the polling loop would misreport as a timeout. stdin is closed
+/// so a command that prompts for input fails fast instead of hanging (or, in
+/// the live swarm, fighting the dashboard for the terminal).
+fn run_shell_command(cmd: &str, cmd_dir: &Path, timeout: Duration) -> String {
+    let (shell_program, shell_flag) = platform_shell();
+    let mut command = Command::new(shell_program);
+    command
+        .arg(shell_flag)
+        .arg(cmd)
+        .current_dir(cmd_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => return format!("error: {error}"),
+    };
+    let stdout = drain_in_background(child.stdout.take());
+    let stderr = drain_in_background(child.stderr.take());
+    let started_at = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // A grandchild the shell backgrounded (a dev server, say) can
+                // keep the pipes open after the shell itself has exited, so
+                // the drains are collected with a deadline rather than joined.
+                let deadline = Instant::now() + OUTPUT_DRAIN_GRACE;
+                let (stdout, stdout_closed) = collect_drained(stdout, deadline);
+                let (stderr, stderr_closed) = collect_drained(stderr, deadline);
+                let mut result = render_command_output(status, &stdout, &stderr);
+                if !(stdout_closed && stderr_closed) {
+                    result.push_str(
+                        "\n[note] a background process started by this command is still running and holding its output stream open",
+                    );
+                }
+                return result;
+            }
+            Ok(None) if started_at.elapsed() >= timeout => {
+                terminate_process_tree(&mut child);
+                // The drain threads end on their own once every process holding
+                // the pipes is gone; they are deliberately not joined so a
+                // straggler can never hang the agent loop.
+                return format!(
+                    "error: command exceeded the {}-second execution limit and was stopped",
+                    timeout.as_secs()
+                );
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(100)),
+            Err(error) => return format!("error: {error}"),
+        }
+    }
+}
+
+/// How long to wait for the output pipes to close after the shell exits before
+/// returning what was captured so far.
+const OUTPUT_DRAIN_GRACE: Duration = Duration::from_secs(2);
+
+/// A pipe being read on a background thread into a shared buffer, so the
+/// bytes captured so far are available even if the pipe never closes.
+struct Drain {
+    buffer: Arc<Mutex<Vec<u8>>>,
+    handle: JoinHandle<()>,
+}
+
+fn drain_in_background<R: Read + Send + 'static>(pipe: Option<R>) -> Option<Drain> {
+    let mut pipe = pipe?;
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&buffer);
+    let handle = thread::spawn(move || {
+        let mut chunk = [0u8; 8192];
+        loop {
+            match pipe.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    if let Ok(mut sink) = sink.lock() {
+                        sink.extend_from_slice(&chunk[..read]);
+                    }
+                }
+            }
+        }
+    });
+    Some(Drain { buffer, handle })
+}
+
+/// Waits until the drain's pipe closes or `deadline` passes, then returns the
+/// captured bytes and whether the pipe had closed.
+fn collect_drained(drain: Option<Drain>, deadline: Instant) -> (Vec<u8>, bool) {
+    let Some(drain) = drain else {
+        return (Vec::new(), true);
+    };
+    while !drain.handle.is_finished() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    let closed = drain.handle.is_finished();
+    let bytes = drain
+        .buffer
+        .lock()
+        .map(|buffer| buffer.clone())
+        .unwrap_or_default();
+    (bytes, closed)
+}
+
+fn render_command_output(status: ExitStatus, stdout: &[u8], stderr: &[u8]) -> String {
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr = String::from_utf8_lossy(stderr);
+    let mut result = String::new();
+    if !stdout.is_empty() {
+        result.push_str(stdout.trim_end());
+    }
+    if !stderr.is_empty() {
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        result.push_str(&format!("[stderr] {}", stderr.trim_end()));
+    }
+    if result.len() > RUN_COMMAND_OUTPUT_CAP_BYTES {
+        truncate_on_char_boundary(&mut result, RUN_COMMAND_OUTPUT_CAP_BYTES);
+        result.push_str("\n...[truncated]");
+    }
+    if result.is_empty() {
+        if status.success() {
+            "ok (no output)".to_owned()
+        } else {
+            format!("exited with code {}", status.code().unwrap_or(-1))
+        }
+    } else {
+        result
+    }
+}
+
+/// Stops the shell and everything it spawned: the Unix process group (the
+/// child was started as its own group leader) or the Windows process tree
+/// (`cmd /C` children such as a dev server survive killing cmd.exe alone).
+fn terminate_process_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let process_group = format!("-{}", child.id());
+        let _ = Command::new("kill")
+            .arg("-TERM")
+            .arg(&process_group)
+            .status();
+        thread::sleep(Duration::from_millis(500));
+        let _ = Command::new("kill")
+            .arg("-KILL")
+            .arg(&process_group)
+            .status();
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID"])
+            .arg(child.id().to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 pub(crate) fn resolve_tool_path(working_dir: &Path, path_str: &str) -> PathBuf {
     let path = Path::new(path_str);
     if path.is_absolute() {
@@ -261,7 +480,7 @@ pub(crate) fn execute_tool_call(working_dir: &mut PathBuf, name: &str, arguments
                 return "error: missing path argument".to_owned();
             };
             let target = resolve_tool_path(working_dir, path_str);
-            match std::fs::read_to_string(&target) {
+            match read_file_capped(&target) {
                 Ok(content) => content,
                 Err(e) => format!("error: {e}"),
             }
@@ -320,103 +539,12 @@ pub(crate) fn execute_tool_call(working_dir: &mut PathBuf, name: &str, arguments
             let Some(cmd) = args["command"].as_str() else {
                 return "error: missing command argument".to_owned();
             };
-            let cmd = cmd.to_owned();
             let cmd_dir = if let Some(dir_str) = args["working_dir"].as_str() {
                 resolve_tool_path(working_dir, dir_str)
             } else {
                 working_dir.clone()
             };
-            let (shell_program, shell_flag) = platform_shell();
-            let mut command = std::process::Command::new(shell_program);
-            command
-                .arg(shell_flag)
-                .arg(&cmd)
-                .current_dir(&cmd_dir)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt as _;
-                command.process_group(0);
-            }
-            let mut child = match command.spawn() {
-                Ok(child) => child,
-                Err(e) => return format!("error: {e}"),
-            };
-            let started_at = Instant::now();
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => match child.wait_with_output() {
-                        Ok(out) => {
-                            let stdout_str = String::from_utf8_lossy(&out.stdout);
-                            let stderr_str = String::from_utf8_lossy(&out.stderr);
-                            let mut result = String::new();
-                            if !stdout_str.is_empty() {
-                                result.push_str(stdout_str.trim_end());
-                            }
-                            if !stderr_str.is_empty() {
-                                if !result.is_empty() {
-                                    result.push('\n');
-                                }
-                                result.push_str(&format!("[stderr] {}", stderr_str.trim_end()));
-                            }
-                            if result.len() > 4000 {
-                                truncate_on_char_boundary(&mut result, 4000);
-                                result.push_str("\n...[truncated]");
-                            }
-                            if result.is_empty() {
-                                if out.status.success() {
-                                    return "ok (no output)".to_owned();
-                                } else {
-                                    return format!(
-                                        "exited with code {}",
-                                        out.status.code().unwrap_or(-1)
-                                    );
-                                }
-                            } else {
-                                return result;
-                            }
-                        }
-                        Err(e) => return format!("error: {e}"),
-                    },
-                    Ok(None) => {
-                        if started_at.elapsed() >= Duration::from_secs(120) {
-                            #[cfg(unix)]
-                            {
-                                let process_group = format!("-{}", child.id());
-                                let _ = std::process::Command::new("kill")
-                                    .arg("-TERM")
-                                    .arg(&process_group)
-                                    .status();
-                                thread::sleep(Duration::from_millis(500));
-                                let _ = std::process::Command::new("kill")
-                                    .arg("-KILL")
-                                    .arg(&process_group)
-                                    .status();
-                            }
-                            #[cfg(windows)]
-                            {
-                                // `cmd /C` spawns child processes (e.g. a dev
-                                // server) that survive killing cmd.exe alone, so
-                                // `child.kill()` would orphan them. `taskkill /T`
-                                // terminates the whole process tree rooted at the
-                                // shell PID, mirroring the Unix process-group kill.
-                                let _ = std::process::Command::new("taskkill")
-                                    .args(["/T", "/F", "/PID"])
-                                    .arg(child.id().to_string())
-                                    .stdout(std::process::Stdio::null())
-                                    .stderr(std::process::Stdio::null())
-                                    .status();
-                            }
-                            let _ = child.kill();
-                            let _ = child.wait();
-                            return "error: command exceeded the 120-second execution limit and was stopped".to_owned();
-                        }
-                        thread::sleep(Duration::from_millis(100));
-                    }
-                    Err(e) => return format!("error: {e}"),
-                }
-            }
+            run_shell_command(cmd, &cmd_dir, RUN_COMMAND_TIMEOUT)
         }
         unknown => format!("error: unknown tool: {unknown}"),
     }
@@ -580,6 +708,157 @@ mod tests {
             execute_tool_call(&mut working_dir, "write_file", "{\"content\":\"x\"}"),
             "error: missing path argument"
         );
+    }
+
+    #[test]
+    fn read_file_output_is_capped_with_a_truncation_marker() {
+        let test_dir = TestDir::create("read-cap");
+        let mut working_dir = test_dir.path.clone();
+        fs::write(
+            test_dir.path.join("big.log"),
+            "x".repeat(READ_FILE_OUTPUT_CAP_BYTES + 5_000),
+        )
+        .unwrap();
+
+        let result = execute_tool_call(&mut working_dir, "read_file", "{\"path\":\"big.log\"}");
+
+        assert!(
+            result.ends_with("...[truncated: showing the first 200000 of 205000 bytes]"),
+            "{}",
+            &result[result.len().saturating_sub(80)..]
+        );
+        assert!(result.len() < READ_FILE_OUTPUT_CAP_BYTES + 200);
+    }
+
+    #[test]
+    fn read_file_refuses_anything_but_a_regular_file() {
+        let test_dir = TestDir::create("read-dir");
+        let mut working_dir = test_dir.path.clone();
+        fs::create_dir(test_dir.path.join("src")).unwrap();
+
+        let result = execute_tool_call(&mut working_dir, "read_file", "{\"path\":\"src\"}");
+
+        assert!(
+            result.starts_with("error: not a regular file: "),
+            "{result}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_file_refuses_device_files_instead_of_reading_them_forever() {
+        let mut working_dir = std::env::temp_dir();
+
+        // `/dev/zero` never reaches EOF; reading it whole would never return.
+        let result = execute_tool_call(&mut working_dir, "read_file", "{\"path\":\"/dev/zero\"}");
+
+        assert!(
+            result.starts_with("error: not a regular file: "),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn read_file_rejects_binary_content() {
+        let test_dir = TestDir::create("read-binary");
+        let mut working_dir = test_dir.path.clone();
+        fs::write(test_dir.path.join("blob.bin"), [0xff, 0xfe, 0x00, b'A']).unwrap();
+
+        let result = execute_tool_call(&mut working_dir, "read_file", "{\"path\":\"blob.bin\"}");
+
+        assert!(
+            result.starts_with("error: not valid UTF-8 text: "),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn read_file_cap_cuts_cleanly_through_a_multibyte_character() {
+        let test_dir = TestDir::create("read-multibyte");
+        let mut working_dir = test_dir.path.clone();
+        // Two bytes per character, so the cap lands between the bytes of one.
+        fs::write(
+            test_dir.path.join("accents.txt"),
+            "\u{e9}".repeat(READ_FILE_OUTPUT_CAP_BYTES / 2 + 1),
+        )
+        .unwrap();
+
+        let result = execute_tool_call(&mut working_dir, "read_file", "{\"path\":\"accents.txt\"}");
+
+        assert!(
+            result.ends_with("...[truncated: showing the first 200000 of 200002 bytes]"),
+            "{}",
+            &result[result.len().saturating_sub(80)..]
+        );
+        assert!(
+            !result.contains('\u{fffd}'),
+            "a cut through a character must not leave a replacement character"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_shell_command_returns_when_a_background_process_keeps_the_pipe_open() {
+        let test_dir = TestDir::create("background");
+
+        // The shell exits at once; the backgrounded sleep inherits stdout and
+        // holds the pipe open well past the drain grace period.
+        let started = Instant::now();
+        let result = run_shell_command(
+            "sleep 5 & echo started",
+            &test_dir.path,
+            Duration::from_secs(30),
+        );
+
+        assert!(started.elapsed() < Duration::from_secs(5), "{result}");
+        assert!(result.starts_with("started"), "{result}");
+        assert!(
+            result.contains("[note] a background process started by this command is still running"),
+            "{result}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_shell_command_drains_output_larger_than_the_pipe_buffer() {
+        let test_dir = TestDir::create("big-output");
+
+        // 300 KiB is far past the 64 KiB kernel pipe buffer. Before stdout was
+        // drained concurrently, the child blocked on write() forever and the
+        // call surfaced as a bogus execution-limit error.
+        let result = run_shell_command(
+            "head -c 300000 /dev/zero | tr '\\0' a",
+            &test_dir.path,
+            Duration::from_secs(10),
+        );
+
+        assert!(!result.starts_with("error:"), "{result}");
+        assert!(result.ends_with("...[truncated]"), "{result}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_shell_command_reports_the_execution_limit_on_timeout() {
+        let test_dir = TestDir::create("timeout");
+
+        let result = run_shell_command("sleep 5", &test_dir.path, Duration::from_secs(1));
+
+        assert_eq!(
+            result,
+            "error: command exceeded the 1-second execution limit and was stopped"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_shell_command_closes_stdin_so_prompting_commands_fail_fast() {
+        let test_dir = TestDir::create("stdin");
+
+        // `cat` with an open terminal stdin would wait for input until the
+        // execution limit; with stdin closed it sees EOF and exits at once.
+        let result = run_shell_command("cat", &test_dir.path, Duration::from_secs(5));
+
+        assert_eq!(result, "ok (no output)");
     }
 
     #[cfg(unix)]

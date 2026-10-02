@@ -10,8 +10,123 @@ All notable RaptorCode changes will be documented in this file.
 
 ### Security
 
+- **Tool policy: wrapper options, program paths, and `NAME=value` prefixes
+  no longer confuse the shell check.** Each wrapper skips its own options
+  (and their values) before the inner command is read, programs are matched
+  by basename, leading assignments are dropped, `su -c` counts as
+  privileged, a shell fed from stdin asks for confirmation, wrapper nesting
+  is bounded at 16, and quoted redirect / `dd of=` targets are unquoted
+  before the device check. `setsid`, `stdbuf`, `ionice`, `chrt`, `taskset`,
+  `unshare`, `flock`, and `busybox` are recognized as wrappers. Comment and
+  shebang lines, `bash --version`, and `command -v` stay allowed
+  (2026-10-02).
+- **Credentials file is tightened before the key is written.** The mode (or
+  Windows ACL) is applied on the open handle before `write_all`, so
+  rewriting an existing looser file never exposes the new key (2026-10-02).
+- **Tool policy: shell wrappers can no longer hide a denied command.**
+  `bash -c "rm -rf /"`, `sh -lc '...'`, `nohup`, `timeout`, `env`, `eval`,
+  and `exec` were judged by their harmless first token and allowed. The
+  policy now evaluates the wrapped command (including `;`/`&&` inside the
+  quoted string) and strips unmatched quotes from split words
+  (2026-10-02).
+- **Credentials file is owner-only from creation.** `~/.raptor/.credentials`
+  is opened with mode `0600` instead of written and chmodded afterwards,
+  closing a umask-dependent window where the API key was world-readable; an
+  existing looser file is tightened (2026-10-02).
 - Updated `rustls` from 0.23.43 to 0.23.45 and `rustls-webpki` from 0.103.13
   to 0.103.15 to resolve RUSTSEC-2026-0285 (2026-09-26).
+
+### Fixed
+
+- **`read_file` reads regular files only.** Directories, FIFOs, and device
+  files are refused up front instead of being read whole; at most the cap
+  is read, binary content is refused, and the cap cuts cleanly through a
+  multi-byte character (2026-10-02).
+- **`run_command` returns when the shell exits** even if a backgrounded
+  child keeps the output pipe open: after a 2-second grace the captured
+  output is returned with a note instead of waiting for the execution limit
+  (2026-10-02).
+- **Compaction with a window made only of tool results** now walks back to
+  the assistant turn that issued them instead of keeping the whole history
+  (2026-10-02).
+- `raptor task cleanup` no longer names the removed `completed` status in
+  its error message.
+- The startup banner and `raptor tui` reported "DeepSeek API key: missing"
+  when the key was saved in `~/.raptor/.credentials` rather than exported as
+  `DEEPSEEK_API_KEY`; both now resolve the key the same way the REPL does
+  (2026-10-02).
+- The post-swarm summary printed each agent's markdown answer with its raw
+  newlines, breaking the indented per-agent layout; summaries are now
+  flattened to one line (2026-10-02).
+- **`run_command` no longer reports a false 120-second timeout on verbose
+  commands.** stdout/stderr were not read until the child exited, so any
+  output beyond the 64 KiB kernel pipe buffer (a `cargo build`, an
+  `npm install`) blocked the child forever. Both pipes are now drained
+  concurrently, and stdin is closed so a prompting command fails fast
+  instead of hanging (2026-10-02).
+- **Agent-history compaction can no longer wedge a session.** When no user
+  turn fell inside the retained window, compaction could open the retained
+  history on an orphaned `tool` message, which the API rejects on every
+  later request. The retained tail now always opens on a user or assistant
+  turn (2026-10-02).
+- `read_file` tool output is capped at 200,000 bytes with an explicit
+  truncation marker so one large file cannot flood the context window.
+- The model's narration before a tool call ("Creating the file now…") is
+  kept in history and shown in non-streaming agent mode instead of being
+  dropped.
+- `/api` → "Show current API Key" masked the key by byte offset, a latent
+  panic on multi-byte input, and still leaked twelve key characters into
+  scrollback. It now reports only whether a key is configured and where it
+  is saved, never any part of the key, which also resolves CodeQL's
+  cleartext-logging alert (2026-10-02).
+- Interactive menus end on an input read error instead of spinning in raw
+  mode.
+
+### Documentation
+
+- Added `docs/architecture-review-2026-10-02.md`: full-workspace
+  architecture, SOLID, clean-code, dependency, and test review with a
+  ranked, sequenced refactor plan (2026-10-02).
+
+### Changed
+
+- **One shared agent loop.** The interactive REPL and the live-swarm workers
+  run the same `agent_loop` (policy check before every tool execution, tool
+  results fed back, context-budget compaction, 100-step limit); only the
+  terminal/dashboard adapters differ. Covered by nine scripted-provider tests
+  (2026-10-02).
+- **Provider trait completed.** `Provider` carries the streaming, agent-step,
+  and model-listing operations the product runs on; catalog entries no longer
+  pretend to be executors. The CLI holds `&dyn Provider` (2026-10-02).
+- **Typed lifecycle.** Swarm and task statuses and agent message roles are
+  enums (`SwarmStatus`, `TaskStatus`, `AgentMessageRole`); unknown persisted
+  statuses are rejected at read time; the never-written `completed` task
+  status is gone (2026-10-02).
+- **Shared validators.** Identifier rules and the key/value escape codec live
+  once in `raptor-core` instead of six copies across four crates; `raptor-store`
+  is split into one module per store; `CliError` converts lower-layer errors
+  through `From` impls instead of 79 hand-written closures; `raptor-cli`
+  modules use explicit imports and an explicit public API (2026-10-02).
+- Session handover history moved to `docs/session-log.md`; `CONTINUE_ON_THIS.md`
+  is a short current-state file (2026-10-02).
+
+### Dependencies
+
+- Restored ratatui's `layout-cache` feature, which the 0.30 bump's
+  `default-features = false` had silently dropped (2026-10-02).
+- ratatui 0.26 → 0.30 and crossterm 0.27 → 0.29 (terminal UI unchanged);
+  removes the unmaintained `paste` advisory ignore and two duplicate crate
+  versions. Workspace `rust-version` raised to 1.88, now built in CI
+  (2026-10-02).
+
+### CI
+
+- The `msrv` job sets `RUSTUP_TOOLCHAIN=1.88` so `rust-toolchain.toml`
+  (1.95.0) no longer overrides the toolchain under test; the
+  `rust-version = "1.88"` claim is now genuinely checked (2026-10-02).
+- `--locked` on every CI cargo invocation, an `msrv` job, and every GitHub
+  Action pinned to a verified commit SHA (closes the eleven
+  `actions/unpinned-tag` code-scanning alerts) (2026-10-02).
 
 ## v0.6.5 - 2026-08-17
 
