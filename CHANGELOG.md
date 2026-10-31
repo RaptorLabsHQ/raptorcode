@@ -10,9 +10,11 @@ All notable RaptorCode changes will be documented in this file.
 
 ### Changed
 
-- **README opens with a visual hero.** The TUI's block-letter banner, the SVG
-  icon, status badges, quick links, an at-a-glance feature grid and a diagram
-  of how a swarm run flows into review, diff, test and merge (2026-10-31).
+- **README opens with the ASCII banner in colour.** The TUI's block-letter
+  RAPTOR CODE art is rendered cell-by-cell as `assets/raptorcode-banner.svg`
+  (crimson, red, white on black), followed by status badges, quick links, an
+  at-a-glance feature grid and a diagram of how a swarm run flows into review,
+  diff and test (2026-10-31).
 - **CodeQL moved to GitHub's default code-scanning setup.** The advanced
   `codeql.yml` workflow is removed: on the public repository GitHub runs CodeQL
   (Rust and Actions) through default setup on pushes, pull requests and a
