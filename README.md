@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="RAPTOR CODE — the RaptorCode ASCII banner in crimson, red and black" width="700">
+  <img src="assets/banner-ascii.svg" alt="RAPTOR CODE — the RaptorCode ASCII banner in crimson, red and black" width="640">
 </p>
 
 <h3 align="center">Agentic software engineering at predator speed.</h3>

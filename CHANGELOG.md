@@ -11,7 +11,7 @@ All notable RaptorCode changes will be documented in this file.
 ### Changed
 
 - **README opens with the ASCII banner in colour.** The TUI's block-letter
-  RAPTOR CODE art is rendered as `assets/banner.svg` with the real glyphs —
+  RAPTOR CODE art is drawn cell-for-cell as `assets/banner-ascii.svg` —
   RAPTOR in crimson, CODE in red, on black — followed by status badges, quick links, an
   at-a-glance feature grid and a diagram of how a swarm run flows into review,
   diff and test (2026-10-31).
