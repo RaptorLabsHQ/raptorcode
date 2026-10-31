@@ -14,7 +14,6 @@ use raptor_tui::{run_swarm_dashboard, SwarmDashboardState, SwarmUiEvent};
 use crate::agent_loop::{self, AgentLoopEnd, AgentLoopEvent, AgentLoopUi, ToolOutcome};
 use crate::agent_tools::build_agent_tools;
 use crate::context_budget;
-use crate::prompt_guard::PromptGuard;
 use crate::tool_policy::{ConfirmationRequest, ToolPolicy};
 use crate::CliError;
 
@@ -272,7 +271,6 @@ fn run_swarm_agent_worker(config: SwarmWorkerConfig) -> SwarmAgentOutcome {
     };
 
     let tools = build_agent_tools();
-    let guard = PromptGuard::from_prompts();
     let workspace_root = config
         .worktree
         .canonicalize()
@@ -330,7 +328,7 @@ fn run_swarm_agent_worker(config: SwarmWorkerConfig) -> SwarmAgentOutcome {
                 });
             }
             outcome.completed = true;
-            outcome.summary = truncate_summary(&guard.redact(&content));
+            outcome.summary = truncate_summary(&content);
             let _ = config.events.send(SwarmUiEvent::AgentFinished {
                 agent: config.agent_index,
                 summary: outcome.summary.clone(),
