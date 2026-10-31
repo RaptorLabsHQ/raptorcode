@@ -10,6 +10,11 @@ All notable RaptorCode changes will be documented in this file.
 
 ### Changed
 
+- **CodeQL moved to GitHub's default code-scanning setup.** The advanced
+  `codeql.yml` workflow is removed: on the public repository GitHub runs CodeQL
+  (Rust and Actions) through default setup on pushes, pull requests and a
+  weekly schedule, and an advanced workflow cannot upload results while default
+  setup is enabled (2026-10-31).
 - **RaptorCode is open source again.** Relicensed under `MIT OR Apache-2.0`
   (© 2026 Bob Vasic; `LICENSE-MIT` and `LICENSE-APACHE` replace the proprietary
   EULA) and development moved to https://github.com/RaptorLabsHQ/raptorcode.
