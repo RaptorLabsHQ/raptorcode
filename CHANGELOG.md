@@ -10,6 +10,13 @@ All notable RaptorCode changes will be documented in this file.
 
 ### Security
 
+- Updated `rustls` from 0.23.45 to 0.23.46 (RUSTSEC-2026-0346 to -0349),
+  `rustls-webpki` from 0.103.15 to 0.103.16 (RUSTSEC-2026-0382),
+  `webpki-roots` from 1.0.9 to 1.0.11 (RUSTSEC-2026-0381), `quinn-proto`
+  from 0.11.16 to 0.11.19 (RUSTSEC-2026-0338 to -0342; present in the lock
+  file only, never compiled) and `tokio` from 1.52.3 to 1.54.1
+  (RUSTSEC-2026-0386, unsound `AsyncFd` constructors). `cargo deny check`
+  and `cargo audit` are clean again (2026-10-31).
 - **Tool policy: wrapper options, program paths, and `NAME=value` prefixes
   no longer confuse the shell check.** Each wrapper skips its own options
   (and their values) before the inner command is read, programs are matched
