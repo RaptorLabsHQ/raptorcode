@@ -11,11 +11,10 @@ yanked = "deny"
 
 [licenses]
 version = 2
-# Dependency licenses must come from this permissive allow-list. The first
-# entry is the workspace's own proprietary license (see LICENSE); everything
-# else is the vetted set actually present in the dependency tree today.
+# Dependency licenses must come from this permissive allow-list: the vetted
+# set actually present in the dependency tree today (the workspace itself is
+# MIT OR Apache-2.0).
 allow = [
-    "LicenseRef-RaptorLabs-Proprietary",
     "MIT",
     "Apache-2.0",
     "ISC",

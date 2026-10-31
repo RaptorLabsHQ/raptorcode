@@ -48,7 +48,14 @@ jobs:
       - name: Gate — functional commits since last tag?
         id: gate
         shell: bash
+        env:
+          HAS_RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN != '' }}
         run: |
+          if [ "$HAS_RELEASE_TOKEN" != "true" ]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "RELEASE_TOKEN is not configured — release cut skipped. Add a fine-grained PAT (Contents: write) as the RELEASE_TOKEN secret; the built-in token cannot trigger release.yml." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
           SUBJECTS=$(git log ${LAST_TAG:+$LAST_TAG..HEAD} --pretty=format:'%s')
           echo "last tag: ${LAST_TAG:-<none>}"

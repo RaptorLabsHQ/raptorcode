@@ -1,37 +1,49 @@
 # Security Policy
 
-Date: 2026-08-16
+Date: 2026-10-31
 Author: Bob Vasic
 Company: RaptorLabs.dev
 
-RaptorCode is a proprietary, closed-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
-
-V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emulator replacement.
+RaptorCode is an open-source, Rust-native multi-agent coding terminal that runs
+AI coding agents safely in isolated git worktrees with developer supervision.
+It is local-first: the agent runs on your machine, under your consent, with
+your own model API key.
 
 ## Supported Versions
 
-The latest release is `v0.6.3`, available for Linux, macOS, and Windows. Security reports should target the latest release or the current `main` branch. Only the latest release line is supported.
+Security fixes target the current `main` branch and the latest release
+(`v0.6.5` at the time of writing). Only the latest release line is supported.
 
 ## Reporting A Vulnerability
 
-Do not disclose exploitable vulnerabilities publicly before maintainers have had time to respond.
+Please do not open public GitHub issues for exploitable vulnerabilities.
 
-Report security issues privately by email to **security@raptorlabs.dev**. Do not open public GitHub issues for exploitable vulnerabilities. Include a description, affected version or commit, and reproduction steps; we aim to acknowledge within a few business days.
+- Preferred: open a private report through GitHub's
+  [private vulnerability reporting](https://github.com/RaptorLabsHQ/raptorcode/security/advisories/new)
+  for this repository.
+- Alternatively, email **security@raptorlabs.dev**.
+
+Include a description, the affected version or commit, and reproduction steps.
+We aim to acknowledge reports within a few business days and to coordinate
+disclosure with you once a fix is available.
 
 ## Security Priorities
 
 - Isolate agent work in dedicated git worktrees.
-- Require developer supervision for commit, merge, push, and destructive actions.
-- Validate filesystem paths before use.
+- Require developer consent and supervision for tool execution, commits,
+  merges, pushes, and destructive actions.
+- Validate filesystem paths and keep writes inside the worktree boundary.
 - Avoid shell injection and unsafe command construction.
-- Keep dependency usage minimal and auditable.
+- Keep dependency usage minimal and auditable (`cargo deny`, `cargo audit`,
+  and CodeQL run in CI).
 - Preserve clear logs for security-relevant operations.
 
-## Out Of Scope For Early Development
+See [`docs/security.md`](docs/security.md) for the full security design.
 
-- Hosted execution infrastructure.
-- Remote agent sandboxing guarantees.
-- Enterprise identity provider integrations.
-- Formal compliance certification.
-- Policy enforcement hooks.
-- Additional execution providers beyond DeepSeek.
+## Out Of Scope
+
+- Hosted execution infrastructure and remote sandboxing guarantees.
+- OS-level isolation (namespaces, seccomp, landlock) of the local agent; the
+  userspace tool policy is a backstop, not a sandbox.
+- Enterprise identity provider integrations and formal compliance
+  certification.

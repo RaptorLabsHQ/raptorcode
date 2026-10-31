@@ -1,5 +1,4 @@
-# Dependency hygiene (AGENTS.md security standards: dependency hygiene is an
-# ISO 27001-style control). Weekly batched updates keep the surface small.
+# Dependency hygiene: weekly batched updates keep the surface small.
 version: 2
 updates:
   - package-ecosystem: cargo

@@ -4,16 +4,15 @@ Date: 2026-05-18
 Author: Bob Vasic
 Company: RaptorLabs.dev
 
-RaptorCode is a proprietary, closed-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
+RaptorCode is an open-source, Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
 
 V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emulator replacement.
 
 ## Repository Orientation
 
 - `README.md`: short project summary.
-- `AGENTS.md`: operating instructions for coding agents working in this repository.
 - `Cargo.toml`: Rust workspace manifest.
-- `LICENSE`: RaptorLabs Proprietary EULA (closed-source).
+- `LICENSE-MIT` and `LICENSE-APACHE`: RaptorCode is dual-licensed `MIT OR Apache-2.0`.
 - `THIRD-PARTY-NOTICES.md`: attribution for bundled permissive open-source dependencies.
 - `ROADMAP.md`: V1 milestones and non-goals.
 - `SECURITY.md`: vulnerability reporting and security priorities.

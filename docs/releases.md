@@ -89,7 +89,7 @@ Do not run live DeepSeek commands during release verification unless `DEEPSEEK_A
 
 ### Tagging (fallback)
 
-Only tag after all verification passes and BOB explicitly approves tagging.
+Only tag after all verification passes and the maintainer explicitly approves tagging.
 
 ```bash
 git status -sb
@@ -109,22 +109,21 @@ as the GitHub Release body.
 ## Release History
 
 - `v0.1.0` (2026-05-26) — initial MVP, published under `MIT OR Apache-2.0`.
-- `v0.2.0` (2026-06-16) — interactive REPL, agentic mode, live swarm, prompt IP
-  defense layers, and the automated release pipeline. Published under
+- `v0.2.0` (2026-06-16) — interactive REPL, agentic mode, live swarm, and the
+  automated release pipeline. Published under
   `MIT OR Apache-2.0`.
-- After v0.2.0 — RaptorCode is relicensed as proprietary, closed-source software
-  (RaptorLabs Proprietary EULA, see `LICENSE`). Distribution moves to official
-  signed binaries for Linux, macOS, and Windows from https://raptorlabs.dev. The
-  release pipeline carries the proprietary `project_license` in the AppStream
-  metainfo; before public GA, wire third-party license attribution
-  (`THIRD-PARTY-NOTICES.md`) and a `cargo deny check licenses` gate into
-  `scripts/release.sh`.
+- v0.3.0 through v0.6.5 — published under a proprietary license, with official
+  binaries for Linux, macOS, and Windows distributed from https://raptorlabs.dev.
+- 2026-10-31 — RaptorCode is open source again: relicensed `MIT OR Apache-2.0`
+  (see `LICENSE-MIT` and `LICENSE-APACHE`), the prompt obfuscation and output
+  redaction layers removed, and development moved to
+  https://github.com/RaptorLabsHQ/raptorcode. The `cargo deny check` license
+  gate runs in `security.yml`.
 - `v0.3.0` (2026-06-25) — first cross-platform release: native binaries for
   Linux (`.deb`), macOS (universal arm64+x86_64 `tar.gz`), and Windows
   (`x86_64 .zip`), each with a SHA-256 checksum, built on native CI runners via
   `.github/workflows/release.yml` and published to the GitHub Release. Adds
   rotating prompt quotes, provider-neutral interactive status, a friendly
   context/cache usage line, and a cross-platform `run_command` shell
-  (`sh -c` on Unix/macOS, `cmd /C` on Windows). Proprietary (RaptorLabs EULA);
-  macOS/Windows are unsigned beta builds (notarization / Azure Trusted Signing
-  pending).
+  (`sh -c` on Unix/macOS, `cmd /C` on Windows). macOS/Windows builds are
+  unsigned (checksum-verified).

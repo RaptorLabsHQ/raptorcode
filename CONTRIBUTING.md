@@ -1,41 +1,78 @@
 # Contributing To RaptorCode
 
-Date: 2026-05-15
+Date: 2026-10-31
 Author: Bob Vasic
 Company: RaptorLabs.dev
 
-RaptorCode is a proprietary, closed-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
+RaptorCode is an open-source, Rust-native multi-agent coding terminal that runs
+AI coding agents safely in isolated git worktrees with developer supervision.
+Contributions are welcome: bug reports, fixes, docs, tests, and features that
+fit the product posture described in [`ROADMAP.md`](ROADMAP.md).
 
-V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emulator replacement.
+## Before You Start
 
-## Contribution Standards
+- Search the issues first; open one for anything larger than a small fix so the
+  approach can be agreed before you invest time.
+- Good first areas: packaging (Homebrew, AUR, Nix, Scoop, winget), provider
+  implementations behind the existing `Provider` trait, TUI polish, and docs.
 
-- Keep changes small, reviewable, and focused.
-- Prefer safe Rust and explicit error handling.
-- Avoid new dependencies unless they clearly reduce risk or complexity.
-- Update relevant documentation when behavior changes.
-- Preserve developer control over commit, merge, push, and destructive actions.
+## Development Setup
 
-## Development Expectations
+Prerequisites: Git, and Rust 1.88 or newer with Cargo (the repository pins
+1.95.0 through `rust-toolchain.toml`, which rustup picks up automatically).
 
-- Run formatting, linting, and tests when Rust code exists.
-- Document security-sensitive assumptions.
-- Do not commit generated files unless they are required for the project.
-- Do not include secrets, tokens, local credentials, or machine-specific paths.
+```bash
+git clone https://github.com/RaptorLabsHQ/raptorcode.git
+cd raptorcode
+cargo build --workspace
+cargo run -p raptor-cli --bin raptor -- --help
+```
+
+Run the same checks CI runs before you open a pull request:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo deny check      # cargo install cargo-deny
+cargo audit           # cargo install cargo-audit
+```
+
+## Pull Requests
+
+- Keep changes small, reviewable, and focused on one thing.
+- Use conventional commit subjects (`feat:`, `fix:`, `perf:`, `refactor:`,
+  `docs:`, `test:`, `ci:`, `chore:`). Releases are cut automatically from
+  `feat`/`fix`/`perf`/`refactor` commits that land on `main`, so the subject
+  decides whether a release happens. Never hand-roll versions or tags.
+- Add or update tests for behavior changes; keep the suite green on Linux,
+  macOS, and Windows (all three are blocking CI gates).
+- Update the relevant documentation under `docs/` and add a line to the
+  `Unreleased` section of `CHANGELOG.md`.
+- Preserve developer control over commit, merge, push, and destructive actions:
+  nothing the agent does may bypass the consent prompts, the tool policy, or the
+  supervised merge path.
+
+## Code Standards
+
+- Safe Rust only; `unsafe` needs a written justification in the PR.
+- Explicit error handling with `Result` and typed errors; `unwrap` is denied by
+  the workspace lints.
+- Treat model output and user-provided identifiers as untrusted input.
+- Avoid new dependencies unless they clearly reduce risk or complexity, keep
+  them permissively licensed (MIT, Apache-2.0, BSD, ISC, or equivalent;
+  `cargo deny check` enforces the allow-list), and record direct dependencies
+  in `THIRD-PARTY-NOTICES.md`.
+- Never commit secrets, tokens, local credentials, or machine-specific paths.
+
+## Security Issues
+
+Do not open public issues for exploitable vulnerabilities; follow
+[`SECURITY.md`](SECURITY.md).
 
 ## Licensing
 
-RaptorCode is proprietary, closed-source software (see `LICENSE`). This is a
-private, access-controlled repository; it does not accept public/external
-contributions. Internal contributions by authorized RaptorLabs developers are
-made as work-for-hire and assigned to RaptorLabs.dev, which owns all rights in
-the resulting code. Do not introduce any code, dependency, or asset under a
-copyleft license (GPL/LGPL/AGPL/MPL); only permissive licenses (MIT, Apache-2.0,
-BSD, ISC, and equivalent) are acceptable for third-party dependencies, and all
-such dependencies must be recorded in `THIRD-PARTY-NOTICES.md`.
-
-## Current Project State
-
-The repository includes a Rust workspace and CLI binary named `raptor`. The v0.1 release candidate supports a local-first supervised workflow with DeepSeek chat, role worktrees, planning artifacts, implementation proposal artifacts, read-only review/diff inspection, supervised tests, explicit merge control, and a simple read-only TUI dashboard.
-
-DeepSeek is the only implemented execution provider in v0.1. Do not add Phase 2 providers, MCP, cloud features, desktop UI, team features, plugin systems, marketplace features, policy enforcement hooks, or enterprise policy systems before BOB explicitly reopens that scope.
+RaptorCode is dual-licensed under the MIT license and the Apache License 2.0
+(`MIT OR Apache-2.0`). Unless you explicitly state otherwise, any contribution
+intentionally submitted for inclusion in RaptorCode by you shall be dual
+licensed as above, without any additional terms or conditions.

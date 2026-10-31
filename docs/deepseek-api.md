@@ -78,7 +78,7 @@ When DeepSeek returns usage telemetry, RaptorCode surfaces it in chat responses 
 - `prompt_cache_miss_tokens`
 - `total_tokens`
 
-This lets BOB verify whether repeated prompt prefixes are hitting cache and whether requests are cost-effective. Streamed requests set `include_usage` so DeepSeek can send the authoritative final usage block before `[DONE]`.
+This lets you verify whether repeated prompt prefixes are hitting cache and whether requests are cost-effective. Streamed requests set `include_usage` so DeepSeek can send the authoritative final usage block before `[DONE]`.
 
 ## User Isolation
 
