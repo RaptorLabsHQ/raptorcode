@@ -36,7 +36,6 @@ use raptor_tools::{
     detect_test_command, explicit_test_command, run_test_command, TestCommandOutput,
 };
 
-use crate::prompt_guard::PromptGuard;
 use crate::render::{
     display_exit_code, display_optional, display_path_optional, push_changed_files_section,
     push_command_output_section, push_diff_section, strip_line_ending, task_status_allows_cleanup,
@@ -265,7 +264,6 @@ fn plan_swarm_agents(
         .default_model()
         .cloned()
         .ok_or_else(|| CliError::new("DeepSeek provider has no default model configured"))?;
-    let guard = PromptGuard::from_prompts();
     let mut failed_roles = Vec::new();
 
     for agent in &mut metadata.agents {
@@ -280,8 +278,7 @@ fn plan_swarm_agents(
         );
 
         match provider.complete(request) {
-            Ok(mut response) => {
-                response.content = guard.redact(&response.content);
+            Ok(response) => {
                 let plan_file_path = plan_file_path_for_agent(
                     repository_root.path(),
                     task_id.as_str(),
@@ -584,14 +581,13 @@ fn generate_swarm_implementation_proposal(
             CompletionMessage::user(prompt),
         ],
     );
-    let mut response = match provider.complete(request) {
+    let response = match provider.complete(request) {
         Ok(response) => response,
         Err(error) => {
             mark_swarm_role_implementation_failed(repository_root, metadata, agent_index)?;
             return Err(CliError::new(error.to_string()));
         }
     };
-    response.content = PromptGuard::from_prompts().redact(&response.content);
     let proposal_file_path =
         proposal_file_path_for_agent(repository_root, task_id, role, &agent.worktree_path)?;
     let proposal = render_swarm_implementation_proposal(task_id, role, &response);

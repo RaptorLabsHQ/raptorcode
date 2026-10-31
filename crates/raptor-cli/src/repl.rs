@@ -25,7 +25,6 @@ use raptor_tui::{
 use crate::agent_loop;
 use crate::agent_tools::build_agent_tools;
 use crate::context_budget::{self, ContextBudgetState};
-use crate::prompt_guard::{PromptGuard, StreamRedactor};
 use crate::render::{display_number, render_context_usage};
 use crate::tool_policy::{self, ConfirmationKind, ToolPolicy};
 use crate::{
@@ -140,7 +139,6 @@ pub fn run_interactive_chat(
     let tools = build_agent_tools();
     let mut agent_working_dir = current_dir.to_path_buf();
     let mut context_budget = ContextBudgetState::default();
-    let prompt_guard = PromptGuard::from_prompts();
     let mut agent_tool_policy = ToolPolicy::new(
         current_dir
             .canonicalize()
@@ -223,7 +221,7 @@ pub fn run_interactive_chat(
             if run_single_agent {
                 agent_history.push(AgentMessage::user(input.clone()));
 
-                let mut ui = ReplAgentUi::new(&prompt_guard, streaming_enabled);
+                let mut ui = ReplAgentUi::new(streaming_enabled);
                 let mut loop_context = agent_loop::AgentLoopContext {
                     budget: &mut context_budget,
                     model_id: &model_id,
@@ -245,7 +243,7 @@ pub fn run_interactive_chat(
                         if streamed {
                             println!("\n");
                         } else {
-                            println!("{}\n", prompt_guard.redact(&content));
+                            println!("{content}\n");
                         }
                         if let Some(usage) = usage.as_ref() {
                             let line = render_context_usage(usage);
@@ -300,19 +298,15 @@ pub fn run_interactive_chat(
             let response = if streaming_enabled {
                 print!("  {C_DIM}Streaming agent response...{C_RESET}\n\n");
                 std::io::stdout().flush().ok();
-                let mut redactor = StreamRedactor::new(&prompt_guard);
-                let response = provider.complete_streaming(request, &mut |delta| {
+                provider.complete_streaming(request, &mut |delta| {
                     if delta.reasoning_content.is_some() {
                         return;
                     }
                     if let Some(content) = delta.content {
-                        print!("{}", redactor.push(&content));
+                        print!("{content}");
                         std::io::stdout().flush().ok();
                     }
-                });
-                print!("{}", redactor.finish());
-                std::io::stdout().flush().ok();
-                response
+                })
             } else {
                 provider.complete(request)
             };
@@ -323,7 +317,7 @@ pub fn run_interactive_chat(
                     if streaming_enabled {
                         println!("\n");
                     } else {
-                        println!("{}\n", prompt_guard.redact(&content));
+                        println!("{content}\n");
                     }
                     if let Some(usage) = response.usage.as_ref() {
                         let line = render_context_usage(usage);
@@ -1109,20 +1103,16 @@ const STEP_LIMIT_MESSAGE: &str =
     "⏸  Step limit reached. All progress is saved — type **continue** to resume where I left off.";
 
 /// Terminal adapter for the shared agent loop: a spinner while the model
-/// thinks or a tool runs, streamed text through the prompt-leak redactor, and
-/// developer confirmations on stdin.
-struct ReplAgentUi<'a> {
-    prompt_guard: &'a PromptGuard,
-    redactor: Option<StreamRedactor<'a>>,
+/// thinks or a tool runs, streamed text printed as it arrives, and developer
+/// confirmations on stdin.
+struct ReplAgentUi {
     spinner: Option<Spinner>,
     streaming: bool,
 }
 
-impl<'a> ReplAgentUi<'a> {
-    fn new(prompt_guard: &'a PromptGuard, streaming: bool) -> Self {
+impl ReplAgentUi {
+    fn new(streaming: bool) -> Self {
         Self {
-            prompt_guard,
-            redactor: None,
             spinner: None,
             streaming,
         }
@@ -1135,7 +1125,7 @@ impl<'a> ReplAgentUi<'a> {
     }
 }
 
-impl agent_loop::AgentLoopUi for ReplAgentUi<'_> {
+impl agent_loop::AgentLoopUi for ReplAgentUi {
     fn on_event(&mut self, event: agent_loop::AgentLoopEvent) {
         use crate::agent_loop::{AgentLoopEvent, ToolOutcome};
 
@@ -1144,26 +1134,24 @@ impl agent_loop::AgentLoopUi for ReplAgentUi<'_> {
                 if self.streaming {
                     print!("  {C_DIM}Streaming agent response...{C_RESET}\n\n");
                     std::io::stdout().flush().ok();
-                    self.redactor = Some(StreamRedactor::new(self.prompt_guard));
                 } else {
                     self.spinner = Some(Spinner::start("Thinking..."));
                 }
             }
             AgentLoopEvent::ContentDelta(text) => {
-                if let Some(redactor) = self.redactor.as_mut() {
-                    print!("{}", redactor.push(&text));
+                if self.streaming {
+                    print!("{text}");
                     std::io::stdout().flush().ok();
                 }
             }
             AgentLoopEvent::StepFinished => {
-                if let Some(redactor) = self.redactor.take() {
-                    print!("{}", redactor.finish());
+                if self.streaming {
                     std::io::stdout().flush().ok();
                 }
                 self.stop_spinner();
             }
             AgentLoopEvent::Narration(text) => {
-                println!("{}\n", self.prompt_guard.redact(&text));
+                println!("{text}\n");
             }
             AgentLoopEvent::Usage(usage) => {
                 let line = render_context_usage(&usage);

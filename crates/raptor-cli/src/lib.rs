@@ -9,7 +9,6 @@ use std::path::Path;
 mod agent_loop;
 mod agent_tools;
 mod context_budget;
-mod prompt_guard;
 mod prompts;
 mod render;
 mod repl;
@@ -27,7 +26,6 @@ pub use task_commands::{
     list_tasks, merge_task, merge_task_execute, review_task, show_task, test_task,
 };
 
-use prompt_guard::PromptGuard;
 use raptor_agent::{AgentId, AgentRole, AgentSession, PermissionPolicy};
 use raptor_core::{project_description, version};
 use raptor_git::{inspect_repository_root, GitError};
@@ -841,8 +839,7 @@ pub fn chat_with_provider(message: &str, provider: &dyn Provider) -> Result<Stri
             CompletionMessage::user(message),
         ],
     );
-    let mut response = provider.complete(request)?;
-    response.content = PromptGuard::from_prompts().redact(&response.content);
+    let response = provider.complete(request)?;
 
     Ok(render_chat_response(&response))
 }
