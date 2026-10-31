@@ -1,18 +1,73 @@
-# RaptorCode
+<p align="center">
+  <img src="assets/raptorcode-icon.svg" alt="RaptorCode" width="140">
+</p>
 
-RaptorCode is an open-source, Rust-native multi-agent coding terminal that runs
-AI coding agents in isolated git worktrees with developer supervision. It is
-local-first: it runs on your own machine, with your own model API key, and
-every change an agent makes stays uncommitted in a worktree until you review,
-test, and merge it.
+<h1 align="center">RaptorCode</h1>
 
-- License: `MIT OR Apache-2.0` — see [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE)
-- Repository: https://github.com/RaptorLabsHQ/raptorcode
-- Website and prebuilt binaries: https://raptorlabs.dev
-- Current release: v0.6.5 — Linux, macOS, and Windows
+```text
+  ██████╗  █████╗ ██████╗ ████████╗ ██████╗ ██████╗
+  ██╔══██╗██╔══██╗██╔══██╗╚══██╔══╝██╔═══██╗██╔══██╗
+  ██████╔╝███████║██████╔╝   ██║   ██║   ██║██████╔╝
+  ██╔══██╗██╔══██║██╔═══╝    ██║   ██║   ██║██╔══██╗
+  ██║  ██║██║  ██║██║        ██║   ╚██████╔╝██║  ██║
+  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝    ╚═════╝ ╚═╝  ╚═╝
+   ██████╗  ██████╗ ██████╗ ███████╗
+  ██╔════╝ ██╔═══██╗██╔══██╗██╔════╝
+  ██║      ██║   ██║██║  ██║█████╗
+  ██║      ██║   ██║██║  ██║██╔══╝
+  ╚██████╗ ╚██████╔╝██████╔╝███████╗
+   ╚═════╝  ╚═════╝ ╚═════╝ ╚══════╝
+  by Raptor Labs  ·  raptorlabs.dev
+```
 
-RaptorCode is not a desktop app, a terminal emulator replacement, an enterprise
-policy platform, or an unsupervised developer replacement.
+<h3 align="center">Agentic software engineering at predator speed.</h3>
+
+<p align="center">
+  Open-source, Rust-native multi-agent coding terminal.<br>
+  Four specialist agents, each in its own git worktree, under your supervision — on your machine, with your own key.
+</p>
+
+<p align="center">
+  <a href="https://github.com/RaptorLabsHQ/raptorcode/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/RaptorLabsHQ/raptorcode/ci.yml?branch=main&label=ci&logo=github" alt="CI"></a>
+  <a href="https://github.com/RaptorLabsHQ/raptorcode/actions/workflows/security.yml"><img src="https://img.shields.io/github/actions/workflow/status/RaptorLabsHQ/raptorcode/security.yml?branch=main&label=cargo%20deny&logo=rust&logoColor=white" alt="cargo deny"></a>
+  <a href="https://github.com/RaptorLabsHQ/raptorcode/tags"><img src="https://img.shields.io/github/v/tag/RaptorLabsHQ/raptorcode?label=release&color=cc0000" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-444" alt="Linux, macOS, Windows">
+  <img src="https://img.shields.io/badge/rust-1.88%2B-orange?logo=rust&logoColor=white" alt="Rust 1.88+">
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue" alt="License: MIT OR Apache-2.0"></a>
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#what-it-does">Features</a> ·
+  <a href="#safety-model">Safety</a> ·
+  <a href="docs/architecture.md">Architecture</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
+
+---
+
+## At A Glance
+
+| | | |
+|:---:|:---:|:---:|
+| **Agentic REPL**<br>`raptor` plans, edits and runs commands with your consent | **Four-agent swarm**<br>frontend · backend · test · security, in parallel | **Worktree isolation**<br>every agent works in its own git worktree |
+| **Supervised review**<br>review → diff → test per worktree; `raptor merge --execute` for task worktrees, typed confirmation | **Deny-by-default tool policy**<br>catastrophic commands hard-denied, egress confirmed | **Local-first**<br>your machine, your DeepSeek key, nothing hosted |
+
+## How A Swarm Run Flows
+
+```text
+                         ┌─ frontend-agent ──▶ .raptor/worktrees/<task>/frontend-agent ─┐
+  raptor swarm run       ├─ backend-agent  ──▶ .raptor/worktrees/<task>/backend-agent  ─┤   raptor review <task> [role]
+  "Build a SaaS   ──▶    ├─ test-agent     ──▶ .raptor/worktrees/<task>/test-agent     ─┼─▶ raptor diff   <task> [role]  ──▶  you commit and merge what you accept
+   landing page"         └─ security-agent ──▶ .raptor/worktrees/<task>/security-agent ─┘   raptor test   <task>              from each role worktree, with git
+                               live dashboard · tool policy · consent prompts              nothing lands without you
+```
+
+Swarm output stays uncommitted inside the role worktrees until you have reviewed,
+diffed and tested it; you then commit and merge what you accept from each
+worktree with git. The single-task path (`raptor task`) adds a supervised
+`raptor merge <task-id> --execute` that only runs after a typed confirmation.
 
 ## What It Does
 
