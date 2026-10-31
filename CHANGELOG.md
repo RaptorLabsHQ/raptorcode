@@ -8,6 +8,27 @@ All notable RaptorCode changes will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **RaptorCode is open source again.** Relicensed under `MIT OR Apache-2.0`
+  (© 2026 Bob Vasic; `LICENSE-MIT` and `LICENSE-APACHE` replace the proprietary
+  EULA) and development moved to https://github.com/RaptorLabsHQ/raptorcode.
+  README, contributor docs, security policy, packaging metadata, the cargo-deny
+  license policy and `FUNDING.yml` (GitHub Sponsors) were updated to match
+  (2026-10-31).
+- **Prompt IP layers removed.** System prompts are plain constants in
+  `raptor-cli::prompts`: the confidentiality directive and canary token, the
+  `prompt_guard` output redaction (including the streaming redactor) and the
+  compile-time XOR obfuscation are gone, and the stale v0.1 wording in the
+  swarm planning and proposal prompts was dropped. Model output is rendered
+  unmodified (2026-10-31).
+- **Release pipeline reads its Cloudflare settings from repository
+  variables.** `release.yml` takes `CLOUDFLARE_ACCOUNT_ID` and
+  `R2_DOWNLOADS_BUCKET` from `vars` and skips the R2 sync when they are unset;
+  `auto-release.yml` skips the release cut when no `RELEASE_TOKEN` secret is
+  configured instead of pushing a half-release with the built-in token
+  (2026-10-31).
+
 ### Security
 
 - Updated `rustls` from 0.23.45 to 0.23.46 (RUSTSEC-2026-0346 to -0349),

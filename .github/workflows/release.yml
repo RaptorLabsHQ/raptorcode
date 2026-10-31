@@ -2,9 +2,9 @@ name: release
 
 # Cross-platform release builds. Produces native, tested binaries on each OS:
 #   - Linux   → signed .deb (scripts/package-deb.sh)
-#   - macOS   → universal (arm64 + x86_64) tar.gz  [unsigned beta; notarization
-#               can be added later via Apple creds]
-#   - Windows → x86_64 zip  [unsigned beta]
+#   - macOS   → universal (arm64 + x86_64) tar.gz  [unsigned; notarization
+#               can be added later]
+#   - Windows → x86_64 zip  [unsigned]
 # Artifacts are uploaded to the workflow run (workflow_dispatch on a branch) and
 # attached to a GitHub Release when running at a v* tag — whether the tag was
 # pushed by hand, by scripts/release.sh, or by auto-release.yml (the normal
@@ -104,7 +104,7 @@ jobs:
           merge-multiple: true
       # SLSA build-provenance: cryptographically attest that these exact
       # binaries were produced by this workflow at this commit. Consumers can
-      # verify with `gh attestation verify <file> --repo RaptorLabsHQ/raptor-code`.
+      # verify with `gh attestation verify <file> --repo RaptorLabsHQ/raptorcode`.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
@@ -122,15 +122,16 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: [redacted]
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      R2_BUCKET: ${{ vars.R2_DOWNLOADS_BUCKET }}
     steps:
       - name: Check Cloudflare credentials
         id: creds
         shell: bash
         run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ] || [ -z "$R2_BUCKET" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "> R2 sync SKIPPED — add a CLOUDFLARE_API_TOKEN repo secret (R2 write scope) to refresh raptorcode.dev downloads automatically." >> "$GITHUB_STEP_SUMMARY"
+            echo "> R2 sync SKIPPED — set the CLOUDFLARE_API_TOKEN secret (R2 write scope) plus the CLOUDFLARE_ACCOUNT_ID and R2_DOWNLOADS_BUCKET repository variables to refresh the website downloads automatically." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
@@ -150,9 +151,9 @@ jobs:
           deb=(raptor-code_*_amd64.deb)
           mac=(raptor-code_*_macos_universal.tar.gz)
           win=(raptor-code_*_windows_x86_64.zip)
-          [ -n "${deb[0]:-}" ] && npx --yes wrangler@4 r2 object put "raptor-code-downloads/raptor-code_amd64.deb" --file "${deb[0]}" --remote
-          [ -n "${mac[0]:-}" ] && npx --yes wrangler@4 r2 object put "raptor-code-downloads/raptor-code_macos_universal.tar.gz" --file "${mac[0]}" --remote
-          [ -n "${win[0]:-}" ] && npx --yes wrangler@4 r2 object put "raptor-code-downloads/raptor-code_windows_x86_64.zip" --file "${win[0]}" --remote
+          [ -n "${deb[0]:-}" ] && npx --yes wrangler@4 r2 object put "$R2_BUCKET/raptor-code_amd64.deb" --file "${deb[0]}" --remote
+          [ -n "${mac[0]:-}" ] && npx --yes wrangler@4 r2 object put "$R2_BUCKET/raptor-code_macos_universal.tar.gz" --file "${mac[0]}" --remote
+          [ -n "${win[0]:-}" ] && npx --yes wrangler@4 r2 object put "$R2_BUCKET/raptor-code_windows_x86_64.zip" --file "${win[0]}" --remote
           # Publish a machine-readable manifest alongside the binaries so the
           # website renders the current version and checksums straight from R2 —
           # no per-release website edit or redeploy needed.
@@ -163,7 +164,7 @@ jobs:
               "$(cut -d' ' -f1 "${deb[0]}.sha256")" \
               "$(cut -d' ' -f1 "${mac[0]}.sha256")" \
               "$(cut -d' ' -f1 "${win[0]}.sha256")" > latest.json
-            npx --yes wrangler@4 r2 object put "raptor-code-downloads/latest.json" --file latest.json --content-type application/json --remote
+            npx --yes wrangler@4 r2 object put "$R2_BUCKET/latest.json" --file latest.json --content-type application/json --remote
           fi
           {
             echo "### R2 downloads refreshed to ${GITHUB_REF_NAME}"

@@ -4,7 +4,7 @@ Date: 2026-05-18
 Author: Bob Vasic
 Company: RaptorLabs.dev
 
-RaptorCode is a proprietary, closed-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
+RaptorCode is an open-source, Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
 
 V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emulator replacement.
 
@@ -126,7 +126,7 @@ Agile delivery for RaptorCode means small, shippable, verified increments with c
 SOLID cleanup priorities for upcoming iterations:
 
 - Extract one responsibility at a time from `raptor-cli/src/lib.rs`.
-- Preserve the public CLI contract unless BOB explicitly approves a behavior change.
+- Preserve the public CLI contract unless the maintainer explicitly approves a behavior change.
 - Add focused tests before or with each extracted boundary.
 - Keep terminal rendering, provider I/O, persistence, git operations, and process execution in separate modules or crates.
 - Prefer deleting duplication and narrowing mutable state over adding abstractions.
@@ -148,4 +148,4 @@ DeepSeek is the only provider execution path before v0.1. Startup checks only wh
 ## Near-Term Backlog
 
 - PROMPT 25 - Final verification and tag v0.1.0.
-- Run final verification, review release notes, and tag only after BOB explicitly approves tagging.
+- Run final verification, review release notes, and tag only after the maintainer explicitly approves tagging.

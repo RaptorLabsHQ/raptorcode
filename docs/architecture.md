@@ -4,7 +4,7 @@ Date: 2026-05-26
 Author: Bob Vasic
 Company: RaptorLabs.dev
 
-RaptorCode is a proprietary, closed-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
+RaptorCode is an open-source, Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
 
 V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emulator replacement.
 
@@ -79,7 +79,7 @@ The second cleanup slice (2026-06-12) extracted the interactive agent tool bound
 
 The third cleanup slice (2026-06-12) added `raptor-cli::tool_policy`, a pure-decision module evaluated before every interactive agent tool call. It enforces workspace-scoped file writes with a one-time per-session override prompt, a small hard deny-list for unambiguously destructive shell commands, and confirm-on-prompt handling for gray-zone commands. Decisions are pure and unit-tested; `raptor-cli/src/lib.rs` owns the confirmation prompt and result rendering. See `docs/security.md` for the enforced policy details.
 
-The fourth slice (2026-06-12) added the prompt IP defense boundary: `raptor-cli::prompts` is the single owner of every proprietary system prompt, composing each with the anti-disclosure confidentiality directive and storing the literals XOR-obfuscated at compile time, and `raptor-cli::prompt_guard` redacts verbatim prompt leakage (canary token plus normalized fragments) from model output before rendering, including a holdback-window stream redactor for streamed responses. `lib.rs` and `swarm_orchestrator.rs` request composed prompts and redaction from these modules and no longer embed prompt text. See `docs/security.md` Prompt IP Defense Layers for controls and limitations.
+The fourth slice (2026-06-12) made `raptor-cli::prompts` the single owner of every system prompt: callers (`lib.rs`, `task_commands.rs`, `swarm_orchestrator.rs`) request composed prompts from it and append only request context such as the working directory, mission text, and task descriptions. The anti-disclosure directive, output redaction, and compile-time obfuscation that originally shipped with that boundary were removed on 2026-10-31 when RaptorCode became open source; prompts are plain constants now.
 
 The fifth slice (2026-06-28) extracted interactive slash-command handling into `raptor-cli::slash_command`. That module owns a pure `parse()` that classifies a prompt line into a typed `SlashCommand` (or `None` for a normal prompt) and a `dispatch()` that runs each command's handler against a borrowed `SlashSession` of the live REPL state, returning a `ReplControl` (continue or break). The REPL loop in `lib.rs` previously inlined a `/swarm` prefix check plus a large `match` over the lowercased input; it now constructs the session and acts on the returned control signal only. Classification is unit-tested (case sensitivity, the `/swarm` word boundary, command aliases). Behavior is unchanged.
 
@@ -229,4 +229,4 @@ The refactor slices recommended by the review were delivered the same day on `re
 - **Explicit imports.** `repl`, `task_commands`, and `render` import what they use; `lib.rs` re-exports exactly the public command handlers (`render_doctor`, `run_interactive_chat`, the twelve task/swarm commands) and converts every lower-layer error through `From` impls instead of 79 `map_err` closures. The CLI integration tests live in `src/tests.rs`.
 - **Dependencies and CI.** ratatui 0.30 and crossterm 0.29 (the unmaintained `paste` advisory ignore is gone), `rust-version = "1.88"` with an `msrv` CI job that builds it, `--locked` on every CI cargo invocation, and every GitHub Action pinned to a verified commit SHA.
 
-Still open from the review: F9 (wire or remove the frozen `raptor-agent` session model and the empty `raptor-sandbox` crate) is BOB's product decision.
+Still open from the review: F9 (wire or remove the frozen `raptor-agent` session model and the empty `raptor-sandbox` crate) is an open product decision.

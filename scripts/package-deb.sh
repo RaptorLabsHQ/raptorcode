@@ -59,7 +59,7 @@ Maintainer: Bob Vasic <17962121+bobvasic@users.noreply.github.com>
 Depends: libc6 (>= 2.31), ca-certificates, git
 Installed-Size: $INSTALLED_SIZE
 Homepage: https://raptorlabs.dev
-Vcs-Git: https://github.com/RaptorLabsHQ/raptor-code.git
+Vcs-Git: https://github.com/RaptorLabsHQ/raptorcode.git
 Description: Rust-native autonomous AI coding agent CLI
  RaptorCode is a local-first supervised AI coding terminal from RaptorLabs.dev.
  It installs the raptor and raptorcode commands for Linux users.

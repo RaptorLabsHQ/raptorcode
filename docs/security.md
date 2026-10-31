@@ -4,7 +4,7 @@ Date: 2026-05-18
 Author: Bob Vasic
 Company: RaptorLabs.dev
 
-RaptorCode is a proprietary, closed-source Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
+RaptorCode is an open-source, Rust-native multi-agent coding terminal that runs AI coding agents safely in isolated git worktrees with developer supervision.
 
 V1 scope is CLI + TUI + multi-agent orchestrator. V1 is not a full terminal emulator replacement.
 
@@ -112,7 +112,7 @@ Date: 2026-06-12
 Author: Bob Vasic
 Company: RaptorLabs.dev
 
-Tool execution now lives in the dedicated `raptor-cli::agent_tools` module, and every interactive agent tool call passes through `raptor-cli::tool_policy` before execution. The policy decisions were approved by BOB and are enforced in the shared `raptor-cli::agent_loop` before any execution, for the interactive REPL and every live-swarm worker alike, so confirmation prompts are interactive and auditable.
+Tool execution now lives in the dedicated `raptor-cli::agent_tools` module, and every interactive agent tool call passes through `raptor-cli::tool_policy` before execution. The policy decisions are enforced in the shared `raptor-cli::agent_loop` before any execution, for the interactive REPL and every live-swarm worker alike, so confirmation prompts are interactive and auditable.
 
 File write policy:
 
@@ -153,7 +153,7 @@ Current permission policy controls:
 - Model execution is denied until explicitly configured and invoked in a future design.
 - Dangerous commands are denied.
 - The policy is display/modeling only in this iteration; it does not grant tool execution.
-- This permission policy code was implemented early and is frozen until after v0.1 unless BOB explicitly approves a narrow change directly required for the v0.1 demo.
+- This permission policy code was implemented early and is frozen until after v0.1 unless a narrow change is directly required for the v0.1 demo.
 - Policy enforcement hooks must not be implemented before v0.1.
 
 ## Tool Policy Hardening
@@ -210,66 +210,27 @@ Company: RaptorLabs.dev
 - Worker outcomes (completed, aborted, failed, files written, steps) are recorded in `.raptor/swarms/<task-id>.toml` with live-run lifecycle statuses for auditability.
 - All resulting changes remain uncommitted inside role worktrees for developer review via `raptor review`, `raptor diff`, `raptor test`, and the supervised merge path.
 
-## Prompt IP Defense Layers
+## Prompts And Model Output
 
-Date: 2026-06-12
+Date: 2026-10-31
 Author: Bob Vasic
 Company: RaptorLabs.dev
 
-RaptorCode's system prompts (agent rules, swarm personas, planning and proposal instructions) are RaptorLabs proprietary IP. Three client-side defense layers are implemented; their honest limits are documented because no client-only mechanism makes prompts unextractable.
+RaptorCode is open source, so its system prompts are plain string constants in
+`raptor-cli::prompts` and ship in the binary as-is. Every composed prompt is
+the mode base text plus caller context (the current working directory, the
+mission text, the task description); API keys and repository secrets are never
+part of a prompt. Model output is rendered unmodified: there is no
+anti-disclosure directive, canary token, output redaction, or at-rest prompt
+obfuscation. Prompt injection remains an industry-wide, unsolved problem; the
+controls that matter here are the ones around tool execution above (consent,
+the tool policy, worktree isolation, and the supervised merge path), not
+secrecy of the prompt text.
 
-- Layer 1 — anti-disclosure directives: every composed system prompt ends with a confidentiality directive (in `raptor-cli::prompts`) that forbids revealing, quoting, paraphrasing, summarizing, translating, reformatting, or encoding the instructions through any output channel, names common jailbreak framings to refuse, instructs a brief refusal plus continuation of the legitimate task, and embeds the non-secret `RPTR-IPC` canary token.
-- Layer 2 — output leak guard: `raptor-cli::prompt_guard` scans model output for the canary token and for normalized verbatim fragments (lowercased, whitespace-collapsed, sentence-level, 40-120 chars) of every protected prompt text, and replaces matches with a redaction marker before rendering. Enforced for interactive chat (streamed via a holdback-window stream redactor, and non-streamed), interactive agent final text, scripted `raptor chat`, swarm `RAPTOR_PLAN.md` and `RAPTOR_IMPLEMENTATION_PROPOSAL.md` artifacts before writing, and live swarm worker completion summaries.
-- Layer 3 — at-rest obfuscation: prompt literals are XOR-encoded at compile time (`obfuscated_prompt!` in `raptor-cli::prompts`) so only encoded bytes exist in the shipped binary; `strings`-style extraction was verified to return no prompt text on the release binary. Decoding happens in memory at runtime.
-
-Known limitations:
-
-- Prompt injection is unsolved industry-wide; layer 1 deters casual extraction only.
-- Layer 2 matches verbatim fragments; paraphrased leakage and fragments under 40 normalized characters pass through. Redaction inside JSON-mode output favors safety over JSON validity. Live swarm agents could still write leaked text into worktree files through tools; artifact filtering covers only the planning/proposal paths.
-- Layer 3 is obscurity, not cryptography: a debugger, an instrumented build, or a local HTTPS proxy observing the DeepSeek request (sent with the user's own key) can still recover prompts.
-- The real containment is layer 4 — a RaptorLabs API gateway injecting prompts server-side so they never ship in the binary. It is explicitly out of scope until BOB green-lights hosting and billing decisions.
-
-## Closed-Source Intellectual Property Protection
-
-Date: 2026-06-18
-Author: Bob Vasic
-Company: RaptorLabs.dev
-
-RaptorCode is proprietary, closed-source software (see `LICENSE`). Source code,
-system prompts, and orchestration logic are RaptorLabs trade secrets. Protection
-is layered across legal and technical controls, with honest limits stated.
-
-Legal controls:
-
-- The RaptorLabs Proprietary EULA (`LICENSE`) prohibits reverse engineering,
-  decompilation, disassembly, deobfuscation, circumvention of technical
-  protections, redistribution, and derivative works, and asserts trade-secret
-  and confidentiality protection over the source and prompts.
-- The source repository is private and access-controlled. Building from source
-  is restricted to authorized RaptorLabs developers.
-- `Cargo.toml` sets `publish = false` workspace-wide so no source crate can be
-  pushed to a public registry by accident.
-
-Technical controls (raise reverse-engineering cost; not absolute):
-
-- Release-profile hardening in `Cargo.toml`: `strip = "symbols"` removes symbol
-  and debug information, `lto = true` plus `codegen-units = 1` inline and merge
-  across crate boundaries so the shipped binary does not map cleanly back to the
-  module structure. The panic strategy is intentionally left as `unwind` (not
-  `abort`) so a single live-swarm worker panic stays isolated to its thread.
-- Prompt IP defense layers 1-3 (above) keep proprietary prompts out of the
-  binary in plaintext and redact verbatim leakage from model output.
-
-Known limitations (no client-side mechanism is unbreakable):
-
-- A determined attacker with the binary can disassemble it; stripping and LTO
-  raise the cost but do not prevent reverse engineering. The license prohibition
-  is the primary deterrent against it.
-- Anti-tamper, license/subscription enforcement, code signing, and the
-  server-side prompt gateway (layer 4) are the stronger controls and are tracked
-  for the hosted/GA phase, gated on BOB's hosting and billing decisions.
-- Third-party permissive dependencies remain under their own licenses and must
-  be attributed; see `THIRD-PARTY-NOTICES.md`.
+Release-profile hardening in `Cargo.toml` (`strip = "symbols"`, `lto = true`,
+`codegen-units = 1`) is kept for binary size and performance. The panic
+strategy is intentionally left as `unwind` (not `abort`) so a single live-swarm
+worker panic stays isolated to its thread.
 
 ## v0.1 Model And Worktree Safety
 

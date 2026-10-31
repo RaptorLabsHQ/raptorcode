@@ -1,202 +1,91 @@
 # RaptorCode
 
-RaptorCode is a **proprietary, closed-source** Rust-native multi-agent coding terminal from RaptorLabs.dev that runs AI coding workflows in isolated git worktrees with developer supervision.
+RaptorCode is an open-source, Rust-native multi-agent coding terminal that runs
+AI coding agents in isolated git worktrees with developer supervision. It is
+local-first: it runs on your own machine, with your own model API key, and
+every change an agent makes stays uncommitted in a worktree until you review,
+test, and merge it.
 
-- Company: RaptorLabs.dev
-- Website: https://raptorlabs.dev
-- Source repository: private (https://github.com/RaptorLabsHQ/raptor-code — access-controlled)
-- License: Proprietary — see [`LICENSE`](LICENSE) (RaptorLabs Proprietary EULA)
-- Distribution: official binaries for Linux, macOS, and Windows from https://raptorlabs.dev (Linux `.deb` is signed; macOS and Windows ship unsigned with checksum verification and platform-bypass guides)
-- Current status: v0.6.5 — generally available on Linux, macOS, and Windows
+- License: `MIT OR Apache-2.0` — see [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE)
+- Repository: https://github.com/RaptorLabsHQ/raptorcode
+- Website and prebuilt binaries: https://raptorlabs.dev
+- Current release: v0.6.5 — Linux, macOS, and Windows
 
-> RaptorCode is a commercial product, not open source and not free software. The
-> source code, system prompts, and orchestration logic are RaptorLabs trade
-> secrets. Reverse engineering, decompilation, and redistribution are prohibited
-> by the license. Use requires a valid subscription or authorized evaluation.
+RaptorCode is not a desktop app, a terminal emulator replacement, an enterprise
+policy platform, or an unsupervised developer replacement.
 
-RaptorCode is a local-first supervised coding terminal. It is not a desktop app, a Warp clone, a full terminal emulator replacement, an enterprise policy platform, or an unsupervised developer replacement.
+## What It Does
 
-## What Works Today
+- `raptor` opens an interactive agentic REPL: after a per-session file-system
+  consent prompt the agent inspects the project, plans, edits files, and runs
+  commands through a deny-by-default tool policy with developer confirmations.
+- `raptor swarm run "mission"` (or `/swarm` inside the REPL) launches a live
+  four-specialist swarm — frontend, backend, test, and security agents — each
+  working in its own isolated git worktree behind a real-time dashboard.
+- `raptor swarm "task"` and `raptor swarm implement <task-id> <role>` produce
+  supervised role plans (`RAPTOR_PLAN.md`) and implementation proposals
+  (`RAPTOR_IMPLEMENTATION_PROPOSAL.md`) without touching your tree.
+- `raptor review`, `raptor diff`, `raptor test`, and `raptor merge` inspect,
+  test, and merge worktree results with explicit confirmation.
+- `raptor chat` for plain model chat, `raptor tui` for a read-only dashboard,
+  `raptor doctor` for environment diagnostics.
 
-RaptorCode currently focuses on:
+DeepSeek is the implemented execution provider today (default model
+`deepseek-v4-pro`). The `Provider` trait and provider catalog are the extension
+point for others; see [`ROADMAP.md`](ROADMAP.md).
 
-- A Rust workspace with the `raptor` CLI binary.
-- A premium Raptor Labs / Raptor Code startup screen when running `raptor`.
-- A simple read-only Ratatui dashboard through `raptor tui`.
-- DeepSeek-first chat through `raptor chat`.
-- Local task metadata under `.raptor/`.
-- Isolated git worktrees for single tasks and swarm roles.
-- Four swarm roles: `frontend-agent`, `backend-agent`, `test-agent`, and `security-agent`.
-- DeepSeek-generated role plans written as `RAPTOR_PLAN.md`.
-- DeepSeek-generated supervised implementation proposals written as `RAPTOR_IMPLEMENTATION_PROPOSAL.md`.
-- A live four-specialist agent swarm through `raptor swarm run "mission"` (or `/swarm` in the interactive REPL) implementing in parallel isolated role worktrees under a real-time dashboard, with all changes left uncommitted for review.
-- Role-aware review and diff inspection.
-- Supervised test execution inside validated worktrees.
-- Supervised merge preflight and explicit local merge execution.
-- Read-only provider, agent, policy, and diagnostic inspection commands.
+## Install
 
-DeepSeek is the only implemented execution provider today. Other provider names may appear only as future metadata boundaries; OpenAI, OpenRouter, Gemini, Ollama, LM Studio, MCP, cloud, desktop, team, marketplace, and enterprise systems are not yet implemented.
-
-## Install (Official Binaries)
-
-The supported way to install RaptorCode is the official binary for your
-platform from https://raptorlabs.dev (Linux, macOS, and Windows). A valid
-subscription or authorized evaluation is required.
-
-On Debian/Ubuntu, install the official `.deb`:
+Prebuilt binaries for Linux (`.deb`), macOS (universal), and Windows are
+published on https://raptorlabs.dev with SHA-256 checksums. On Debian/Ubuntu:
 
 ```bash
 sudo apt install ./raptor-code_0.6.5_amd64.deb
-```
-
-Verify the installed commands:
-
-```bash
 raptor --help
-raptorcode --help
 ```
 
-Build the Debian package locally from the repository root:
+### From source
+
+Prerequisites: Git, and Rust 1.88 or newer with Cargo (the repository pins
+1.95.0 through `rust-toolchain.toml`).
 
 ```bash
-./scripts/package-deb.sh
+git clone https://github.com/RaptorLabsHQ/raptorcode.git
+cd raptorcode
+cargo install --path crates/raptor-cli --force --locked
 ```
 
-The package is written to `dist/`.
-
-## Build From Source (Authorized RaptorLabs Developers Only)
-
-The source repository is private and access-controlled. Building from source is
-restricted to authorized RaptorLabs developers under the proprietary license;
-it is not a public distribution channel.
-
-Prerequisites:
-
-- Linux, macOS, or another Rust-supported development environment.
-- Git, with authorized access to the private repository.
-- Rust 1.88 or newer and Cargo (the repository pins 1.95.0 through `rust-toolchain.toml`).
-
-Clone and install the `raptor` command:
-
-```bash
-git clone git@github.com:RaptorLabsHQ/raptor-code.git
-cd raptor-code
-cargo install --path crates/raptor-cli --force
-```
-
-Verify the installed command:
-
-```bash
-raptor --help
-raptor
-raptor doctor
-raptor tui
-```
-
-Run verification locally:
-
-```bash
-cargo fmt
-cargo clippy --all-targets --all-features
-cargo test
-```
+The package is named `raptor-cli`; the installed commands are `raptor` and
+`raptorcode`. Build the Debian package locally with `./scripts/package-deb.sh`
+(written to `dist/`).
 
 ## DeepSeek Setup
 
-RaptorCode reads the DeepSeek API key from the environment:
-
-```bash
-export DEEPSEEK_API_KEY="..."
-```
-
-Get a key from:
-
-```text
-https://platform.deepseek.com/api_keys
-```
-
-RaptorCode does not print, store, commit, or read API keys from `.env` files. If the key is missing, DeepSeek-dependent commands report the missing key and keep local metadata/worktrees reviewable where practical.
+Get an API key from https://platform.deepseek.com/api_keys. RaptorCode reads
+`DEEPSEEK_API_KEY` from the environment, or asks for the key once on first run
+and stores it in `~/.raptor/.credentials` (owner-only permissions). The key is
+never printed, logged, or committed, and `/api` inside the REPL manages it
+without echoing it.
 
 ## Quickstart
 
-Show the startup screen:
-
 ```bash
-raptor
-```
-
-Inspect the local environment:
-
-```bash
-raptor --help
-raptor doctor
-raptor provider list
-raptor agent policy
-```
-
-Run DeepSeek chat after setting `DEEPSEEK_API_KEY`:
-
-```bash
+raptor                      # startup screen, then the interactive REPL
+raptor doctor               # check the local environment
 raptor chat "Explain this project"
-```
-
-Create a supervised multi-agent swarm:
-
-```bash
-raptor swarm "Add GitHub OAuth to this Next.js app"
-```
-
-Generate an implementation proposal for one role:
-
-```bash
-raptor swarm implement <task-id> frontend-agent
-```
-
-Run the live four-specialist agent swarm with the real-time dashboard:
-
-```bash
 raptor swarm run "Build a SaaS landing page with auth"
-```
-
-Review, diff, and test the work:
-
-```bash
-raptor review <task-id>
+raptor review <task-id>     # inspect what the swarm produced
 raptor diff <task-id>
 raptor test <task-id>
+raptor merge <task-id> --execute
+raptor tui                  # read-only dashboard
 ```
 
-Open the read-only dashboard:
-
-```bash
-raptor tui
-```
-
-Development from source:
-
-The package is internally named `raptor-cli`, but the installed binary and user command are `raptor`.
+From a source checkout, the same commands run through Cargo:
 
 ```bash
 cargo run -p raptor-cli --bin raptor -- --help
 cargo run -p raptor-cli --bin raptor -- doctor
-```
-
-Installed binary commands:
-
-```bash
-raptor
-raptor --help
-raptor doctor
-raptor provider list
-raptor agent policy
-raptor chat "Explain this project"
-raptor swarm "Add GitHub OAuth to this Next.js app"
-raptor swarm implement <task-id> frontend-agent
-raptor swarm run "Build a SaaS landing page with auth"
-raptor review <task-id>
-raptor diff <task-id>
-raptor test <task-id>
-raptor tui
 ```
 
 ## Command Surface
@@ -232,116 +121,97 @@ raptor doctor
 
 RaptorCode treats model output and user-provided identifiers as untrusted.
 
-Current controls:
+- Agent work happens in isolated git worktrees under `.raptor/worktrees/`;
+  task, swarm, and agent metadata live under `.raptor/tasks/`, `.raptor/swarms/`,
+  and `.raptor/agents/`. `.raptor/` is git-ignored.
+- Task ids, role names, branch names, and paths are validated; path traversal is
+  rejected and writes stay inside the worktree boundary (symlink-safe).
+- Git and test commands use structured process arguments, never shell
+  interpolation.
+- Tool execution runs through a deny-by-default policy: catastrophic commands
+  are hard-denied, privileged or network-egress commands and writes outside the
+  worktree ask for confirmation, and shell wrappers cannot hide a denied
+  command.
+- The planning (`raptor swarm`) and proposal (`raptor swarm implement`) paths
+  never execute model output or apply patches.
+- `raptor chat` sends only your message; it does not send repository contents,
+  `.env` files, secrets, task metadata, or worktree files.
+- The dashboard is read-only. Merging requires `--execute` and an exact typed
+  confirmation.
 
-- Work happens in isolated git worktrees under `.raptor/worktrees/`.
-- Task metadata is stored under `.raptor/tasks/`.
-- Swarm metadata is stored under `.raptor/swarms/`.
-- Agent metadata is stored under `.raptor/agents/`.
-- Task ids, role names, branch names, and paths are validated.
-- Path traversal is rejected.
-- Git and test commands use structured process arguments instead of shell interpolation.
-- `raptor chat` does not send repository contents, `.env` files, secrets, task metadata, or worktree files.
-- `raptor swarm` sends only the task description and role prompt to DeepSeek.
-- `raptor swarm` writes only `RAPTOR_PLAN.md` planning artifacts in role worktrees.
-- `raptor swarm implement` writes only `RAPTOR_IMPLEMENTATION_PROPOSAL.md` in the selected role worktree.
-- Model output is never executed in the planning (`raptor swarm`) and proposal (`raptor swarm implement`) paths.
-- Patches are not applied automatically in those paths.
-- `raptor swarm run` and consent-gated interactive agentic mode execute model-requested tools under the interactive tool policy, inside isolated role worktrees for the swarm, with all changes left uncommitted for developer review.
-- The dashboard is read-only and performs no model calls, shell execution, metadata writes, commits, merges, or pushes.
-- Merge execution requires explicit `--execute` and exact typed confirmation.
-- Advanced policy enforcement hooks beyond the current interactive tool policy are not yet implemented.
-
-Developers remain responsible for reviewing plans, proposals, diffs, tests, and merges.
+Developers remain responsible for reviewing plans, proposals, diffs, tests, and
+merges. The full design is in [`docs/security.md`](docs/security.md).
 
 ## Current Limitations
 
-RaptorCode does not yet include:
+- Automatic patch application and fully autonomous loops outside the consented
+  REPL and swarm paths.
+- Providers other than DeepSeek, MCP, a desktop UI, cloud sync, team accounts,
+  or an enterprise policy engine.
+- OS-level sandboxing of the local agent (namespaces, seccomp, landlock); the
+  userspace tool policy is a backstop, not a sandbox.
 
-- Fully autonomous coding loops.
-- Automatic patch application.
-- OpenAI, OpenRouter, Gemini, Ollama, or LM Studio execution providers.
-- MCP.
-- Desktop UI.
-- Cloud sync.
-- Team accounts.
-- Marketplace features.
-- Enterprise policy engine.
-- Production compliance certification.
-- Secure hosted sandboxing guarantees.
-
-Persisted agent sessions and permission policy modeling exist as early local metadata foundations, but they are frozen and are not yet an active policy enforcement system.
-
-## Roadmap
-
-Future phases can evaluate:
-
-- Deeper supervised implementation workflows.
-- Stronger review, test, and merge ergonomics.
-- Provider expansion only after DeepSeek-first workflows are stable.
-- More capable TUI surfaces.
-- Policy and permission work only after BOB explicitly reopens that scope.
-
-Phase 2 work is intentionally separated from the current release path.
+Persisted agent sessions and permission policy modeling exist as early local
+metadata foundations and are not yet an active policy enforcement system.
 
 ## Repository Layout
 
 ```text
 .
 |-- crates/
-|   |-- raptor-agent/
-|   |-- raptor-cli/
-|   |-- raptor-core/
-|   |-- raptor-git/
-|   |-- raptor-providers/
-|   |-- raptor-sandbox/
-|   |-- raptor-store/
-|   |-- raptor-tools/
-|   `-- raptor-tui/
+|   |-- raptor-agent/        frozen agent session model (see ROADMAP.md)
+|   |-- raptor-cli/          the `raptor` binary: REPL, commands, swarm orchestration
+|   |-- raptor-core/         shared types, validators, errors
+|   |-- raptor-git/          argv-based git operations and worktrees
+|   |-- raptor-providers/    provider trait, catalog, DeepSeek client
+|   |-- raptor-sandbox/      reserved (empty)
+|   |-- raptor-store/        atomic local state under .raptor/
+|   |-- raptor-tools/        agent tool implementations
+|   `-- raptor-tui/          ratatui dashboard and startup screen
 |-- docs/
-|   |-- architecture.md
-|   |-- onboarding.md
-|   |-- project-management.md
-|   |-- releases.md
-|   |-- security.md
-|   |-- task-workflow.md
-|   `-- tech-stack.md
-|-- AGENTS.md
+|-- packaging/               AppStream metainfo for the .deb
+|-- scripts/                 release.sh, package-deb.sh
+|-- templates/               swarm role templates
 |-- CHANGELOG.md
 |-- CONTRIBUTING.md
-|-- LICENSE
+|-- LICENSE-APACHE
+|-- LICENSE-MIT
 |-- ROADMAP.md
 |-- SECURITY.md
+|-- THIRD-PARTY-NOTICES.md
 `-- Cargo.toml
 ```
 
-`.raptor/` is ignored by git and reserved for local runtime state.
-
 ## Documentation
 
-- [**Persistent Context Handover — RaptorCode's Memory System**](docs/persistent-context-handover.md) ⬅ unique capability
 - [Architecture](docs/architecture.md)
 - [Security Design](docs/security.md)
 - [Task Workflow](docs/task-workflow.md)
 - [Tech Stack](docs/tech-stack.md)
 - [Onboarding](docs/onboarding.md)
 - [Project Management](docs/project-management.md)
+- [DeepSeek API Notes](docs/deepseek-api.md)
 - [Release Process](docs/releases.md)
 - [Roadmap](ROADMAP.md)
 - [Changelog](CHANGELOG.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security Policy](SECURITY.md)
+
+## Contributing
+
+Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
+development setup, the CI checks, and the commit conventions that drive the
+automated releases. Report vulnerabilities privately as described in
+[`SECURITY.md`](SECURITY.md).
 
 ## License
 
-RaptorCode is proprietary, closed-source software. © 2026 RaptorLabs.dev. All
-rights reserved. Use is governed by the RaptorLabs Proprietary EULA in
-[`LICENSE`](LICENSE). Reverse engineering, decompilation, redistribution, and
-derivative works are prohibited.
+RaptorCode is dual-licensed under the MIT license and the Apache License 2.0,
+at your option. Copyright © 2026 Bob Vasic.
 
-Third-party open-source components bundled in the binary remain under their own
-permissive licenses; see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+Releases v0.3.0 through v0.6.5 were published under a proprietary license;
+from this repository onward all code is `MIT OR Apache-2.0`. Third-party
+components keep their own permissive licenses; see
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
 
-Releases up to and including v0.2.0 were published under `MIT OR Apache-2.0`;
-that applies only to those prior releases. All releases after v0.2.0 are under
-the proprietary license above.
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in RaptorCode by you shall be dual licensed as above, without any
+additional terms or conditions.

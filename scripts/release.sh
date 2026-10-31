@@ -43,7 +43,7 @@ README="$ROOT_DIR/README.md"
 
 AUTHOR_NAME="Bob Vasic"
 AUTHOR_EMAIL="17962121+bobvasic@users.noreply.github.com"
-# Co-author trailer per CLAUDE.md; override per session with RELEASE_COAUTHOR.
+# Co-author trailer; override per session with RELEASE_COAUTHOR.
 COAUTHOR="${RELEASE_COAUTHOR:-Claude Sonnet 4.6 <noreply@anthropic.com>}"
 
 DRY_RUN=0

@@ -4,16 +4,15 @@ Date: 2026-06-18
 Author: Bob Vasic
 Company: RaptorLabs.dev
 
-RaptorCode is proprietary, closed-source software (see `LICENSE`). It is built
-on third-party open-source components that remain governed by their own
-licenses. Those licenses apply only to the respective components and grant no
-rights in RaptorCode as a whole.
+RaptorCode is open-source software (`MIT OR Apache-2.0`; see `LICENSE-MIT` and
+`LICENSE-APACHE`). It is built on third-party open-source components that remain
+governed by their own licenses, which are listed below.
 
 RaptorCode's direct dependencies (and their transitive dependency graph) are
 permissively licensed — predominantly `MIT`, `Apache-2.0`, and similarly
 permissive terms (e.g. `BSD`, `ISC`, `Unicode`, `Zlib`). These licenses
-explicitly permit closed-source binary distribution provided their copyright and
-permission notices are preserved. **No copyleft (GPL/LGPL/AGPL/MPL) license is
+permit source and binary redistribution provided their copyright and permission
+notices are preserved. **No copyleft (GPL/LGPL/AGPL/MPL) license is
 present in the dependency tree.**
 
 ## Direct dependencies

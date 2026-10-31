@@ -2,14 +2,14 @@
 <component type="console-application">
   <id>dev.raptorlabs.raptorcode</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>LicenseRef-proprietary=https://raptorlabs.dev</project_license>
+  <project_license>MIT OR Apache-2.0</project_license>
   <name>RaptorCode</name>
   <summary>Rust-native autonomous AI coding agent CLI</summary>
   <developer id="dev.raptorlabs">
     <name>RaptorLabs.dev</name>
   </developer>
   <url type="homepage">https://raptorlabs.dev</url>
-  <url type="vcs-browser">https://github.com/RaptorLabsHQ/raptor-code</url>
+  <url type="vcs-browser">https://github.com/RaptorLabsHQ/raptorcode</url>
   <description>
     <p>RaptorCode is a local-first supervised AI coding terminal from RaptorLabs.dev for building, reviewing, and testing agentic software workflows with developer supervision.</p>
     <p>It installs the raptor and raptorcode commands for Linux users and supports supervised agentic coding workflows from the terminal.</p>
