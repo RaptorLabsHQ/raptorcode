@@ -52,19 +52,22 @@
 | | | |
 |:---:|:---:|:---:|
 | **Agentic REPL**<br>`raptor` plans, edits and runs commands with your consent | **Four-agent swarm**<br>frontend · backend · test · security, in parallel | **Worktree isolation**<br>every agent works in its own git worktree |
-| **Supervised merge**<br>review → diff → test → `merge --execute` | **Deny-by-default tool policy**<br>catastrophic commands hard-denied, egress confirmed | **Local-first**<br>your machine, your DeepSeek key, nothing hosted |
+| **Supervised review**<br>review → diff → test per worktree; `raptor merge --execute` for task worktrees, typed confirmation | **Deny-by-default tool policy**<br>catastrophic commands hard-denied, egress confirmed | **Local-first**<br>your machine, your DeepSeek key, nothing hosted |
 
 ## How A Swarm Run Flows
 
 ```text
                          ┌─ frontend-agent ──▶ .raptor/worktrees/<task>/frontend-agent ─┐
-  raptor swarm run       ├─ backend-agent  ──▶ .raptor/worktrees/<task>/backend-agent  ─┤   raptor review <task>
-  "Build a SaaS   ──▶    ├─ test-agent     ──▶ .raptor/worktrees/<task>/test-agent     ─┼─▶ raptor diff   <task>  ──▶  raptor merge <task> --execute
-   landing page"         └─ security-agent ──▶ .raptor/worktrees/<task>/security-agent ─┘   raptor test   <task>
-                               live dashboard · tool policy · consent prompts            you decide what lands
+  raptor swarm run       ├─ backend-agent  ──▶ .raptor/worktrees/<task>/backend-agent  ─┤   raptor review <task> [role]
+  "Build a SaaS   ──▶    ├─ test-agent     ──▶ .raptor/worktrees/<task>/test-agent     ─┼─▶ raptor diff   <task> [role]  ──▶  you commit and merge what you accept
+   landing page"         └─ security-agent ──▶ .raptor/worktrees/<task>/security-agent ─┘   raptor test   <task>              from each role worktree, with git
+                               live dashboard · tool policy · consent prompts              nothing lands without you
 ```
 
-Nothing an agent writes touches your branch until you have reviewed, diffed and tested it in its worktree and typed the merge confirmation yourself.
+Swarm output stays uncommitted inside the role worktrees until you have reviewed,
+diffed and tested it; you then commit and merge what you accept from each
+worktree with git. The single-task path (`raptor task`) adds a supervised
+`raptor merge <task-id> --execute` that only runs after a typed confirmation.
 
 ## What It Does
 
