@@ -492,6 +492,5 @@
     <rect x="448.00" y="253.00" width="7.80" height="6.00" fill="#FFFFFF"/>
     <rect x="452.20" y="246.00" width="3.60" height="13.00" fill="#FFFFFF"/>
   </g>
-  <text x="52" y="288" fill="#FFFFFF" fill-opacity="0.82" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="15">by Raptor Labs  ·  raptorlabs.dev</text>
-  <text x="652" y="288" text-anchor="end" fill="#DC143C" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="15" font-weight="700">agentic engineering at predator speed</text>
+  <text x="340.0" y="288" text-anchor="middle" fill="#FFFFFF" fill-opacity="0.82" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="15">by Raptor Labs  ·  raptorlabs.dev</text>
 </svg>
