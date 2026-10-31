@@ -1,24 +1,6 @@
 <p align="center">
-  <img src="assets/raptorcode-icon.svg" alt="RaptorCode" width="140">
+  <img src="assets/banner-ascii.svg" alt="RAPTOR CODE — the RaptorCode ASCII banner in crimson, red and black" width="640">
 </p>
-
-<h1 align="center">RaptorCode</h1>
-
-```text
-  ██████╗  █████╗ ██████╗ ████████╗ ██████╗ ██████╗
-  ██╔══██╗██╔══██╗██╔══██╗╚══██╔══╝██╔═══██╗██╔══██╗
-  ██████╔╝███████║██████╔╝   ██║   ██║   ██║██████╔╝
-  ██╔══██╗██╔══██║██╔═══╝    ██║   ██║   ██║██╔══██╗
-  ██║  ██║██║  ██║██║        ██║   ╚██████╔╝██║  ██║
-  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝    ╚═════╝ ╚═╝  ╚═╝
-   ██████╗  ██████╗ ██████╗ ███████╗
-  ██╔════╝ ██╔═══██╗██╔══██╗██╔════╝
-  ██║      ██║   ██║██║  ██║█████╗
-  ██║      ██║   ██║██║  ██║██╔══╝
-  ╚██████╗ ╚██████╔╝██████╔╝███████╗
-   ╚═════╝  ╚═════╝ ╚═════╝ ╚══════╝
-  by Raptor Labs  ·  raptorlabs.dev
-```
 
 <h3 align="center">Agentic software engineering at predator speed.</h3>
 
